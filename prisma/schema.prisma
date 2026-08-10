@@ -1,0 +1,1257 @@
+// Your Prestige — CMS Data Model (PostgreSQL / Neon)
+//
+// Conventions used throughout this schema:
+// - Soft delete: models the admin can "delete & restore" carry `deletedAt`.
+//   Deleting sets it; restoring clears it; queries filter `deletedAt: null`.
+// - Audit trail: `createdById` / `updatedById` / `deletedById` are plain
+//   string columns (NOT enforced foreign keys) storing a User.id. This is a
+//   deliberate simplification — a hard FK on every content model back to
+//   User would require ~90 unused back-relation arrays on User. The id is
+//   resolved to a name/avatar in application code, and every mutation is
+//   additionally written to AuditLog (a real FK) for a durable trail even
+//   if the acting user is later deleted.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ————— Users & RBAC —————
+
+enum Role {
+  SUPER_ADMIN
+  OWNER
+  MARKETING
+  CONTENT
+  SEO
+  SUPPORT
+  VIEWER
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED
+  DEACTIVATED
+}
+
+model User {
+  id        String     @id @default(cuid())
+  email     String     @unique
+  name      String
+  password  String // bcrypt hash
+  role      Role       @default(VIEWER)
+  status    UserStatus @default(ACTIVE)
+  avatar    String?
+  lastLogin DateTime?
+
+  inviteToken     String?   @unique
+  inviteExpiresAt DateTime?
+  resetToken      String?   @unique
+  resetExpiresAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  leadsAssigned    Lead[]     @relation("AssignedLeads")
+  leadNotes        LeadNote[]
+  auditLogs        AuditLog[]
+  posts            Post[]
+  bookingsAssigned Booking[]  @relation("AssignedBookings")
+
+  @@index([status])
+  @@index([role])
+}
+
+// ————— Catalogue —————
+
+model Category {
+  id          String  @id @default(cuid())
+  slug        String  @unique
+  name        String
+  description String?
+  image       String?
+  icon        String?
+  sortOrder   Int     @default(0)
+  published   Boolean @default(true)
+
+  parentId String?
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children Category[] @relation("CategoryTree")
+
+  products Product[]
+  seo      Seo?
+  offers   Offer[]
+
+  createdById String?
+  updatedById String?
+  deletedById String?
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([parentId])
+  @@index([deletedAt])
+}
+
+model Brand {
+  id          String  @id @default(cuid())
+  slug        String  @unique
+  name        String
+  logo        String?
+  banner      String?
+  gallery     Json? // string[] of media URLs
+  description String?
+  website     String?
+  catalogPdf  String?
+  featured    Boolean @default(false)
+  sortOrder   Int     @default(0)
+  published   Boolean @default(true)
+
+  products       Product[]
+  catalogImports CatalogImport[]
+  landingPages   LandingPage[]
+  seo            Seo?
+
+  createdById String?
+  updatedById String?
+  deletedById String?
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([deletedAt])
+}
+
+model Product {
+  id              String  @id @default(cuid())
+  slug            String  @unique
+  name            String
+  collection      String? // e.g. "Lumina Marble Collection" (legacy string field)
+  collectionId    String?
+  collectionRelation Collection? @relation("CollectionProducts", fields: [collectionId], references: [id], onDelete: SetNull)
+  description     String?
+  shortDescription String?
+  finish          String?
+  thickness       String?
+  size            String?
+  sizes           Json? // string[]
+  material        String?
+  color           String?
+  texture         String? // short descriptor, e.g. "Book-matched veining"
+  applications    Json? // string[] — room/space tags, constrained to the Application union
+  // Free-text application/room words that didn't map onto the closed
+  // Application union (e.g. "balcony", "pooja room"). Kept so catalogue
+  // vocabulary is never lost — feeds search + meta keywords, not the icon row.
+  applicationTags Json? // string[]
+  searchKeywords  Json? // string[] — flattened facet tokens for search
+  productCode     String? // manufacturer SKU / article code, e.g. "GVT-8016" (legacy SKU)
+  sku             String? @unique
+  surface         String? // "Glossy" | "Matt" | "Carving" | ... (finish is the family)
+  lifestyleImage  String? // dominant hero/card image — full room scene
+  blurData        String? // tiny base64 data URI behind the hero, for next/image placeholder
+  textureImage    String? // macro material close-up
+  images          Json? // string[] — gallery/angle/installation media
+  video           String?
+  brochureUrl     String? // catalog PDF
+  tag             String? // "Bestseller" | "New Arrival" | ...
+  aspect          String? // "portrait" | "square" | "landscape"
+  relatedIds      Json? // string[] — manually curated related product ids
+  featured        Boolean @default(false)
+  designerPick    Boolean @default(false)
+  newArrival      Boolean @default(false)
+  published       Boolean @default(true)
+  status          String  @default("ACTIVE") // ACTIVE | DRAFT | ARCHIVED
+  weight          String?
+  coverage        String?
+  packing         String?
+  specifications  Json? // [{ key, value }]
+  price           Decimal? @db.Decimal(10, 2)
+  mrp             Decimal? @db.Decimal(10, 2)
+  priceIndicator  String? // "₹₹₹"
+  viewCount       Int     @default(0)
+
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  brandId    String?
+  brand      Brand?    @relation(fields: [brandId], references: [id], onDelete: SetNull)
+
+  seo Seo?
+  inventory Inventory?
+  inventoryHistory InventoryHistory[]
+  offers Offer[]
+
+  // Provenance — which catalogue import produced this row, if any. A plain
+  // column rather than an FK so deleting an import never cascades into the
+  // live catalogue.
+  sourceImportId String?
+
+  createdById String?
+  updatedById String?
+  deletedById String?
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([categoryId])
+  @@index([brandId])
+  @@index([collectionId])
+  @@index([published, deletedAt])
+  @@index([featured])
+  @@index([collection])
+  @@index([sourceImportId])
+}
+
+// ————— Portfolio / Gallery / Video / Testimonials —————
+
+model Project {
+  id             String    @id @default(cuid())
+  slug           String    @unique
+  title          String
+  type           String // Residential | Commercial | Villa | Apartment | Hotel
+  client         String?
+  builder        String?
+  architect      String?
+  location       String?
+  year           String?
+  completionDate DateTime?
+  description    String?
+  images         Json? // string[]
+  video          String?
+  featured       Boolean   @default(false)
+  published      Boolean   @default(true)
+
+  seo Seo?
+
+  createdById String?
+  updatedById String?
+  deletedById String?
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([type])
+  @@index([deletedAt])
+}
+
+model GalleryAlbum {
+  id          String  @id @default(cuid())
+  slug        String  @unique
+  title       String
+  description String?
+  coverImage  String?
+  sortOrder   Int     @default(0)
+  published   Boolean @default(true)
+
+  items GalleryItem[]
+
+  createdById String?
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model GalleryItem {
+  id     String  @id @default(cuid())
+  type   String  @default("image") // image | video
+  url    String
+  alt    String?
+  tags   Json? // string[]
+  folder String? // legacy free-text folder label
+
+  albumId String?
+  album   GalleryAlbum? @relation(fields: [albumId], references: [id], onDelete: SetNull)
+
+  sortOrder Int @default(0)
+
+  createdById String?
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([albumId])
+}
+
+enum VideoProvider {
+  YOUTUBE
+  VIMEO
+  UPLOAD
+}
+
+model Video {
+  id          String        @id @default(cuid())
+  slug        String        @unique
+  title       String
+  description String?
+  provider    VideoProvider @default(YOUTUBE)
+  url         String // embed/watch URL, or uploaded file URL
+  thumbnail   String?
+  category    String?
+  featured    Boolean       @default(false)
+  published   Boolean       @default(true)
+  sortOrder   Int           @default(0)
+
+  createdById String?
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+/// Also carries Google Business reviews — `source = "google"` with the
+/// reviewer's photo and review date. Reusing this model rather than adding a
+/// parallel Review table means reviews inherit the existing CRUD, RBAC,
+/// moderation and public rendering for free.
+model Testimonial {
+  id              String    @id @default(cuid())
+  name            String
+  role            String?
+  quote           String
+  image           String?
+  authorPhoto     String? // reviewer avatar, for Google-sourced reviews
+  rating          Int       @default(5)
+  reviewedAt      DateTime? // when the review was left, not when we imported it
+  videoUrl        String?
+  googleReviewUrl String?
+  source          String? // google | video | manual
+  featured        Boolean   @default(false)
+  published       Boolean   @default(true)
+
+  showroomId String?
+  showroom   Showroom? @relation(fields: [showroomId], references: [id], onDelete: SetNull)
+
+  createdById String?
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([showroomId])
+  @@index([published, deletedAt])
+}
+
+// ————— Content —————
+
+model Post {
+  id          String    @id @default(cuid())
+  slug        String    @unique
+  title       String
+  excerpt     String?
+  content     String // markdown
+  coverImage  String?
+  category    String?
+  tags        Json? // string[]
+  published   Boolean   @default(false)
+  publishedAt DateTime?
+  scheduledAt DateTime?
+
+  authorId String?
+  author   User?   @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  seo      Seo?
+
+  createdById String?
+  updatedById String?
+  deletedById String?
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([published, publishedAt])
+  @@index([deletedAt])
+}
+
+/// Also carries Google Business Q&A — `category = "Google Business"`, optionally
+/// scoped to a showroom. Same reasoning as Testimonial: reuse the existing
+/// module rather than duplicate CRUD for a near-identical shape.
+model Faq {
+  id        String  @id @default(cuid())
+  question  String
+  answer    String
+  category  String?
+  sortOrder Int     @default(0)
+  published Boolean @default(true)
+
+  showroomId String?
+  showroom   Showroom? @relation(fields: [showroomId], references: [id], onDelete: SetNull)
+
+  createdById String?
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([showroomId])
+}
+
+enum OfferType {
+  PRODUCT
+  COLLECTION
+  CATEGORY
+  SEASONAL
+  FESTIVAL
+  LIMITED_TIME
+  FEATURED
+}
+
+model Offer {
+  id                 String      @id @default(cuid())
+  name               String
+  type               OfferType   @default(PRODUCT)
+  productId          String?
+  product            Product?    @relation(fields: [productId], references: [id], onDelete: SetNull)
+  collectionId       String?
+  collection         Collection? @relation(fields: [collectionId], references: [id], onDelete: SetNull)
+  categoryId         String?
+  category           Category?   @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  originalPrice      Decimal?    @db.Decimal(10, 2)
+  offerPrice         Decimal?    @db.Decimal(10, 2)
+  discountPercentage Float?
+  startDate          DateTime?
+  endDate            DateTime?
+  banner             String?
+  description        String?
+  status             String      @default("ACTIVE") // ACTIVE | INACTIVE | SCHEDULED
+  priority           Int         @default(0)
+  featured           Boolean     @default(false)
+  createdById        String?
+  deletedAt          DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([productId])
+  @@index([collectionId])
+  @@index([categoryId])
+  @@index([deletedAt])
+}
+
+// ————— Leads, Bookings & Conversations —————
+
+enum LeadType {
+  CONTACT
+  QUOTE
+  VISIT
+  CONCIERGE
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  VISITED
+  QUOTED
+  WON
+  LOST
+}
+
+model Lead {
+  id          String     @id @default(cuid())
+  type        LeadType   @default(CONTACT)
+  status      LeadStatus @default(NEW)
+  name        String
+  phone       String
+  email       String?
+  city        String?
+  message     String?
+  interest    String?
+  budget      String?
+  visitDate   DateTime?
+  source      String?
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+
+  assignedToId String?
+  assignedTo   User?      @relation("AssignedLeads", fields: [assignedToId], references: [id], onDelete: SetNull)
+  notes        LeadNote[]
+  booking      Booking?
+
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([status, createdAt])
+  @@index([deletedAt])
+}
+
+model LeadNote {
+  id        String   @id @default(cuid())
+  body      String
+  createdAt DateTime @default(now())
+
+  leadId   String
+  lead     Lead    @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  authorId String?
+  author   User?   @relation(fields: [authorId], references: [id], onDelete: SetNull)
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  RESCHEDULED
+  COMPLETED
+  CANCELLED
+  REJECTED
+  NO_SHOW
+}
+
+model Booking {
+  id             String        @id @default(cuid())
+  name           String
+  phone          String
+  email          String?
+  requestedDate  DateTime
+  preferredTime  String? // e.g. "10:00 AM" — free-text slot preference
+  confirmedDate  DateTime?
+  status         BookingStatus @default(PENDING)
+  notes          String?
+  interestedIn   Json? // string[] of product/category interests
+  googleEventId  String? // set once synced to Google Calendar
+  reminderSentAt DateTime?
+
+  leadId String? @unique
+  lead   Lead?   @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  showroomId String?
+  showroom   Showroom? @relation(fields: [showroomId], references: [id], onDelete: SetNull)
+
+  assignedConsultantId String?
+  assignedConsultant   User?   @relation("AssignedBookings", fields: [assignedConsultantId], references: [id], onDelete: SetNull)
+
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([status, requestedDate])
+  @@index([showroomId])
+  @@index([deletedAt])
+}
+
+// ————— Showrooms —————
+
+model Showroom {
+  id       String  @id @default(cuid())
+  slug     String  @unique
+  name     String
+  /// Short descriptor shown under the name, e.g. "Jaquar Authorized Dealer"
+  subtitle String?
+
+  // Address
+  addressLine String
+  locality    String?
+  city        String
+  state       String  @default("Karnataka")
+  postalCode  String?
+  latitude    Float?
+  longitude   Float?
+  mapUrl      String? // Google Maps link
+  mapEmbedUrl String? // optional iframe embed src
+  directions  String? // free-text landmark/parking guidance
+
+  // Contact
+  phone        String
+  whatsapp     String?
+  email        String?
+  managerName  String?
+  managerPhone String?
+
+  // Hours — weekday line plus a Sunday line, since Sunday differs per branch
+  hoursWeekdays String @default("Monday–Saturday: 9:00 AM – 7:00 PM")
+  hoursSunday   String @default("Sunday: Closed")
+
+  // Media
+  heroImage String?
+  gallery   Json? // string[]
+  video     String?
+
+  description String?
+  brands      Json? // string[] of brand names stocked here
+  amenities   Json? // string[] e.g. "Customer Parking", "Design Consultation"
+
+  featuredProductIds Json? // string[] of Product ids to spotlight
+
+  isFlagship Boolean @default(false)
+  published  Boolean @default(true)
+  sortOrder  Int     @default(0)
+
+  // — Google Business Profile —
+  // Maintained by hand. The Google Business Profile API needs per-user OAuth,
+  // verified location ownership and an approved quota project; the existing
+  // service-account credential is Calendar-scoped and cannot be reused. These
+  // columns are the adapter seam if that ever gets set up.
+  googlePlaceId        String?
+  googleReviewUrl      String? // link to read reviews
+  googleWriteReviewUrl String? // deep link that opens the review composer
+  googleRating         Float? // cached aggregate, powers AggregateRating JSON-LD
+  googleReviewCount    Int     @default(0)
+  googlePhotos         Json? // string[]
+
+  bookings     Booking[]
+  testimonials Testimonial[]
+  faqs         Faq[]
+  googlePosts  GooglePost[]
+
+  createdById String?
+  updatedById String?
+  deletedById String?
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([published, deletedAt])
+  @@index([city])
+}
+
+model Conversation {
+  id            String  @id @default(cuid())
+  sessionId     String
+  messages      Json // [{role, content, at}]
+  leadExtracted Boolean @default(false)
+  resolved      Boolean @default(false)
+
+  leadId String? @unique // set when a Lead is manually extracted from this chat
+
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([sessionId])
+  @@index([deletedAt])
+}
+
+// ————— SEO & Settings —————
+
+model Seo {
+  id          String  @id @default(cuid())
+  path        String  @unique // page path this record governs
+  title       String?
+  description String?
+  keywords    String?
+  canonical   String?
+  ogImage     String?
+  jsonLd      String? // raw JSON-LD override
+  noIndex     Boolean @default(false)
+
+  productId  String?   @unique
+  product    Product?  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  projectId  String?   @unique
+  project    Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  postId     String?   @unique
+  post       Post?     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  categoryId String?   @unique
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  brandId    String?   @unique
+  brand      Brand?    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+
+  landingPageId String?      @unique
+  landingPage   LandingPage? @relation(fields: [landingPageId], references: [id], onDelete: Cascade)
+  collectionId  String?      @unique
+  collection    Collection?  @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+
+  updatedAt DateTime @updatedAt
+}
+
+model Redirect {
+  id         String  @id @default(cuid())
+  fromPath   String  @unique
+  toPath     String
+  statusCode Int     @default(301)
+  active     Boolean @default(true)
+}
+
+model Setting {
+  key       String   @id // e.g. "business.phone", "theme.accent", "maintenance.enabled"
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+/// Footer newsletter signups. Deliberately separate from Lead: a Lead
+/// requires a phone number and is worked by sales, and padding that pipeline
+/// with email-only rows would corrupt it.
+model Subscriber {
+  id             String    @id @default(cuid())
+  email          String    @unique
+  source         String? // "footer" | "campaign" | ...
+  unsubscribedAt DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([createdAt])
+}
+
+// ————— Media Library —————
+
+model MediaFolder {
+  id       String        @id @default(cuid())
+  name     String
+  parentId String?
+  parent   MediaFolder?  @relation("FolderTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children MediaFolder[] @relation("FolderTree")
+  media    Media[]
+
+  createdAt DateTime @default(now())
+}
+
+model Media {
+  id       String  @id @default(cuid())
+  url      String
+  publicId String? // Cloudinary public id, if applicable
+  filename String
+  mimeType String
+  size     Int // bytes
+  width    Int?
+  height   Int?
+  altText  String?
+  tags     Json? // string[]
+
+  folderId String?
+  folder   MediaFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+
+  uploadedById String?
+  deletedAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([folderId])
+  @@index([deletedAt])
+}
+
+// ————— Audit Log —————
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  action     String // e.g. "lead.update", "product.delete"
+  entity     String?
+  entityId   String?
+  oldValue   Json?
+  newValue   Json?
+  meta       Json?
+  ipAddress  String?
+  userAgent  String?
+  roleAtTime String?
+  createdAt  DateTime @default(now())
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([entity, entityId])
+  @@index([userId, createdAt])
+}
+
+// ————— Catalog imports (PIM) —————
+//
+// A catalogue PDF is ingested by a resumable state machine: every phase writes
+// its cursor and results to Postgres before returning, so a slice can be retried
+// or resumed without redoing work. Extracted rows land in ExtractedProduct — a
+// staging table — and only become real Product rows when a human approves them.
+
+enum ImportStatus {
+  UPLOADED // file stored, not started
+  ANALYZING // paging the PDF, caching text + positions
+  EXTRACTING // parsing text blocks into candidate products
+  IMAGING // pulling embedded images, filtering, encoding, uploading
+  LINKING // associating images with products, picking hero/texture
+  ENRICHING // composing descriptions, SEO, alt text, keywords
+  READY // awaiting human review
+  PUBLISHING // writing approved rows into Product
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ExtractedStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  MERGED // folded into another extracted row
+  PUBLISHED
+}
+
+model CatalogImport {
+  id           String  @id @default(cuid())
+  filename     String
+  fileUrl      String
+  filePublicId String?
+  fileSize     Int
+
+  brandId        String?
+  brand          Brand?  @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  /// Brand name read off the PDF when it isn't linked to a Brand row yet.
+  brandNameGuess String?
+
+  status       ImportStatus @default(UPLOADED)
+  phaseMessage String?
+  pageCount    Int          @default(0)
+  /// Position within the current phase — page index, or row index once past IMAGING.
+  cursor       Int          @default(0)
+  processed    Int          @default(0)
+  total        Int          @default(0)
+  /// Consecutive failures at the current cursor. 3 strikes → FAILED.
+  attempts     Int          @default(0)
+  error        String?
+
+  // Stale-tolerant advisory lock, so two browser tabs can't run the same
+  // import concurrently. A lock older than a couple of minutes is assumed dead.
+  lockedAt  DateTime?
+  lockToken String?
+
+  /// { "1": { text, items: [{ str, x, y, w, h }] }, ... } — cached in ANALYZING
+  /// so no later phase but IMAGING needs to reopen the PDF.
+  pageText Json?
+  /// { productsFound, imagesKept, imagesRejected, duplicates, scannedPages }
+  stats    Json?
+
+  /// True when a page is dominated by one full-page image — a scanned
+  /// catalogue, where per-product image extraction isn't possible.
+  isScanned Boolean @default(false)
+
+  extractedProducts ExtractedProduct[]
+  assets            ImportAsset[]
+
+  createdById String?
+  updatedById String?
+  deletedById String?
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([status, deletedAt])
+  @@index([brandId])
+  @@index([deletedAt])
+}
+
+model ExtractedProduct {
+  id       String        @id @default(cuid())
+  importId String
+  import   CatalogImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  // — Provenance —
+  pageStart   Int
+  pageEnd     Int?
+  /// 0–1. Low-confidence rows are surfaced first in review.
+  confidence  Float   @default(0)
+  rawText     String?
+  /// Per-field confidence, e.g. { "sizes": 0.9, "finish": 0.4 }
+  fieldScores Json?
+
+  // — Extracted specification —
+  brandName       String?
+  collectionName  String?
+  name            String
+  productCode     String?
+  sizes           Json? // string[]
+  finish          String?
+  thickness       String?
+  material        String?
+  applications    Json? // string[] — normalised onto the closed Application union
+  applicationTags Json? // string[] — free-text words that didn't map
+  color           String?
+  surface         String?
+  description     String?
+
+  // — Composed enrichment —
+  slug               String?
+  seoTitle           String?
+  seoDescription     String?
+  metaKeywords       Json? // string[]
+  searchKeywords     Json? // string[]
+  premiumDescription String?
+  faqs               Json? // [{ q, a }]
+  internalLinks      Json? // [{ href, label }]
+  jsonLd             String?
+  relatedSlugs       Json? // string[]
+  enrichedAt         DateTime?
+  /// "composed" today; the seam for an AI provider later.
+  enrichedBy         String?
+
+  // — Media —
+  heroAssetId    String?
+  hero           ImportAsset?  @relation("HeroAsset", fields: [heroAssetId], references: [id], onDelete: SetNull)
+  textureAssetId String?
+  texture        ImportAsset?  @relation("TextureAsset", fields: [textureAssetId], references: [id], onDelete: SetNull)
+  assets         ImportAsset[] @relation("ProductAssets")
+
+  // — Review workflow —
+  status         ExtractedStatus @default(PENDING)
+  featured       Boolean         @default(false)
+  hidden         Boolean         @default(false)
+  /// Publish as an unpublished Product draft rather than going live immediately.
+  publishAsDraft Boolean         @default(true)
+  reviewNote     String?
+  /// sha1(brand + code + normalised name) — collapses the same product seen in
+  /// overlapping page windows, and makes EXTRACTING slices idempotent.
+  fingerprint    String
+
+  mergedIntoId String?
+  mergedInto   ExtractedProduct?  @relation("Merge", fields: [mergedIntoId], references: [id], onDelete: SetNull)
+  mergedFrom   ExtractedProduct[] @relation("Merge")
+
+  /// Set when this row matches a Product that already exists in the catalogue.
+  duplicateOfProductId String?
+  /// Set once published — also the guard that makes PUBLISHING resumable.
+  productId            String?
+
+  createdById String?
+  updatedById String?
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([importId, fingerprint])
+  @@index([importId, status])
+  @@index([fingerprint])
+  @@index([status, deletedAt])
+  @@index([productId])
+}
+
+/// One embedded image pulled out of the PDF. Not a screenshot — these come from
+/// the PDF's own image XObjects, decoded by pdf.js and re-encoded by sharp.
+model ImportAsset {
+  id       String        @id @default(cuid())
+  importId String
+  import   CatalogImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  page      Int
+  /// pdf.js object name, e.g. "img_p3_1"
+  objectRef String
+  width     Int
+  height    Int
+  bytes     Int
+
+  // Placement in PDF user space, derived by tracking the CTM through the
+  // operator list. On-page area is a far better hero signal than pixel size,
+  // and top-to-bottom ordering is what matches images to the right product.
+  pageX Float?
+  pageY Float?
+  pageW Float?
+  pageH Float?
+
+  /// sha256 of the decoded bitmap — exact dedupe, and what makes IMAGING idempotent.
+  contentHash String
+  /// 64-bit perceptual hash (hex). Hamming ≤ 5 counts as a duplicate.
+  dHash       String
+  /// lifestyle | texture | swatch | logo | page-scan | unknown
+  kind        String @default("unknown")
+
+  rejected     Boolean @default(false)
+  rejectReason String?
+
+  // One optimised WebP master. next/image derives AVIF/WebP responsive
+  // variants on demand, so pre-generating a size ladder here would be work
+  // no visitor benefits from.
+  url         String?
+  blurDataUrl String?
+  altText     String?
+  caption     String?
+  title       String?
+  seoFilename String?
+
+  /// Media row, created at publish time so the library only holds kept images.
+  mediaId String?
+
+  extractedProductId String?
+  extractedProduct   ExtractedProduct?  @relation("ProductAssets", fields: [extractedProductId], references: [id], onDelete: SetNull)
+  heroOf             ExtractedProduct[] @relation("HeroAsset")
+  textureOf          ExtractedProduct[] @relation("TextureAsset")
+
+  createdAt DateTime @default(now())
+
+  @@unique([importId, contentHash])
+  @@index([importId, page])
+  @@index([dHash])
+  @@index([extractedProductId])
+}
+
+// ————— Local SEO landing pages —————
+
+/// Keyword landing pages served at root URLs (e.g. /tiles-mangaluru). Content
+/// is fully CMS-managed so each page can be genuinely distinct rather than a
+/// templated doorway.
+model LandingPage {
+  id         String  @id @default(cuid())
+  slug       String  @unique
+  /// local | brand | collection
+  kind       String  @default("local")
+  title      String
+  heading    String
+  subheading String?
+  intro      String?
+  /// [{ type, heading, body, image }] — the page body, in order.
+  blocks     Json?
+
+  city        String?
+  locality    String?
+  areaServed  Json? // string[] — feeds LocalBusiness areaServed
+  /// e.g. "Bathroom Tiles", "Large Format Tiles", "Jaquar"
+  serviceType String?
+
+  brandId String?
+  brand   Brand?  @relation(fields: [brandId], references: [id], onDelete: SetNull)
+
+  heroImage String?
+  gallery   Json? // string[]
+  faqs      Json? // [{ q, a }] — renders FAQPage schema
+
+  showroomIds        Json? // string[]
+  featuredProductIds Json? // string[]
+  jsonLd             String?
+
+  published Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  seo Seo?
+
+  createdById String?
+  updatedById String?
+  deletedById String?
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([published, deletedAt])
+  @@index([city])
+}
+
+/// Google Business posts (updates / offers / events), mirrored into the CMS so
+/// they can also render on the site. Entered by hand — see Showroom for why.
+model GooglePost {
+  id        String    @id @default(cuid())
+  /// UPDATE | OFFER | EVENT
+  type      String    @default("UPDATE")
+  title     String
+  body      String?
+  image     String?
+  ctaLabel  String?
+  ctaUrl    String?
+  startsAt  DateTime?
+  endsAt    DateTime?
+  /// Link to the live post on the Google Business Profile.
+  sourceUrl String?
+
+  showroomId String?
+  showroom   Showroom? @relation(fields: [showroomId], references: [id], onDelete: SetNull)
+
+  published Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  createdById String?
+  updatedById String?
+  deletedById String?
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([published, deletedAt])
+  @@index([showroomId])
+}
+
+// ————— E-Commerce Upgrades —————
+
+model Collection {
+  id          String    @id @default(cuid())
+  slug        String    @unique
+  name        String
+  description String?
+  image       String?
+  sortOrder   Int       @default(0)
+  published   Boolean   @default(true)
+  products    Product[] @relation("CollectionProducts")
+  seo         Seo?
+  offers      Offer[]
+  createdById String?
+  updatedById String?
+  deletedById String?
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([deletedAt])
+}
+
+model Warehouse {
+  id          String   @id @default(cuid())
+  name        String
+  code        String   @unique
+  location    String?
+  address     String?
+  status      String   @default("ACTIVE")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  inventories        Inventory[]
+  inventoryMovements InventoryMovement[]
+  stockBlocks        StockBlock[]
+  shipments          Shipment[]
+}
+
+model Dealer {
+  id          String   @id @default(cuid())
+  name        String
+  company     String?
+  contact     String?
+  email       String?  @unique
+  phone       String?
+  address     String?
+  status      String   @default("ACTIVE")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  stockBlocks StockBlock[]
+}
+
+model Inventory {
+  id             String    @id @default(cuid())
+  productId      String    @unique
+  product        Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  warehouseId    String?   
+  warehouse      Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  totalStock     Float     @default(0)
+  availableStock Float     @default(0)
+  blockedStock   Float     @default(0)
+  allocatedStock Float     @default(0)
+  reservedStock  Float     @default(0)
+  damagedStock   Float     @default(0)
+  transitStock   Float     @default(0)
+  minimumStock   Float     @default(0)
+  maximumStock   Float     @default(0)
+  reorderLevel   Float     @default(0)
+  stockStatus    String    @default("OUT_OF_STOCK") // AVAILABLE | LOW_STOCK | OUT_OF_STOCK | INCOMING | BLOCKED | PARTIALLY_AVAILABLE | DAMAGED
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  blocks    InventoryBlock[]
+  stockBlocks StockBlock[]
+  movements InventoryMovement[]
+
+  @@index([warehouseId])
+  @@index([stockStatus])
+}
+
+model StockBlock {
+  id          String    @id @default(cuid())
+  productId   String
+  inventoryId String
+  inventory   Inventory @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+  warehouseId String?
+  warehouse   Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  dealerId    String?
+  dealer      Dealer?   @relation(fields: [dealerId], references: [id], onDelete: SetNull)
+  quantity    Float
+  requestedBy String
+  approvedBy  String?
+  status      String    @default("PENDING") // PENDING | APPROVED | REJECTED | CONFIRMED | EXPIRED | CANCELLED | RELEASED
+  remarks     String?
+  createdAt   DateTime  @default(now())
+  approvedAt  DateTime?
+  expiresAt   DateTime?
+  confirmedAt DateTime?
+  releasedAt  DateTime?
+
+  @@index([inventoryId])
+  @@index([productId])
+  @@index([dealerId])
+  @@index([warehouseId])
+  @@index([status])
+}
+
+model InventoryMovement {
+  id               String    @id @default(cuid())
+  inventoryId      String
+  inventory        Inventory @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+  productId        String
+  warehouseId      String?
+  warehouse        Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  movementType     String    // STOCK_IN | STOCK_OUT | BLOCKED | BLOCK_RELEASED | ALLOCATED | DEALLOCATED | DISPATCHED | IN_TRANSIT | RECEIVED | DAMAGED | RETURNED | TRANSFER_IN | TRANSFER_OUT | ADJUSTMENT
+  quantity         Float
+  previousQuantity Float
+  newQuantity      Float
+  referenceType    String?   // BLOCK | SHIPMENT | ADJUSTMENT | ORDER
+  referenceId      String?
+  reason           String?
+  performedBy      String
+  createdAt        DateTime  @default(now())
+
+  @@index([inventoryId])
+  @@index([productId])
+  @@index([warehouseId])
+  @@index([movementType])
+  @@index([createdAt])
+}
+
+model Shipment {
+  id             String         @id @default(cuid())
+  shipmentNumber String         @unique
+  supplier       String?
+  warehouseId    String?
+  warehouse      Warehouse?     @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  status         String         @default("EXPECTED") // EXPECTED | DISPATCHED | IN_TRANSIT | ARRIVED | RECEIVING | PARTIALLY_RECEIVED | RECEIVED | CANCELLED
+  expectedDate   DateTime?
+  dispatchDate   DateTime?
+  arrivalDate    DateTime?
+  remarks        String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  items          ShipmentItem[]
+
+  @@index([warehouseId])
+  @@index([status])
+}
+
+model ShipmentItem {
+  id               String   @id @default(cuid())
+  shipmentId       String
+  shipment         Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  productId        String
+  expectedQuantity Float
+  receivedQuantity Float    @default(0)
+  damagedQuantity  Float    @default(0)
+  shortQuantity    Float    @default(0)
+  status           String   @default("PENDING")
+
+  @@index([shipmentId])
+  @@index([productId])
+}
+
+model InventoryBlock {
+  id              String    @id @default(cuid())
+  inventoryId     String
+  inventory       Inventory @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+  blockedBy       String    // Dealer name or Sales Representative name
+  quantity        Float     // Quantity in Boxes / Units
+  remarks         String?   // Internal reservation remarks
+  approvalStatus  String    @default("PENDING") // PENDING | APPROVED | REJECTED | EXPIRED
+  blockApprovedBy String?   // Approving manager name
+  expiresAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([inventoryId])
+  @@index([approvalStatus])
+}
+
+model InventoryHistory {
+  id             String    @id @default(cuid())
+  productId      String
+  product        Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  quantity       Float
+  type           String    // ADJUSTMENT | RESTOCK | DAMAGE | RESERVATION | TRANSIT_IN | BLOCK_APPROVED
+  notes          String?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+}
+
+model WhatsAppAnalytics {
+  id             String   @id @default(cuid())
+  eventType      String   // BUTTON_CLICK | PRODUCT_CLICK | ENQUIRY_LIST_CREATED | ENQUIRY_LIST_SENT
+  productId      String?
+  productSku     String?
+  productName    String?
+  collectionName String?
+  quantity       String?
+  unit           String?  // Boxes | Pieces | Sq.ft | Sq.m
+  sourcePage     String?
+  device         String?
+  createdAt      DateTime @default(now())
+
+  @@index([eventType])
+  @@index([productId])
+  @@index([createdAt])
+}
