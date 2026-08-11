@@ -1,57 +1,114 @@
 @import "tailwindcss";
 
+@theme {
+  --color-prestige-yellow: #f5c518;
+  --color-prestige-yellow-hover: #d9ad0e;
+  --color-prestige-dark: #050811;
+  --color-prestige-card: #0c1122;
+  --color-prestige-bg: #050811;
+  --color-prestige-border: #1b253b;
+  --color-prestige-text: #f1f5f9;
+  --color-prestige-text-muted: #94a3b8;
+}
+
 @layer base {
   :root {
     --background: 224 71% 4%;
     --foreground: 213 31% 91%;
-
     --card: 224 71% 6%;
     --card-foreground: 213 31% 91%;
-
     --popover: 224 71% 6%;
     --popover-foreground: 213 31% 91%;
-
     --primary: 210 100% 50%;
     --primary-foreground: 0 0% 100%;
-
     --secondary: 215 27.9% 16.9%;
     --secondary-foreground: 210 20% 98%;
-
     --muted: 215 27.9% 14.9%;
     --muted-foreground: 217.9 10.6% 64.9%;
-
     --accent: 215 27.9% 16.9%;
     --accent-foreground: 210 20% 98%;
-
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 210 20% 98%;
-
     --border: 215 27.9% 14.9%;
     --input: 215 27.9% 14.9%;
     --ring: 216 12.2% 83.9%;
+    --radius: 0.75rem;
+  }
 
-    --radius: 0.5rem;
+  body {
+    background-color: #050811;
+    color: #f1f5f9;
+    font-family: var(--font-sans);
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+    overflow-x: hidden;
   }
 }
 
-body {
-  background-color: #0b0f19;
-  color: #e2e8f0;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-}
-
-/* Custom scrollbar for dark enterprise UI */
+/* Custom Scrollbars */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
-  background: #0f172a;
+  background: #050811;
 }
 ::-webkit-scrollbar-thumb {
-  background: #334155;
-  border-radius: 3px;
+  background: #1e293b;
+  border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: #334155;
+}
+
+/* Shimmer Loading Animations */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.animate-shimmer {
+  background: linear-gradient(90deg, #0c1122 25%, #1b253b 50%, #0c1122 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite linear;
+}
+
+/* Glassmorphism styling */
+.glass-panel {
+  background: rgba(12, 17, 34, 0.75);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(27, 37, 59, 0.5);
+}
+
+.glass-card {
+  background: rgba(12, 17, 34, 0.45);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(27, 37, 59, 0.3);
+}
+
+/* Active Highlight Styling */
+.active-nav-indicator {
+  border-left: 3px solid #f5c518;
+}
+
+/* Accessible minimum touch target sizes */
+.touch-target {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Avoid fixed panels overlapping content in landscape */
+@media (max-height: 480px) and (orientation: landscape) {
+  .mobile-bottom-nav {
+    display: none !important;
+  }
+  body {
+    padding-bottom: 0 !important;
+  }
 }
