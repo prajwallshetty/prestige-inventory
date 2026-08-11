@@ -184,6 +184,7 @@ model Product {
   inventory Inventory?
   inventoryHistory InventoryHistory[]
   offers Offer[]
+  stockBookingItems StockBookingItem[]
 
   // Provenance — which catalogue import produced this row, if any. A plain
   // column rather than an FK so deleting an import never cascades into the
@@ -1079,6 +1080,7 @@ model Warehouse {
   inventoryMovements InventoryMovement[]
   stockBlocks        StockBlock[]
   shipments          Shipment[]
+  stockBookings      StockBooking[]
 }
 
 model Dealer {
@@ -1094,6 +1096,7 @@ model Dealer {
   updatedAt   DateTime @updatedAt
 
   stockBlocks StockBlock[]
+  stockBookings StockBooking[]
 }
 
 model Inventory {
@@ -1254,4 +1257,56 @@ model WhatsAppAnalytics {
   @@index([eventType])
   @@index([productId])
   @@index([createdAt])
+}
+
+model StockBooking {
+  id                 String             @id @default(cuid())
+  bookingNumber      String             @unique
+  dealerId           String
+  dealer             Dealer             @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  warehouseId        String
+  warehouse          Warehouse          @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  status             String             @default("DRAFT") // DRAFT | PENDING_APPROVAL | APPROVED | REJECTED | AWAITING_DEALER_CONFIRMATION | CONFIRMED | ALLOCATED | PARTIALLY_FULFILLED | FULFILLED | CANCEL_REQUESTED | CANCELLED | EXPIRED | RELEASED | ON_HOLD
+  requestedBy        String
+  requestedAt        DateTime           @default(now())
+  expiresAt          DateTime?
+  approvedBy         String?
+  approvedAt         DateTime?
+  confirmedAt        DateTime?
+  cancelledAt        DateTime?
+  releasedAt         DateTime?
+  notes              String?
+  priority           String             @default("NORMAL") // NORMAL | HIGH | URGENT
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  items              StockBookingItem[]
+  
+  // Extension requests
+  extensionRequested Boolean            @default(false)
+  extensionHours     Int?
+  extensionReason    String?
+
+  @@index([dealerId])
+  @@index([warehouseId])
+  @@index([status])
+  @@index([bookingNumber])
+}
+
+model StockBookingItem {
+  id                String       @id @default(cuid())
+  bookingId         String
+  booking           StockBooking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  productId         String
+  product           Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  requestedQuantity Float
+  approvedQuantity  Float        @default(0)
+  reservedQuantity  Float        @default(0)
+  allocatedQuantity Float        @default(0)
+  fulfilledQuantity Float        @default(0)
+  cancelledQuantity Float        @default(0)
+  unit              String       @default("Boxes")
+  remarks           String?
+
+  @@index([bookingId])
+  @@index([productId])
 }

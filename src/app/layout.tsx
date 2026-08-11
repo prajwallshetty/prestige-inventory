@@ -1,9 +1,26 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import { PWARegister } from "@/components/pwa/PWARegister";
+import { CommandSearch } from "@/components/search/CommandSearch";
 
 export const metadata: Metadata = {
   title: "Prestige Tiles — Inventory Control System",
   description: "Enterprise inventory, stock reservation, and depot management for Prestige Tiles",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Prestige Inventory",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#050811",
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
@@ -13,7 +30,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark">
-      <body className="bg-[#0b0f19] text-slate-100 antialiased">{children}</body>
+      <body className="bg-[#050811] text-slate-100 antialiased font-sans">
+        <PWARegister />
+        <CommandSearch />
+        {children}
+      </body>
     </html>
   );
 }

@@ -1,20 +1,13 @@
 import { SidebarLayout } from "@/components/layout/SidebarLayout";
 import { getInventorySummary } from "@/services/InventoryService";
+import { getSessionContext } from "@/lib/session";
 import { db } from "@/lib/db";
-import {
-  Boxes,
-  PackageCheck,
-  AlertTriangle,
-  Lock,
-  Truck,
-  ArrowUpRight,
-  ArrowDownRight,
-} from "lucide-react";
-import Link from "next/link";
+import { DashboardClient } from "./DashboardClient";
 
-export const revalidate = 0; // Dynamic real-time server rendering
+export const revalidate = 0; // Dynamic server-side rendering
 
 export default async function DashboardPage() {
+  const session = await getSessionContext();
   const summary = await getInventorySummary();
 
   // Fetch recent stock movements
@@ -24,13 +17,30 @@ export default async function DashboardPage() {
     include: {
       inventory: {
         include: {
-          product: { select: { name: true, sku: true, productCode: true, size: true, brand: { select: { name: true } } } },
+          product: { select: { name: true, sku: true, size: true } },
         },
       },
     },
   });
 
-  // Fetch active pending blocks
+  // Serialize movements dates
+  const serializedMovements = recentMovements.map((m) => ({
+    id: m.id,
+    quantity: m.quantity,
+    movementType: m.movementType,
+    reason: m.reason,
+    performedBy: m.performedBy,
+    createdAt: m.createdAt.toISOString(),
+    inventory: m.inventory ? {
+      product: {
+        name: m.inventory.product.name,
+        sku: m.inventory.product.sku || m.inventory.productId.slice(-6).toUpperCase(),
+        size: m.inventory.product.size || "Standard",
+      }
+    } : null
+  }));
+
+  // Fetch active pending blocks (for manager alerts)
   const pendingBlocks = await db.stockBlock.findMany({
     where: { status: "PENDING" },
     take: 5,
@@ -39,193 +49,76 @@ export default async function DashboardPage() {
     },
   });
 
+  const serializedPendingBlocks = pendingBlocks.map((b) => ({
+    id: b.id,
+    quantity: b.quantity,
+    requestedBy: b.requestedBy,
+    remarks: b.remarks,
+    createdAt: b.createdAt.toISOString(),
+    dealer: b.dealer ? {
+      name: b.dealer.name,
+      company: b.dealer.company
+    } : null
+  }));
+
+  // Dealer portal metrics
+  let dealerBookings: any[] = [];
+  let dealerSummary = { pendingCount: 0, awaitingConfirmCount: 0, confirmedCount: 0, totalBoxes: 0 };
+
+  if (session.role === "DEALER" && session.dealerId) {
+    const bookings = await db.stockBooking.findMany({
+      where: { dealerId: session.dealerId },
+      orderBy: { requestedAt: "desc" },
+      take: 5,
+      include: {
+        items: { select: { requestedQuantity: true } }
+      }
+    });
+
+    dealerBookings = bookings.map((b) => ({
+      id: b.id,
+      bookingNumber: b.bookingNumber,
+      status: b.status,
+      requestedAt: b.requestedAt.toISOString(),
+      items: b.items.map((i) => ({
+        requestedQuantity: i.requestedQuantity
+      }))
+    }));
+
+    const [pending, awaiting, confirmed] = await Promise.all([
+      db.stockBooking.count({ where: { dealerId: session.dealerId, status: "PENDING_APPROVAL" } }),
+      db.stockBooking.count({ where: { dealerId: session.dealerId, status: "AWAITING_DEALER_CONFIRMATION" } }),
+      db.stockBooking.count({ where: { dealerId: session.dealerId, status: "CONFIRMED" } }),
+    ]);
+
+    const itemsSum = await db.stockBookingItem.aggregate({
+      where: { 
+        booking: { 
+          dealerId: session.dealerId, 
+          status: { in: ["APPROVED", "AWAITING_DEALER_CONFIRMATION", "CONFIRMED", "ALLOCATED", "FULFILLED"] } 
+        } 
+      },
+      _sum: { approvedQuantity: true }
+    });
+
+    dealerSummary = {
+      pendingCount: pending,
+      awaitingConfirmCount: awaiting,
+      confirmedCount: confirmed,
+      totalBoxes: itemsSum._sum.approvedQuantity || 0
+    };
+  }
+
   return (
     <SidebarLayout>
-      <div className="space-y-6">
-        {/* HEADER BAR */}
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-white">Inventory Control Dashboard</h1>
-            <p className="text-xs text-slate-400">
-              Live enterprise stock monitoring, dealer reservations, and transit logistics for Prestige Tiles.
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <Link
-              href="/blocks"
-              className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-blue-600/30 hover:bg-blue-500 transition-all"
-            >
-              + Create Block Request
-            </Link>
-            <Link
-              href="/in-transit"
-              className="rounded-lg border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700 transition-all"
-            >
-              + Receive Shipment
-            </Link>
-          </div>
-        </div>
-
-        {/* METRICS GRID */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
-          <MetricCard
-            title="Total Products"
-            value={summary.totalProducts.toLocaleString()}
-            subtitle="Catalog records in DB"
-            icon={Boxes}
-            color="blue"
-          />
-          <MetricCard
-            title="Available Stock"
-            value={`${summary.totalAvailableStock.toLocaleString()} Boxes`}
-            subtitle="Ready for immediate sale"
-            icon={PackageCheck}
-            color="emerald"
-          />
-          <MetricCard
-            title="Blocked Stock"
-            value={`${summary.totalBlockedStock.toLocaleString()} Boxes`}
-            subtitle={`${summary.activeBlocks} active dealer blocks`}
-            icon={Lock}
-            color="amber"
-          />
-          <MetricCard
-            title="In Transit Stock"
-            value={`${summary.totalInTransit.toLocaleString()} Boxes`}
-            subtitle="Incoming factory shipments"
-            icon={Truck}
-            color="indigo"
-          />
-          <MetricCard
-            title="Low / Out of Stock"
-            value={`${summary.lowStock} / ${summary.outOfStock}`}
-            subtitle="Needs immediate reorder"
-            icon={AlertTriangle}
-            color="rose"
-          />
-        </div>
-
-        {/* SECOND ROW: MOVEMENTS & PENDING BLOCKS */}
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          {/* RECENT STOCK MOVEMENTS */}
-          <div className="lg:col-span-2 rounded-xl border border-slate-800 bg-[#0f172a] p-5 shadow-xl">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-              <div>
-                <h2 className="text-base font-bold text-white">Stock Movements Today</h2>
-                <p className="text-xs text-slate-400">Full auditable history of physical & block changes</p>
-              </div>
-              <Link href="/reports" className="text-xs font-medium text-blue-400 hover:underline">
-                View Full Audit Log →
-              </Link>
-            </div>
-
-            <div className="mt-4 divide-y divide-slate-800/60">
-              {recentMovements.length === 0 ? (
-                <p className="py-8 text-center text-xs text-slate-500">No stock movements recorded yet today.</p>
-              ) : (
-                recentMovements.map((mov) => {
-                  const prod = mov.inventory?.product;
-                  const isPositive = mov.quantity > 0;
-                  return (
-                    <div key={mov.id} className="flex items-center justify-between py-3">
-                      <div className="flex items-center gap-3">
-                        <div
-                          className={`flex h-8 w-8 items-center justify-center rounded-lg ${
-                            isPositive ? "bg-emerald-500/10 text-emerald-400" : "bg-rose-500/10 text-rose-400"
-                          }`}
-                        >
-                          {isPositive ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownRight className="h-4 w-4" />}
-                        </div>
-                        <div>
-                          <p className="text-xs font-semibold text-white">
-                            {prod?.name || "Product"} ({prod?.size || "Std"})
-                          </p>
-                          <p className="text-[10px] text-slate-400">
-                            {mov.movementType} • Reason: {mov.reason || "N/A"} • By {mov.performedBy}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <p className={`text-xs font-bold ${isPositive ? "text-emerald-400" : "text-rose-400"}`}>
-                          {isPositive ? `+${mov.quantity}` : mov.quantity} Boxes
-                        </p>
-                        <p className="text-[10px] text-slate-400">
-                          {new Date(mov.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
-
-          {/* PENDING BLOCK REQUESTS */}
-          <div className="rounded-xl border border-slate-800 bg-[#0f172a] p-5 shadow-xl">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-              <div>
-                <h2 className="text-base font-bold text-white">Pending Block Approvals</h2>
-                <p className="text-xs text-amber-400">{summary.pendingBlocks} pending manager sign-off</p>
-              </div>
-              <Link href="/blocks" className="text-xs font-medium text-blue-400 hover:underline">
-                Manage →
-              </Link>
-            </div>
-
-            <div className="mt-4 space-y-3">
-              {pendingBlocks.length === 0 ? (
-                <p className="py-8 text-center text-xs text-slate-500">No block requests waiting for approval.</p>
-              ) : (
-                pendingBlocks.map((block) => (
-                  <div key={block.id} className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
-                    <div className="flex items-center justify-between">
-                      <p className="text-xs font-bold text-white">{block.dealer?.name || "Dealer Request"}</p>
-                      <span className="rounded bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-400">
-                        {block.quantity} Boxes
-                      </span>
-                    </div>
-                    <p className="mt-1 text-[10px] text-slate-400">Requested by: {block.requestedBy}</p>
-                    {block.remarks && <p className="mt-1 text-[10px] italic text-slate-400">"{block.remarks}"</p>}
-                    <div className="mt-2 flex gap-2">
-                      <Link
-                        href={`/blocks`}
-                        className="w-full rounded bg-blue-600 py-1 text-center text-[10px] font-semibold text-white hover:bg-blue-500"
-                      >
-                        Review & Approve
-                      </Link>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
+      <DashboardClient
+        summary={summary}
+        recentMovements={serializedMovements}
+        pendingBlocks={serializedPendingBlocks}
+        dealerBookings={dealerBookings}
+        dealerSummary={dealerSummary}
+        session={session}
+      />
     </SidebarLayout>
-  );
-}
-
-function MetricCard({ title, value, subtitle, icon: Icon, color }: any) {
-  const colorMap: any = {
-    blue: "border-blue-500/20 bg-blue-500/5 text-blue-400",
-    emerald: "border-emerald-500/20 bg-emerald-500/5 text-emerald-400",
-    amber: "border-amber-500/20 bg-amber-500/5 text-amber-400",
-    indigo: "border-indigo-500/20 bg-indigo-500/5 text-indigo-400",
-    rose: "border-rose-500/20 bg-rose-500/5 text-rose-400",
-  };
-
-  return (
-    <div className="rounded-xl border border-slate-800 bg-[#0f172a] p-4 shadow-xl">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">{title}</span>
-        <div className={`rounded-lg border p-2 ${colorMap[color]}`}>
-          <Icon className="h-5 w-5" />
-        </div>
-      </div>
-      <div className="mt-3">
-        <p className="text-xl font-bold tracking-tight text-white">{value}</p>
-        <p className="mt-1 text-[10px] text-slate-400">{subtitle}</p>
-      </div>
-    </div>
   );
 }

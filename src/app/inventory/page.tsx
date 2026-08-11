@@ -1,5 +1,6 @@
 import { SidebarLayout } from "@/components/layout/SidebarLayout";
 import { getInventoryList } from "@/services/InventoryService";
+import { getSessionContext } from "@/lib/session";
 import { db } from "@/lib/db";
 import { InventoryClientTable } from "@/components/inventory/InventoryClientTable";
 
@@ -17,7 +18,8 @@ export default async function InventoryPage({
   const stockStatus = typeof params.status === "string" ? params.status : "";
   const page = parseInt(typeof params.page === "string" ? params.page : "1");
 
-  const [inventoryData, brands, categories] = await Promise.all([
+  const [session, inventoryData, brands, categories] = await Promise.all([
+    getSessionContext(),
     getInventoryList({ search, brandId, categoryId, stockStatus, page }),
     db.brand.findMany({ select: { id: true, name: true } }),
     db.category.findMany({ select: { id: true, name: true } }),
@@ -36,7 +38,12 @@ export default async function InventoryPage({
         </div>
 
         {/* INVENTORY TABLE COMPONENT */}
-        <InventoryClientTable initialData={inventoryData} brands={brands} categories={categories} />
+        <InventoryClientTable 
+          initialData={inventoryData} 
+          brands={brands} 
+          categories={categories} 
+          session={session} 
+        />
       </div>
     </SidebarLayout>
   );
