@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 
+import { getProductImageUrl } from "@/lib/s3";
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -20,6 +22,9 @@ export async function GET(request: Request) {
         name: true,
         size: true,
         brand: { select: { name: true } },
+        image_key: true,
+        lifestyleImage: true,
+        textureImage: true,
         inventory: {
           select: {
             availableStock: true,
@@ -41,6 +46,7 @@ export async function GET(request: Request) {
       stock_available: p.inventory?.availableStock ?? 0,
       in_transit_stock: p.inventory?.transitStock ?? 0,
       status: p.inventory?.stockStatus ?? "OUT_OF_STOCK",
+      product_image: getProductImageUrl(p) || "",
     }));
 
     return NextResponse.json({

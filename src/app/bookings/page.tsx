@@ -24,8 +24,10 @@ export default async function BookingsPage({
   // Enforce security scopes
   if (session.role === "DEALER") {
     filters.dealerId = session.dealerId || "abc-dealer-id-placeholder";
-  } else if (session.role === "WAREHOUSE_MANAGER") {
+  } else if (session.role === "MANAGER") {
     filters.warehouseId = session.warehouseId || undefined;
+  } else if (session.role === "SHOWROOM_STAFF" || session.role === "SHOWROOM_INCHARGE") {
+    filters.requestedBy = session.name;
   } else {
     // SUPER_ADMIN / AUDITOR
     filters.warehouseId = typeof params.warehouseId === "string" ? params.warehouseId : undefined;

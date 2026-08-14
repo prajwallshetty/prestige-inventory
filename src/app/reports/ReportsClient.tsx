@@ -156,22 +156,22 @@ export function ReportsClient({ totalInventory, stockBlocks, stockBookings, move
 
 function ReportCard({ title, count, type, isExporting, onExport }: { title: string; count: number; type: string; isExporting: boolean; onExport: () => void }) {
   return (
-    <div className="rounded-xl border border-slate-800 bg-[#0f172a] p-5 shadow-xl transition-all hover:scale-102 flex flex-col justify-between">
+    <div className="rounded-xl border border-[#EAEAEA] bg-white p-5 shadow-xs transition-all hover:scale-102 flex flex-col justify-between">
       <div>
         <div className="flex items-center justify-between">
-          <FileSpreadsheet className="h-6 w-6 text-amber-500" />
-          <span className="rounded bg-amber-500/10 px-2 py-0.5 text-[9px] font-bold text-amber-400 uppercase tracking-wider">
+          <FileSpreadsheet className="h-6 w-6 text-[#F2C202]" />
+          <span className="rounded bg-[#F2C202]/10 border border-[#F2C202]/20 px-2 py-0.5 text-[9px] font-bold text-[#8A7300] uppercase tracking-wider">
             {type}
           </span>
         </div>
-        <h3 className="mt-4 text-sm font-bold text-white tracking-tight">{title}</h3>
-        <p className="text-[11px] text-slate-400 mt-1">{count} total records available</p>
+        <h3 className="mt-4 text-sm font-bold text-[#111111] tracking-tight">{title}</h3>
+        <p className="text-[11px] text-[#6B6B6B] mt-1">{count} total records available</p>
       </div>
 
       <button
         onClick={onExport}
         disabled={isExporting}
-        className="mt-6 flex w-full items-center justify-center gap-2 rounded-lg bg-slate-800 py-2.5 text-xs font-bold text-slate-200 hover:bg-slate-750 disabled:bg-slate-850 disabled:text-slate-500 transition-all border border-slate-750 shadow-md"
+        className="mt-6 flex w-full items-center justify-center gap-2 rounded-lg bg-[#F7F7F5] py-2.5 text-xs font-bold text-[#111111] hover:bg-[#EAEAEA] border border-[#EAEAEA] disabled:opacity-50 transition-all cursor-pointer"
       >
         <Download className="h-3.5 w-3.5" /> 
         {isExporting ? "Exporting CSV..." : "Export Data (CSV)"}

@@ -5,13 +5,9 @@ import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { 
   Clock, 
-  AlertTriangle, 
-  CheckCircle2, 
   ChevronRight, 
   Search, 
-  Filter, 
   Check,
-  SlidersHorizontal,
   ChevronDown
 } from "lucide-react";
 import { SessionContext } from "@/lib/session";
@@ -105,8 +101,10 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
-      const eligible = bookings.filter((b) => b.status === "PENDING_APPROVAL").map((b) => b.id);
-      setSelectedIds(eligible);
+      const pendingIds = bookings
+        .filter((b) => b.status === "PENDING_APPROVAL")
+        .map((b) => b.id);
+      setSelectedIds(pendingIds);
     } else {
       setSelectedIds([]);
     }
@@ -114,24 +112,23 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
 
   const handleSelectOne = (id: string, checked: boolean) => {
     if (checked) {
-      setSelectedIds([...selectedIds, id]);
+      setSelectedIds((prev) => [...prev, id]);
     } else {
-      setSelectedIds(selectedIds.filter((x) => x !== id));
+      setSelectedIds((prev) => prev.filter((x) => x !== id));
     }
   };
 
   const handleBulkApprove = async () => {
     if (selectedIds.length === 0) return;
-    if (!confirm(`Confirm bulk approval of ${selectedIds.length} reservations?`)) return;
-
     setIsBulkApproving(true);
     setBulkResult(null);
     try {
-      const res = await bulkApproveBookingsAction(selectedIds, `Bulk Manager`);
+      const res = await bulkApproveBookingsAction(selectedIds, session.role === "SUPER_ADMIN" ? "Super Admin" : "Manager");
       setBulkResult(res);
       setSelectedIds([]);
+      router.refresh();
     } catch (err: any) {
-      alert(`Bulk action failed: ${err.message}`);
+      alert(`Bulk approval error: ${err.message}`);
     } finally {
       setIsBulkApproving(false);
     }
@@ -139,114 +136,149 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
 
   return (
     <div className="space-y-6">
-      {/* SUMMARIZED FILTERS ROW */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        <MetricCard title="Pending Review" count={summary.pending} color="amber" active={currentStatus === "PENDING_APPROVAL"} onClick={() => updateFilters({ status: "PENDING_APPROVAL" })} />
-        <MetricCard title="Awaiting Confirm" count={summary.expiring} color="indigo" active={currentStatus === "AWAITING_DEALER_CONFIRMATION"} onClick={() => updateFilters({ status: "AWAITING_DEALER_CONFIRMATION" })} />
-        <MetricCard title="Active Reserves" count={summary.active} color="emerald" active={currentStatus === "APPROVED"} onClick={() => updateFilters({ status: "APPROVED" })} />
-        <MetricCard title="Confirmed" count={summary.confirmed} color="blue" active={currentStatus === "CONFIRMED"} onClick={() => updateFilters({ status: "CONFIRMED" })} />
-        <MetricCard title="Cancelled" count={summary.cancelled} color="slate" active={currentStatus === "CANCELLED"} onClick={() => updateFilters({ status: "CANCELLED" })} />
-        <MetricCard title="Rejected" count={summary.rejected} color="rose" active={currentStatus === "REJECTED"} onClick={() => updateFilters({ status: "REJECTED" })} />
+      {/* HEADER BAR */}
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight text-[#111111]">
+          {session.role === "DEALER" ? "My Stock Bookings" : "Stock Reservation Queue"}
+        </h1>
+        <p className="text-xs text-[#6B6B6B]">
+          {session.role === "DEALER"
+            ? "Submit and track tile allocations, view expiration timers, and download dealer invoices."
+            : "Approve pending stock reservations, extend block hold leases, and manage dealer allocations."}
+        </p>
       </div>
 
-      {/* BULK ACTION RESULTS PANEL */}
+      {/* SUMMARY KPI CARDS */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <MetricCard
+          title="All Bookings"
+          count={summary.active + summary.pending + summary.confirmed}
+          color="slate"
+          active={currentStatus === ""}
+          onClick={() => updateFilters({ status: "" })}
+        />
+        <MetricCard
+          title="Pending Review"
+          count={summary.pending}
+          color="amber"
+          active={currentStatus === "PENDING_APPROVAL"}
+          onClick={() => updateFilters({ status: "PENDING_APPROVAL" })}
+        />
+        <MetricCard
+          title="Awaiting Confirm"
+          count={summary.expiring}
+          color="indigo"
+          active={currentStatus === "AWAITING_DEALER_CONFIRMATION"}
+          onClick={() => updateFilters({ status: "AWAITING_DEALER_CONFIRMATION" })}
+        />
+        <MetricCard
+          title="Confirmed Lock"
+          count={summary.confirmed}
+          color="emerald"
+          active={currentStatus === "CONFIRMED"}
+          onClick={() => updateFilters({ status: "CONFIRMED" })}
+        />
+        <MetricCard
+          title="Rejected Holds"
+          count={summary.rejected}
+          color="rose"
+          active={currentStatus === "REJECTED"}
+          onClick={() => updateFilters({ status: "REJECTED" })}
+        />
+        <MetricCard
+          title="Released/Expired"
+          count={summary.cancelled}
+          color="blue"
+          active={currentStatus === "CANCELLED"}
+          onClick={() => updateFilters({ status: "CANCELLED" })}
+        />
+      </div>
+
+      {/* BATCH ACTION RESULTS */}
       {bulkResult && (
-        <div className="rounded-xl border border-slate-800 bg-[#0c1122]/90 p-4 shadow-xl flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <CheckCircle2 className="h-5 w-5 text-emerald-400 shrink-0" />
-            <div className="text-xs">
-              <h4 className="font-bold text-white uppercase tracking-wider">Batch approval completed</h4>
-              <p className="text-slate-400 mt-1 flex gap-3">
-                <span className="text-emerald-400 font-bold">{bulkResult.approved} Approved</span>
-                <span className="text-amber-400 font-bold">{bulkResult.insufficientStock} Insufficient Stock</span>
-                <span className="text-rose-400 font-bold">{bulkResult.failed} Failures</span>
-              </p>
-            </div>
-          </div>
-          <button onClick={() => setBulkResult(null)} className="rounded-lg bg-slate-850 px-3 py-1.5 text-[10px] font-bold text-slate-350 hover:text-white">
-            Dismiss
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-xs text-emerald-950 space-y-1">
+          <p className="font-bold">Batch Approval Process Completed:</p>
+          <ul className="list-disc pl-5 space-y-0.5">
+            <li>Successfully Approved: <strong className="text-emerald-800">{bulkResult.approved} holds</strong></li>
+            {bulkResult.insufficientStock > 0 && (
+              <li className="text-amber-800">Insufficient Warehouse Stock: <strong>{bulkResult.insufficientStock} holds rejected/skipped</strong></li>
+            )}
+            {bulkResult.failed > 0 && (
+              <li className="text-rose-800">System Errors: <strong>{bulkResult.failed} holds failed</strong></li>
+            )}
+          </ul>
+          <button
+            onClick={() => setBulkResult(null)}
+            className="text-[10px] underline font-bold mt-1 text-emerald-800 hover:text-emerald-950"
+          >
+            Dismiss Alert
           </button>
         </div>
       )}
 
-      {/* FILTER CONTROL MODULE */}
-      <div className="rounded-xl border border-slate-850 bg-[#0c1122]/70 p-4 shadow-sm space-y-4">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center justify-between">
-          <div className="flex flex-wrap gap-2 items-center">
-            {/* Status */}
-            <div className="flex items-center gap-1 bg-slate-950 border border-[#1b253b]/55 rounded-lg px-2.5 py-1.5">
-              <Filter className="h-3.5 w-3.5 text-slate-500" />
-              <select
-                value={currentStatus}
-                onChange={(e) => updateFilters({ status: e.target.value })}
-                className="bg-transparent text-xs text-slate-300 focus:outline-hidden"
-              >
-                <option value="">All Statuses</option>
-                <option value="PENDING_APPROVAL">Pending Approval</option>
-                <option value="AWAITING_DEALER_CONFIRMATION">Awaiting Confirmation</option>
-                <option value="CONFIRMED">Confirmed</option>
-                <option value="ALLOCATED">Allocated</option>
-                <option value="FULFILLED">Fulfilled</option>
-                <option value="CANCELLED">Cancelled</option>
-                <option value="EXPIRED">Expired</option>
-                <option value="ON_HOLD">On Hold</option>
-              </select>
-            </div>
-
-            {/* Priority */}
-            <div className="flex items-center gap-1 bg-slate-950 border border-[#1b253b]/55 rounded-lg px-2.5 py-1.5">
-              <SlidersHorizontal className="h-3.5 w-3.5 text-slate-500" />
-              <select
-                value={currentPriority}
-                onChange={(e) => updateFilters({ priority: e.target.value })}
-                className="bg-transparent text-xs text-slate-300 focus:outline-hidden"
-              >
-                <option value="">All Priorities</option>
-                <option value="NORMAL">Normal</option>
-                <option value="HIGH">High</option>
-                <option value="URGENT">Urgent</option>
-              </select>
-            </div>
-
-            {/* Dealer/Warehouse (non-dealers only) */}
+      {/* FILTER CONTROL BAR */}
+      <div className="flex flex-col gap-4 rounded-xl border border-[#EAEAEA] bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Dealer Filter (Manager Only) */}
             {session.role !== "DEALER" && (
-              <>
+              <div className="flex items-center gap-1.5 rounded-lg border border-[#EAEAEA] px-2.5 py-1.5 bg-white text-xs">
+                <span className="text-[#6B6B6B] font-bold">Dealer:</span>
                 <select
                   value={currentDealerId}
                   onChange={(e) => updateFilters({ dealerId: e.target.value })}
-                  className="rounded-lg border border-[#1b253b]/55 bg-slate-950 px-2.5 py-1.5 text-xs text-slate-300 focus:outline-hidden"
+                  className="bg-transparent font-medium text-[#111111] focus:outline-hidden cursor-pointer"
                 >
                   <option value="">All Dealers</option>
                   {dealers.map((d) => (
                     <option key={d.id} value={d.id}>{d.name}</option>
                   ))}
                 </select>
-
-                <select
-                  value={currentWarehouseId}
-                  onChange={(e) => updateFilters({ warehouseId: e.target.value })}
-                  className="rounded-lg border border-[#1b253b]/55 bg-slate-950 px-2.5 py-1.5 text-xs text-slate-300 focus:outline-hidden"
-                >
-                  <option value="">All Warehouses</option>
-                  {warehouses.map((w) => (
-                    <option key={w.id} value={w.id}>{w.name}</option>
-                  ))}
-                </select>
-              </>
+              </div>
             )}
+
+            {/* Warehouse Filter */}
+            <div className="flex items-center gap-1.5 rounded-lg border border-[#EAEAEA] px-2.5 py-1.5 bg-white text-xs">
+              <span className="text-[#6B6B6B] font-bold">Depot:</span>
+              <select
+                value={currentWarehouseId}
+                onChange={(e) => updateFilters({ warehouseId: e.target.value })}
+                className="bg-transparent font-medium text-[#111111] focus:outline-hidden cursor-pointer"
+              >
+                <option value="">All Depots</option>
+                {warehouses.map((w) => (
+                  <option key={w.id} value={w.id}>{w.code}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Priority Filter */}
+            <div className="flex items-center gap-1.5 rounded-lg border border-[#EAEAEA] px-2.5 py-1.5 bg-white text-xs">
+              <span className="text-[#6B6B6B] font-bold">Priority:</span>
+              <select
+                value={currentPriority}
+                onChange={(e) => updateFilters({ priority: e.target.value })}
+                className="bg-transparent font-medium text-[#111111] focus:outline-hidden cursor-pointer"
+              >
+                <option value="">All</option>
+                <option value="NORMAL">Normal</option>
+                <option value="HIGH">High</option>
+                <option value="URGENT">Urgent</option>
+              </select>
+            </div>
           </div>
 
-          {/* Sort */}
-          <div className="flex items-center gap-2">
-            <span className="text-[9px] uppercase font-black text-slate-500 tracking-wider">Sort</span>
+          {/* Sort Selector */}
+          <div className="flex items-center gap-1.5 rounded-lg border border-[#EAEAEA] px-2.5 py-1.5 bg-white text-xs">
+            <span className="text-[#6B6B6B] font-bold">Sort:</span>
             <select
               value={currentSort}
               onChange={(e) => updateFilters({ sort: e.target.value })}
-              className="rounded-lg border border-[#1b253b]/55 bg-slate-950 px-2.5 py-1.5 text-xs text-slate-300 focus:outline-hidden"
+              className="bg-transparent font-medium text-[#111111] focus:outline-hidden cursor-pointer"
             >
-              <option value="newest">Newest</option>
-              <option value="oldest">Oldest</option>
-              <option value="qty">Total boxes</option>
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+              <option value="qty">Total Quantity</option>
               <option value="priority">Priority weight</option>
               <option value="expiry">Expiry limit</option>
             </select>
@@ -255,7 +287,7 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
 
         {/* Global Input search */}
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
+          <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#6B6B6B]" />
           <input
             type="text"
             placeholder="Type Booking number or Rep and press Enter..."
@@ -265,23 +297,23 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
                 updateFilters({ search: e.currentTarget.value });
               }
             }}
-            className="w-full rounded-lg border border-[#1b253b]/55 bg-slate-950 py-2 pl-9 pr-4 text-xs text-white placeholder-slate-600 focus:border-amber-500 focus:outline-hidden"
+            className="w-full rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] py-2 pl-9 pr-4 text-xs text-[#111111] placeholder-[#6B6B6B] focus:border-[#F2C202] focus:outline-hidden"
           />
         </div>
       </div>
 
-      {/* QUEUES WRAPPER */}
-      <div className="overflow-hidden rounded-xl border border-slate-850 bg-[#0c1122] shadow-xl">
+      {/* QUEUES TABLE CONTAINER */}
+      <div className="overflow-hidden rounded-xl border border-[#EAEAEA] bg-white shadow-xs">
         {/* Bulk Action Header */}
         {selectedIds.length > 0 && session.role !== "DEALER" && (
-          <div className="bg-amber-500/10 border-b border-slate-850 px-4 py-3 flex items-center justify-between gap-4">
-            <span className="text-xs font-bold text-amber-400">
+          <div className="bg-amber-50 border-b border-[#EAEAEA] px-4 py-3 flex items-center justify-between gap-4">
+            <span className="text-xs font-bold text-amber-800">
               {selectedIds.length} reservations selected for batch action
             </span>
             <button
               onClick={handleBulkApprove}
               disabled={isBulkApproving}
-              className="flex items-center gap-1.5 rounded-lg bg-amber-500 px-3.5 py-1.5 text-xs font-black text-slate-950 hover:bg-amber-400 disabled:opacity-40 transition-all touch-target"
+              className="flex items-center gap-1.5 rounded-lg bg-[#F2C202] px-3.5 py-1.5 text-xs font-black text-white hover:bg-[#D8AD02] disabled:opacity-40 transition-all touch-target"
             >
               <Check className="h-4 w-4" />
               {isBulkApproving ? "Processing..." : "Approve Selected"}
@@ -291,7 +323,7 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
 
         {/* DESKTOP TABLE */}
         <table className="hidden md:table w-full text-left text-xs border-collapse">
-          <thead className="border-b border-[#1b253b]/65 bg-[#080c16] text-[10px] font-black uppercase text-slate-450 tracking-wider">
+          <thead className="border-b border-[#EAEAEA] bg-[#F7F7F5] text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
             <tr>
               {session.role !== "DEALER" && (
                 <th className="px-4 py-4 w-10 text-center">
@@ -304,7 +336,7 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
                         .every((b) => selectedIds.includes(b.id))
                     }
                     onChange={(e) => handleSelectAll(e.target.checked)}
-                    className="rounded border-slate-800 bg-slate-950"
+                    className="rounded border-[#EAEAEA] bg-white"
                   />
                 </th>
               )}
@@ -319,10 +351,10 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
               <th className="px-4 py-4 text-center">Action</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-[#1b253b]/35 font-medium text-slate-200">
+          <tbody className="divide-y divide-[#EAEAEA] font-medium text-[#111111]">
             {sortedBookings.length === 0 ? (
               <tr>
-                <td colSpan={10} className="py-12 text-center text-xs text-slate-550 italic">
+                <td colSpan={10} className="py-12 text-center text-xs text-[#6B6B6B] italic">
                   No hold reservations found.
                 </td>
               </tr>
@@ -331,7 +363,7 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
                 const totalQty = b.items.reduce((s, i) => s + i.requestedQuantity, 0);
                 const isPending = b.status === "PENDING_APPROVAL";
                 return (
-                  <tr key={b.id} className="hover:bg-slate-900/30 transition-colors">
+                  <tr key={b.id} className="hover:bg-[#F7F7F5]/50 transition-colors">
                     {session.role !== "DEALER" && (
                       <td className="px-4 py-3 text-center">
                         <input
@@ -339,24 +371,24 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
                           disabled={!isPending}
                           checked={selectedIds.includes(b.id)}
                           onChange={(e) => handleSelectOne(b.id, e.target.checked)}
-                          className="rounded border-slate-800 bg-slate-950 disabled:opacity-30"
+                          className="rounded border-[#EAEAEA] bg-white disabled:opacity-30"
                         />
                       </td>
                     )}
-                    <td className="px-4 py-3.5 font-mono text-[10.5px] text-slate-450 font-bold">
+                    <td className="px-4 py-3.5 font-mono text-[10.5px] text-[#6B6B6B] font-bold">
                       {b.bookingNumber}
                     </td>
                     <td className="px-4 py-3.5">
-                      <p className="font-bold text-white">{b.dealer?.name}</p>
-                      <p className="text-[10px] text-slate-450 mt-0.5">By {b.requestedBy}</p>
+                      <p className="font-bold text-[#111111]">{b.dealer?.name}</p>
+                      <p className="text-[10px] text-[#6B6B6B] mt-0.5">By {b.requestedBy}</p>
                     </td>
-                    <td className="px-4 py-3.5 font-bold text-slate-300">
+                    <td className="px-4 py-3.5 font-bold text-[#6B6B6B]">
                       {b.warehouse?.code}
                     </td>
-                    <td className="px-4 py-3.5 max-w-[200px] truncate text-slate-400">
+                    <td className="px-4 py-3.5 max-w-[200px] truncate text-[#6B6B6B]">
                       {b.items.map(i => i.product.name).join(", ")}
                     </td>
-                    <td className="px-4 py-3.5 text-right font-black text-amber-500 font-mono">
+                    <td className="px-4 py-3.5 text-right font-black text-[#8A7300] font-mono">
                       {totalQty.toLocaleString()} Box
                     </td>
                     <td className="px-4 py-3.5">
@@ -371,7 +403,7 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
                     <td className="px-4 py-3.5 text-center">
                       <Link
                         href={`/bookings/${b.id}`}
-                        className="inline-flex items-center gap-1 rounded bg-slate-800 hover:bg-slate-750 px-2.5 py-1 text-[10px] font-black text-slate-200 transition-all touch-target"
+                        className="inline-flex items-center gap-1 rounded bg-[#F7F7F5] border border-[#EAEAEA] hover:bg-[#EAEAEA] px-2.5 py-1 text-[10px] font-black text-[#111111] transition-all touch-target"
                       >
                         Inspect <ChevronRight className="h-3.5 w-3.5" />
                       </Link>
@@ -384,9 +416,9 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
         </table>
 
         {/* MOBILE CARDS */}
-        <div className="md:hidden space-y-3 p-3 bg-slate-950/20">
+        <div className="md:hidden space-y-3 p-3 bg-[#F7F7F5]/50">
           {sortedBookings.length === 0 ? (
-            <div className="py-8 text-center text-xs text-slate-500 italic">No bookings found.</div>
+            <div className="py-8 text-center text-xs text-[#6B6B6B] italic">No bookings found.</div>
           ) : (
             sortedBookings.map((b) => {
               const totalQty = b.items.reduce((s, i) => s + i.requestedQuantity, 0);
@@ -394,9 +426,8 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
               return (
                 <div 
                   key={b.id} 
-                  className="rounded-xl border border-slate-855 bg-[#0c1122] p-4 shadow-md space-y-3 relative"
+                  className="rounded-xl border border-[#EAEAEA] bg-white p-4 shadow-sm space-y-3 relative"
                 >
-                  {/* Checkbox placement for bulk */}
                   <div className="flex justify-between items-start gap-4">
                     <div className="flex items-center gap-2">
                       {session.role !== "DEALER" && isPending && (
@@ -404,37 +435,37 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
                           type="checkbox"
                           checked={selectedIds.includes(b.id)}
                           onChange={(e) => handleSelectOne(b.id, e.target.checked)}
-                          className="rounded border-slate-800 bg-slate-950 mr-1.5 touch-target"
+                          className="rounded border-[#EAEAEA] bg-white mr-1.5 touch-target"
                         />
                       )}
                       <div>
-                        <span className="font-mono text-[10px] font-bold text-slate-450 block">#{b.bookingNumber}</span>
-                        <h4 className="text-xs font-black text-white mt-0.5">{b.dealer?.name}</h4>
+                        <span className="font-mono text-[10px] font-bold text-[#6B6B6B] block">#{b.bookingNumber}</span>
+                        <h4 className="text-xs font-black text-[#111111] mt-0.5">{b.dealer?.name}</h4>
                       </div>
                     </div>
                     <StatusBadge status={b.status} />
                   </div>
 
                   <div className="space-y-1 text-[10.5px]">
-                    <p className="text-slate-450">
-                      Warehouse: <strong className="text-slate-350">{b.warehouse?.code}</strong>
+                    <p className="text-[#6B6B6B]">
+                      Warehouse: <strong className="text-[#111111]">{b.warehouse?.code}</strong>
                     </p>
-                    <p className="text-slate-450 truncate">
-                      Items: <strong className="text-slate-350">{b.items.map(i => i.product.name).join(", ")}</strong>
+                    <p className="text-[#6B6B6B] truncate">
+                      Items: <strong className="text-[#111111]">{b.items.map(i => i.product.name).join(", ")}</strong>
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-2 py-2 border-y border-slate-850 bg-slate-950/45 rounded-lg text-center text-xs">
+                  <div className="grid grid-cols-3 gap-2 py-2 border-y border-[#EAEAEA] bg-[#F7F7F5] rounded-lg text-center text-xs">
                     <div>
-                      <p className="text-[8.5px] uppercase font-bold text-slate-550">Quantity</p>
-                      <p className="font-black text-amber-500 mt-0.5">{totalQty} Box</p>
+                      <p className="text-[8.5px] uppercase font-bold text-[#6B6B6B]">Quantity</p>
+                      <p className="font-black text-[#8A7300] mt-0.5">{totalQty} Box</p>
                     </div>
                     <div>
-                      <p className="text-[8.5px] uppercase font-bold text-slate-550">Priority</p>
+                      <p className="text-[8.5px] uppercase font-bold text-[#6B6B6B]">Priority</p>
                       <div className="mt-0.5"><PriorityBadge priority={b.priority} /></div>
                     </div>
                     <div>
-                      <p className="text-[8.5px] uppercase font-bold text-slate-550">Remaining</p>
+                      <p className="text-[8.5px] uppercase font-bold text-[#6B6B6B]">Remaining</p>
                       <div className="mt-0.5 flex justify-center">
                         <TimeRemainingBadge expiresAt={b.expiresAt} status={b.status} />
                       </div>
@@ -444,9 +475,9 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
                   <div className="flex justify-end">
                     <Link
                       href={`/bookings/${b.id}`}
-                      className="inline-flex items-center gap-1 rounded bg-slate-850 px-3.5 py-1.5 text-[10px] font-black text-slate-300 hover:text-white transition-all touch-target"
+                      className="inline-flex items-center gap-1 rounded bg-[#F7F7F5] border border-[#EAEAEA] px-3.5 py-1.5 text-[10px] font-black text-[#111111] hover:bg-[#EAEAEA] transition-all touch-target"
                     >
-                      Review Hold <ChevronRight className="h-3.5 w-3.5 text-slate-450" />
+                      Review Hold <ChevronRight className="h-3.5 w-3.5 text-[#6B6B6B]" />
                     </Link>
                   </div>
                 </div>
@@ -461,31 +492,31 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
 
 function MetricCard({ title, count, color, active, onClick }: any) {
   const colorMap: any = {
-    amber: "border-amber-500/15 text-amber-400 bg-amber-500/5",
-    emerald: "border-emerald-500/15 text-emerald-400 bg-emerald-500/5",
-    indigo: "border-indigo-500/15 text-indigo-400 bg-indigo-500/5",
-    blue: "border-blue-500/15 text-blue-400 bg-blue-500/5",
-    rose: "border-rose-500/15 text-rose-455 bg-rose-500/5",
-    slate: "border-slate-850 text-slate-450 bg-slate-900/40",
+    amber: "border-amber-100 text-amber-800 bg-amber-50",
+    emerald: "border-emerald-100 text-emerald-800 bg-emerald-50",
+    indigo: "border-indigo-100 text-indigo-800 bg-indigo-50",
+    blue: "border-blue-100 text-blue-800 bg-blue-50",
+    rose: "border-rose-100 text-rose-800 bg-rose-50",
+    slate: "border-slate-200 text-[#6B6B6B] bg-[#F7F7F5]",
   };
 
   const activeColorMap: any = {
-    amber: "border-amber-500 text-amber-400 bg-amber-500/10 shadow-sm active-nav-indicator",
-    emerald: "border-emerald-500 text-emerald-400 bg-emerald-500/10 shadow-sm active-nav-indicator",
-    indigo: "border-indigo-500 text-indigo-400 bg-indigo-500/10 shadow-sm active-nav-indicator",
-    blue: "border-blue-500 text-blue-400 bg-blue-500/10 shadow-sm active-nav-indicator",
-    rose: "border-rose-500 text-rose-400 bg-rose-500/10 shadow-sm active-nav-indicator",
-    slate: "border-slate-500 text-slate-200 bg-slate-800 shadow-sm active-nav-indicator",
+    amber: "border-amber-400 text-amber-900 bg-amber-100 shadow-sm active-nav-indicator",
+    emerald: "border-emerald-400 text-emerald-900 bg-emerald-100 shadow-sm active-nav-indicator",
+    indigo: "border-indigo-400 text-indigo-900 bg-indigo-100 shadow-sm active-nav-indicator",
+    blue: "border-blue-400 text-blue-900 bg-blue-100 shadow-sm active-nav-indicator",
+    rose: "border-rose-400 text-rose-900 bg-rose-100 shadow-sm active-nav-indicator",
+    slate: "border-[#F2C202] text-[#8A7300] bg-[#F2C202]/10 shadow-sm active-nav-indicator",
   };
 
   return (
     <button
       onClick={onClick}
-      className={`rounded-xl border p-4 text-left shadow-sm transition-all touch-target ${
-        active ? activeColorMap[color] : `${colorMap[color]} hover:scale-102`
+      className={`rounded-xl border p-4 text-left shadow-xs transition-all touch-target ${
+        active ? activeColorMap[color] : `${colorMap[color]} hover:bg-white`
       }`}
     >
-      <p className="text-[9px] font-black tracking-widest uppercase text-slate-450 truncate">{title}</p>
+      <p className="text-[9px] font-black tracking-widest uppercase text-[#6B6B6B] truncate">{title}</p>
       <p className="mt-2 text-xl font-black tracking-tight">{count}</p>
     </button>
   );
@@ -493,9 +524,9 @@ function MetricCard({ title, count, color, active, onClick }: any) {
 
 function PriorityBadge({ priority }: { priority: string }) {
   const badgeMap: any = {
-    NORMAL: "bg-slate-900 text-slate-400 border-slate-800",
-    HIGH: "bg-amber-500/10 text-amber-450 border-amber-500/15",
-    URGENT: "bg-rose-500/10 text-rose-400 border-rose-500/15",
+    NORMAL: "bg-[#F7F7F5] text-[#6B6B6B] border-[#EAEAEA]",
+    HIGH: "bg-amber-50 text-amber-700 border-amber-200",
+    URGENT: "bg-rose-50 text-rose-700 border-rose-200",
   };
 
   return (
@@ -507,23 +538,23 @@ function PriorityBadge({ priority }: { priority: string }) {
 
 function StatusBadge({ status }: { status: string }) {
   const badgeMap: any = {
-    DRAFT: "bg-slate-900 text-slate-450 border-slate-800",
-    PENDING_APPROVAL: "bg-amber-500/10 text-amber-400 border-amber-500/15",
-    AWAITING_DEALER_CONFIRMATION: "bg-indigo-500/10 text-indigo-400 border-indigo-500/15",
-    APPROVED: "bg-emerald-500/10 text-emerald-400 border-emerald-500/15",
-    REJECTED: "bg-rose-500/10 text-rose-455 border-rose-500/15",
-    CONFIRMED: "bg-blue-500/10 text-blue-400 border-blue-500/15",
-    ALLOCATED: "bg-cyan-500/10 text-cyan-400 border-cyan-500/15",
-    FULFILLED: "bg-teal-500/10 text-teal-400 border-teal-500/15",
-    CANCELLED: "bg-slate-800 text-slate-450 border-slate-850",
-    EXPIRED: "bg-rose-500/10 text-rose-455 border-rose-500/15",
-    RELEASED: "bg-slate-850 text-slate-450 border-slate-800",
-    ON_HOLD: "bg-amber-500/10 text-amber-450 border-amber-500/15",
+    DRAFT: "bg-[#F7F7F5] text-[#6B6B6B] border-[#EAEAEA]",
+    PENDING_APPROVAL: "bg-amber-50 text-amber-700 border-amber-200",
+    AWAITING_DEALER_CONFIRMATION: "bg-indigo-50 text-indigo-700 border-indigo-200",
+    APPROVED: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    REJECTED: "bg-rose-50 text-rose-700 border-rose-200",
+    CONFIRMED: "bg-blue-50 text-blue-700 border-blue-200",
+    ALLOCATED: "bg-cyan-50 text-cyan-700 border-cyan-200",
+    FULFILLED: "bg-teal-50 text-teal-700 border-teal-200",
+    CANCELLED: "bg-[#F7F7F5] text-[#6B6B6B] border-[#EAEAEA]",
+    EXPIRED: "bg-rose-50 text-rose-700 border-rose-200",
+    RELEASED: "bg-[#F7F7F5] text-[#6B6B6B] border-[#EAEAEA]",
+    ON_HOLD: "bg-amber-50 text-amber-700 border-amber-200",
   };
 
   return (
     <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase ${badgeMap[status] || badgeMap.PENDING_APPROVAL}`}>
-      <span className="h-1 w-1 rounded-full bg-current"></span>
+      <span className="h-1.5 w-1.5 rounded-full bg-current"></span>
       {status.replace(/_/g, " ")}
     </span>
   );
@@ -531,21 +562,21 @@ function StatusBadge({ status }: { status: string }) {
 
 function TimeRemainingBadge({ expiresAt, status }: { expiresAt: string | null; status: string }) {
   if (status !== "AWAITING_DEALER_CONFIRMATION") {
-    return <span className="text-[10px] text-slate-500">—</span>;
+    return <span className="text-[10px] text-[#6B6B6B]/40">—</span>;
   }
 
-  if (!expiresAt) return <span className="text-[10px] text-slate-450">No Expiry</span>;
+  if (!expiresAt) return <span className="text-[10px] text-[#6B6B6B]">No Expiry</span>;
 
   const diffMs = new Date(expiresAt).getTime() - new Date().getTime();
   if (diffMs <= 0) {
-    return <span className="text-[10px] font-bold text-rose-455">Expired</span>;
+    return <span className="text-[10px] font-bold text-rose-700">Expired</span>;
   }
 
   const hours = Math.floor(diffMs / (1000 * 60 * 60));
-  const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 65));
+  const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
 
   return (
-    <span className="flex items-center justify-center gap-1 text-[10px] font-bold text-indigo-400">
+    <span className="flex items-center justify-center gap-1 text-[10px] font-bold text-indigo-700">
       <Clock className="h-3.5 w-3.5 shrink-0" />
       <span>{hours}h {mins}m</span>
     </span>

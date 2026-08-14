@@ -1,6 +1,7 @@
 import { SidebarLayout } from "@/components/layout/SidebarLayout";
 import { db } from "@/lib/db";
 import { BlocksClientList } from "@/components/blocks/BlocksClientList";
+import { getSessionContext } from "@/lib/session";
 import Link from "next/link";
 
 export const revalidate = 0;
@@ -10,6 +11,7 @@ export default async function BlocksPage({
 }: {
   searchParams?: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
+  const session = await getSessionContext();
   const params = (await searchParams) || {};
   const statusFilter = typeof params.status === "string" ? params.status : "";
 
@@ -23,13 +25,25 @@ export default async function BlocksPage({
     whereCondition.status = statusFilter;
   }
 
+  // Enforce server-side security scoping based on Role
+  if (session.role === "DEALER") {
+    whereCondition.dealerId = session.dealerId || "non-existent-id";
+  } else if (session.role === "SHOWROOM_STAFF" || session.role === "SHOWROOM_INCHARGE") {
+    whereCondition.showroomId = session.showroomId || "non-existent-id";
+  } else if (session.role === "MANAGER") {
+    if (session.warehouseId) {
+      whereCondition.warehouseId = session.warehouseId;
+    }
+  }
+
   const blocks = await db.stockBlock.findMany({
     where: whereCondition,
     include: {
-      dealer: { select: { name: true, company: true } },
+      dealer: { select: { id: true, name: true, company: true } },
+      showroom: { select: { id: true, name: true } },
       inventory: {
         include: {
-          product: { select: { name: true, sku: true, productCode: true } },
+          product: { select: { id: true, name: true, sku: true, productCode: true, brand: { select: { name: true } }, size: true, lifestyleImage: true } },
         },
       },
     },
@@ -83,7 +97,7 @@ export default async function BlocksPage({
           </div>
         </div>
 
-        <BlocksClientList blocks={blocks} />
+        <BlocksClientList blocks={blocks} session={session} />
       </div>
     </SidebarLayout>
   );

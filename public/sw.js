@@ -77,3 +77,38 @@ self.addEventListener("fetch", (event) => {
     })
   );
 });
+
+// Push Notifications handler
+self.addEventListener("push", (event) => {
+  try {
+    const data = event.data ? event.data.json() : {};
+    const title = data.title || "Prestige Tiles Alert";
+    const options = {
+      body: data.body || "You have a new update in your portal.",
+      icon: "/icons/icon-192.png",
+      badge: "/icons/icon-192.png",
+      data: data.data || {},
+    };
+    event.waitUntil(self.registration.showNotification(title, options));
+  } catch (err) {
+    console.error("Error receiving push event:", err);
+  }
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const urlToOpen = event.notification.data.url || "/";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((windowClients) => {
+      for (let i = 0; i < windowClients.length; i++) {
+        const client = windowClients[i];
+        if (client.url === urlToOpen && "focus" in client) {
+          return client.focus();
+        }
+      }
+      if (self.clients.openWindow) {
+        return self.clients.openWindow(urlToOpen);
+      }
+    })
+  );
+});

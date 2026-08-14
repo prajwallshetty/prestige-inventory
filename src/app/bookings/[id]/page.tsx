@@ -20,6 +20,19 @@ export default async function BookingDetailPage({
     notFound();
   }
 
+  // Security Scopes Enforcement
+  if (session.role === "DEALER" && booking.dealerId !== session.dealerId) {
+    notFound();
+  }
+
+  if (session.role === "MANAGER" && booking.warehouseId !== session.warehouseId) {
+    notFound();
+  }
+
+  if ((session.role === "SHOWROOM_STAFF" || session.role === "SHOWROOM_INCHARGE") && booking.requestedBy !== session.name) {
+    notFound();
+  }
+
   // Fetch recent audit logs for this booking
   const auditLogs = await db.auditLog.findMany({
     where: {
@@ -77,8 +90,12 @@ export default async function BookingDetailPage({
           name: item.product.name,
           sku: item.product.sku || item.product.productCode || item.product.id.slice(-6).toUpperCase(),
           size: item.product.size || "Standard",
-          brandName: item.product.brandId || "Generic", // Or join brand name
+          brandName: item.product.brandId || "Generic",
           availableStock: inv.availableStock,
+          image_key: item.product.image_key,
+          thumbnail_key: item.product.thumbnail_key,
+          lifestyleImage: item.product.lifestyleImage,
+          textureImage: item.product.textureImage,
         },
       };
     }),

@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   LayoutDashboard,
   Boxes,
@@ -18,6 +18,7 @@ import {
   ChevronRight,
   PackageCheck,
   AlertTriangle,
+  CheckCircle,
   Menu,
   X,
   Sliders,
@@ -25,46 +26,70 @@ import {
   UserCheck,
   Download,
   Smartphone,
-  CircleUser
+  LogOut,
+  User as UserIcon,
+  Settings,
+  Megaphone
 } from "lucide-react";
-import { getDealersAndWarehousesAction, setSimulatedSessionAction } from "@/app/actions";
+import { getDealersAndWarehousesAction, setSimulatedSessionAction, signOutAction } from "@/app/actions";
+import { NotificationCenter } from "@/components/notifications/NotificationCenter";
 
-export type UserRole = "SUPER_ADMIN" | "WAREHOUSE_MANAGER" | "DEALER" | "VIEWER";
+export type UserRole = "SUPER_ADMIN" | "MANAGER" | "VIEWER" | "SHOWROOM_INCHARGE" | "SHOWROOM_STAFF" | "DEALER";
 
-interface DealerInfo {
-  id: string;
-  name: string;
+interface Props {
+  children: React.ReactNode;
 }
 
-interface WarehouseInfo {
-  id: string;
-  name: string;
-  code: string;
-}
-
-export function SidebarLayout({ children }: { children: React.ReactNode }) {
+export function SidebarLayout({ children }: Props) {
+  const router = useRouter();
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-
-  // Simulated Session State
-  const [role, setRole] = useState<UserRole>("SUPER_ADMIN");
-  const [dealerId, setDealerId] = useState<string>("");
-  const [warehouseId, setWarehouseId] = useState<string>("");
-
-  // Options
-  const [dealers, setDealers] = useState<DealerInfo[]>([]);
-  const [warehouses, setWarehouses] = useState<WarehouseInfo[]>([]);
+  const [dealers, setDealers] = useState<any[]>([]);
+  const [warehouses, setWarehouses] = useState<any[]>([]);
+  const [showrooms, setShowrooms] = useState<any[]>([]);
+  
+  // Session details from secure JWT
+  const [session, setSession] = useState<any>(null);
+  const [role, setRole] = useState<UserRole>("VIEWER");
+  const [dealerId, setDealerId] = useState("");
+  const [warehouseId, setWarehouseId] = useState("");
+  const [showroomId, setShowroomId] = useState("");
   const [loading, setLoading] = useState(true);
+  const [isOnline, setIsOnline] = useState(true);
 
-  // PWA Install Prompt State
+  // Profile dropdown open state
+  const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // PWA install states
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
 
   useEffect(() => {
-    // Check if PWA install banner was dismissed
-    const isDismissed = localStorage.getItem("prestige_pwa_dismissed") === "true";
+    // Service Worker registration
+    if (typeof window !== "undefined" && "serviceWorker" in navigator) {
+      navigator.serviceWorker
+        .register("/sw.js")
+        .then((reg) => console.log("[SW] Registeredscope: ", reg.scope))
+        .catch((err) => console.error("[SW] Registration error: ", err));
+    }
 
+    // Connectivity checks
+    setIsOnline(navigator.onLine);
+    const handleOnlineStatus = () => {
+      setIsOnline(true);
+      alert("Connection restored. Refreshing active data...");
+      window.location.reload();
+    };
+    const handleOfflineStatus = () => {
+      setIsOnline(false);
+    };
+    window.addEventListener("online", handleOnlineStatus);
+    window.addEventListener("offline", handleOfflineStatus);
+
+    // Dismiss/Install handler
+    const isDismissed = localStorage.getItem("prestige_pwa_dismissed") === "true";
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
       setDeferredPrompt(e);
@@ -72,51 +97,42 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
         setShowInstallBanner(true);
       }
     };
-
     window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
 
-    // Parse cookies on mount
-    const getCookie = (name: string) => {
-      const value = `; ${document.cookie}`;
-      const parts = value.split(`; ${name}=`);
-      if (parts.length === 2) return parts.pop()?.split(";").shift();
-      return undefined;
+    // Click outside dropdown listener
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setProfileDropdownOpen(false);
+      }
     };
+    document.addEventListener("mousedown", handleClickOutside);
 
-    const cookieRole = (getCookie("prestige_role") as UserRole) || "SUPER_ADMIN";
-    const cookieDealerId = getCookie("prestige_dealer_id") || "";
-    const cookieWarehouseId = getCookie("prestige_warehouse_id") || "";
-
-    setRole(cookieRole);
-    setDealerId(cookieDealerId);
-    setWarehouseId(cookieWarehouseId);
-
-    // Fetch lists
-    getDealersAndWarehousesAction().then(({ dealers, warehouses }) => {
+    // Fetch lists and current user session
+    getDealersAndWarehousesAction().then(({ dealers, warehouses, showrooms, session: userSession }) => {
       setDealers(dealers);
       setWarehouses(warehouses);
+      setShowrooms(showrooms || []);
+      setSession(userSession);
       
-      let newDealer = cookieDealerId;
-      let newWarehouse = cookieWarehouseId;
-      
-      if (!cookieDealerId && dealers.length > 0) {
-        newDealer = dealers[0].id;
-        setDealerId(dealers[0].id);
-      }
-      if (!cookieWarehouseId && warehouses.length > 0) {
-        newWarehouse = warehouses[0].id;
-        setWarehouseId(warehouses[0].id);
-      }
+      if (userSession) {
+        // Use preview role if super-admin enabled simulated switch
+        const activeRole = (userSession.role === "SUPER_ADMIN" && userSession.previewRole) 
+          ? userSession.previewRole 
+          : userSession.role;
 
-      if (!cookieDealerId || !cookieWarehouseId) {
-        setSimulatedSessionAction(cookieRole, newDealer, newWarehouse);
+        setRole(activeRole as UserRole);
+        setDealerId(userSession.dealerId || "");
+        setWarehouseId(userSession.warehouseId || "");
+        setShowroomId(userSession.showroomId || "");
       }
-
       setLoading(false);
     });
 
     return () => {
       window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+      document.removeEventListener("mousedown", handleClickOutside);
+      window.removeEventListener("online", handleOnlineStatus);
+      window.removeEventListener("offline", handleOfflineStatus);
     };
   }, []);
 
@@ -136,61 +152,124 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
   };
 
   const handleRoleChange = async (newRole: UserRole) => {
+    if (!navigator.onLine) {
+      alert("You're offline. Reconnect to continue.");
+      return;
+    }
     setRole(newRole);
     const dId = newRole === "DEALER" ? (dealerId || dealers[0]?.id || "") : "";
-    const wId = newRole === "WAREHOUSE_MANAGER" ? (warehouseId || warehouses[0]?.id || "") : "";
-    await setSimulatedSessionAction(newRole, dId, wId);
-    window.location.reload();
+    const wId = newRole === "MANAGER" ? (warehouseId || warehouses[0]?.id || "") : "";
+    const sId = (newRole === "SHOWROOM_STAFF" || newRole === "SHOWROOM_INCHARGE") ? (showroomId || showrooms[0]?.id || "") : "";
+    
+    try {
+      await setSimulatedSessionAction(newRole, dId, wId, sId);
+      window.location.reload();
+    } catch (err: any) {
+      alert(err.message);
+    }
   };
 
   const handleDealerChange = async (newDealerId: string) => {
+    if (!navigator.onLine) {
+      alert("You're offline. Reconnect to continue.");
+      return;
+    }
     setDealerId(newDealerId);
-    await setSimulatedSessionAction(role, newDealerId, warehouseId);
-    window.location.reload();
+    try {
+      await setSimulatedSessionAction(role, newDealerId, "", "");
+      window.location.reload();
+    } catch (err: any) {
+      alert(err.message);
+    }
   };
 
   const handleWarehouseChange = async (newWarehouseId: string) => {
+    if (!navigator.onLine) {
+      alert("You're offline. Reconnect to continue.");
+      return;
+    }
     setWarehouseId(newWarehouseId);
-    await setSimulatedSessionAction(role, dealerId, newWarehouseId);
-    window.location.reload();
+    try {
+      await setSimulatedSessionAction(role, "", newWarehouseId, "");
+      window.location.reload();
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleShowroomChange = async (newShowroomId: string) => {
+    if (!navigator.onLine) {
+      alert("You're offline. Reconnect to continue.");
+      return;
+    }
+    setShowroomId(newShowroomId);
+    try {
+      await setSimulatedSessionAction(role, "", "", newShowroomId);
+      window.location.reload();
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOutAction();
+      router.push("/login");
+      router.refresh();
+    } catch (err: any) {
+      alert(`Logout error: ${err.message}`);
+    }
   };
 
   const triggerSearch = () => {
-    // Dispatch Command palette keyboard shortcut
     const event = new KeyboardEvent("keydown", { key: "k", metaKey: true });
     window.dispatchEvent(event);
   };
 
-  // Generate links
-  const getNavItems = () => {
-    const dashboard = { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard };
-    const stockBooking = { name: "Book Stock", href: "/bookings/new", icon: Store };
-    const myBookings = { name: "My Bookings", href: "/bookings", icon: FileSpreadsheet };
-    const bookingsQueue = { name: "Booking Queue", href: "/bookings", icon: FileSpreadsheet };
-    const allStock = { name: "All Stock", href: "/inventory", icon: Boxes };
-    const lowStock = { name: "Low Stock Alert", href: "/inventory?status=LOW_STOCK", icon: AlertTriangle };
-    const outOfStock = { name: "Out of Stock", href: "/inventory?status=OUT_OF_STOCK", icon: PackageCheck };
-    const dealerBlocks = { name: "Dealer Blocks", href: "/blocks", icon: Lock };
-    const shipments = { name: "Shipments & Transit", href: "/in-transit", icon: Truck };
-    const dealersMgmt = { name: "Dealers", href: "/dealers", icon: Users };
-    const warehousesMgmt = { name: "Warehouses", href: "/warehouses", icon: WarehouseIcon };
-    const reports = { name: "Reports & Export", href: "/reports", icon: FileSpreadsheet };
-    const audit = { name: "Audit Trail", href: "/system/audit", icon: ShieldCheck };
+  // Determine path prefix based on ACTUAL authenticated role
+  const actualRole = session?.role || "VIEWER";
+  const pathPrefix = actualRole === "SUPER_ADMIN" ? "/admin" 
+    : actualRole === "MANAGER" ? "/warehouse" 
+    : actualRole === "DEALER" ? "/dealer" 
+    : actualRole === "SHOWROOM_STAFF" ? "/showroom-staff"
+    : actualRole === "SHOWROOM_INCHARGE" ? "/showroom-incharge"
+    : "/viewer";
 
+  const getNavItems = () => {
+    const dashboard = { name: "Dashboard", href: `${pathPrefix}/dashboard`, icon: LayoutDashboard };
+    const allStock = { name: "All Stock", href: `${pathPrefix}/inventory`, icon: Boxes };
+    
+    // Role-specific routing configuration
     if (role === "DEALER") {
+      const stockBooking = { name: "Book Stock", href: `${pathPrefix}/bookings/new`, icon: Store };
+      const myBookings = { name: "My Bookings", href: `${pathPrefix}/bookings`, icon: FileSpreadsheet };
+      const reports = { name: "Reports & Export", href: `${pathPrefix}/reports`, icon: FileSpreadsheet };
+      const settings = { name: "Settings", href: `${pathPrefix}/settings`, icon: Settings };
+      
       return [
         {
           category: "DEALER PORTAL",
           items: [dashboard, stockBooking, myBookings, allStock],
         },
         {
-          category: "ANALYTICS",
-          items: [reports],
+          category: "ANALYTICS & CONTROL",
+          items: [reports, settings],
         }
       ];
     }
 
-    if (role === "WAREHOUSE_MANAGER") {
+    const bookingsQueue = { name: "Booking Queue", href: `${pathPrefix}/bookings`, icon: FileSpreadsheet };
+    const dealerBlocks = { name: "Dealer Blocks", href: `${pathPrefix}/blocks`, icon: Lock };
+    const shipments = { name: "Shipments & Transit", href: `${pathPrefix}/in-transit`, icon: Truck };
+    const reports = { name: "Reports & Export", href: `${pathPrefix}/reports`, icon: FileSpreadsheet };
+    const settings = { name: "Settings", href: `${pathPrefix}/settings`, icon: Settings };
+    const broadcasts = { name: "Broadcasts", href: `${pathPrefix}/announcements`, icon: Megaphone };
+
+    if (role === "MANAGER") {
+      const lowStock = { name: "Low Stock Alert", href: `${pathPrefix}/inventory?status=LOW_STOCK`, icon: AlertTriangle };
+      const outOfStock = { name: "Out of Stock", href: `${pathPrefix}/inventory?status=OUT_OF_STOCK`, icon: PackageCheck };
+      const dealersMgmt = { name: "Dealers List", href: `${pathPrefix}/dealers`, icon: Users };
+
       return [
         {
           category: "OVERVIEW",
@@ -205,11 +284,77 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
           items: [bookingsQueue, shipments, dealerBlocks],
         },
         {
-          category: "REPORTING",
-          items: [reports],
+          category: "REPORTING & MANAGEMENT",
+          items: [dealersMgmt, broadcasts, reports, settings],
         }
       ];
     }
+
+    if (role === "SHOWROOM_STAFF") {
+      const stockBooking = { name: "Book Stock", href: `${pathPrefix}/bookings/new`, icon: Store };
+      const myBookings = { name: "My Bookings", href: `${pathPrefix}/bookings`, icon: FileSpreadsheet };
+      const myBlocks = { name: "My Blocks", href: `${pathPrefix}/blocks`, icon: Lock };
+
+      return [
+        {
+          category: "SHOWROOM STAFF",
+          items: [dashboard, stockBooking, myBookings, myBlocks, allStock],
+        },
+        {
+          category: "ANALYTICS & CONTROL",
+          items: [reports, settings],
+        }
+      ];
+    }
+
+    if (role === "SHOWROOM_INCHARGE") {
+      const pendingApprovals = { name: "Pending Approvals", href: `${pathPrefix}/blocks?status=PENDING`, icon: Lock };
+      const approvedBlocks = { name: "Approved Blocks", href: `${pathPrefix}/blocks?status=APPROVED`, icon: CheckCircle };
+
+      return [
+        {
+          category: "SHOWROOM IN-CHARGE",
+          items: [dashboard, pendingApprovals, approvedBlocks, allStock],
+        },
+        {
+          category: "ANALYTICS & CONTROL",
+          items: [reports, settings],
+        }
+      ];
+    }
+
+    if (role === "VIEWER") {
+      return [
+        {
+          category: "OVERVIEW",
+          items: [dashboard],
+        },
+        {
+          category: "INVENTORY READ-ONLY",
+          items: [allStock],
+        },
+        {
+          category: "RESERVATIONS",
+          items: [bookingsQueue],
+        },
+        {
+          category: "LOGISTICS",
+          items: [shipments],
+        },
+        {
+          category: "ANALYTICS",
+          items: [reports, settings],
+        }
+      ];
+    }
+
+    // Default configuration for SUPER ADMIN
+    const lowStock = { name: "Low Stock Alert", href: `${pathPrefix}/inventory?status=LOW_STOCK`, icon: AlertTriangle };
+    const outOfStock = { name: "Out of Stock", href: `${pathPrefix}/inventory?status=OUT_OF_STOCK`, icon: PackageCheck };
+    const dealersMgmt = { name: "Dealers", href: `${pathPrefix}/dealers`, icon: Users };
+    const warehousesMgmt = { name: "Warehouses", href: `${pathPrefix}/warehouses`, icon: WarehouseIcon };
+    const audit = { name: "Audit Trail", href: `${pathPrefix}/system/audit`, icon: ShieldCheck };
+    const usersMgmt = { name: "Users Management", href: `${pathPrefix}/users`, icon: Users };
 
     return [
       {
@@ -229,8 +374,8 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
         items: [shipments],
       },
       {
-        category: "MANAGEMENT",
-        items: [dealersMgmt, warehousesMgmt, reports, audit],
+        category: "SYSTEM MANAGEMENT",
+        items: [dealersMgmt, warehousesMgmt, usersMgmt, broadcasts, reports, audit, settings],
       },
     ];
   };
@@ -239,36 +384,50 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
   const currentDealerName = dealers.find(d => d.id === dealerId)?.name || "Select Dealer";
   const currentWarehouseName = warehouses.find(w => w.id === warehouseId)?.name || "Select Warehouse";
 
+  // Checks if the user is in preview mode
+  const isPreviewMode = session?.role === "SUPER_ADMIN" && !!session.previewRole;
+
+  if (loading) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-[#F7F7F5]">
+        <div className="space-y-4 text-center">
+          <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-[#F2C202] border-t-transparent" />
+          <p className="text-xs font-bold text-[#6B6B6B]">Loading Session Context...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#050811] text-slate-200 antialiased font-sans">
-      {/* MOBILE BACKDROP FOR Hamburger drawer */}
+    <div className="flex h-screen w-screen overflow-hidden bg-[#F7F7F5] text-[#111111] antialiased font-sans">
+      {/* MOBILE BACKDROP */}
       {mobileOpen && (
         <div
           onClick={() => setMobileOpen(false)}
-          className="fixed inset-0 z-40 bg-black/75 backdrop-blur-xs lg:hidden"
+          className="fixed inset-0 z-40 bg-black/40 backdrop-blur-xs lg:hidden"
         />
       )}
 
       {/* DESKTOP SIDEBAR */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex flex-col border-r border-[#1b253b]/45 bg-[#090e1a] transition-all duration-200 lg:static lg:z-auto ${
+        className={`fixed inset-y-0 left-0 z-50 flex flex-col border-r border-[#EAEAEA] bg-white transition-all duration-200 lg:static lg:z-auto ${
           mobileOpen ? "translate-x-0 w-64" : "-translate-x-full lg:translate-x-0"
         } ${collapsed ? "lg:w-[72px]" : "lg:w-64"}`}
       >
         {/* BRAND LOGO */}
-        <div className="flex h-16 shrink-0 items-center justify-between border-b border-[#1b253b]/45 px-4 bg-[#080c16]">
+        <div className="flex h-16 shrink-0 items-center justify-between border-b border-[#EAEAEA] px-4 bg-white">
           {(!collapsed || mobileOpen) ? (
             <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-500 font-black text-slate-950 shadow-md">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#F2C202] font-black text-white shadow-xs">
                 PT
               </div>
               <div className="flex flex-col">
-                <h1 className="text-xs font-black tracking-wider text-white uppercase">PRESTIGE TILES</h1>
-                <p className="text-[9px] font-bold text-amber-500 tracking-widest">ENTERPRISE ERP</p>
+                <h1 className="text-xs font-black tracking-wider text-[#111111] uppercase">PRESTIGE TILES</h1>
+                <p className="text-[9px] font-bold text-[#F2C202] tracking-widest">ENTERPRISE ERP</p>
               </div>
             </div>
           ) : (
-            <div className="mx-auto flex h-9 w-9 items-center justify-center rounded-xl bg-amber-500 font-bold text-slate-950">
+            <div className="mx-auto flex h-9 w-9 items-center justify-center rounded-xl bg-[#F2C202] font-bold text-white shadow-xs">
               PT
             </div>
           )}
@@ -276,47 +435,45 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-1">
             <button
               onClick={() => setCollapsed(!collapsed)}
-              className="hidden rounded-lg p-1 text-slate-400 hover:bg-slate-800/80 hover:text-white lg:flex"
-              title={collapsed ? "Expand panel" : "Collapse panel"}
+              className="hidden rounded-lg p-1 text-[#6B6B6B] hover:bg-[#F7F7F5] hover:text-[#111111] lg:flex"
+              title={collapsed ? "Collapse panel" : "Expand panel"}
             >
               {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
             </button>
             <button
               onClick={() => setMobileOpen(false)}
-              className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800/80 hover:text-white lg:hidden"
+              className="rounded-lg p-1.5 text-[#6B6B6B] hover:bg-[#F7F7F5] hover:text-[#111111] lg:hidden"
             >
               <X className="h-5 w-5" />
             </button>
           </div>
         </div>
 
-        {/* NAVIGATION WRAPPER */}
+        {/* NAVIGATION LINKS */}
         <div className="flex-1 overflow-y-auto px-3 py-4 space-y-5 scrollbar-thin">
           {navGroups.map((group, idx) => (
             <div key={idx} className="space-y-1">
               {(!collapsed || mobileOpen) && (
-                <p className="px-3 pb-1 text-[9px] font-black tracking-widest text-slate-500 uppercase">
+                <p className="px-3 pb-1 text-[9px] font-black tracking-widest text-[#9A9A9A] uppercase">
                   {group.category}
                 </p>
               )}
               <div className="space-y-0.5">
                 {group.items.map((item) => {
-                  const isActive = pathname === item.href;
-                  const Icon = item.icon;
+                  const isActive = pathname === item.href.split("?")[0];
                   return (
                     <Link
                       key={item.name}
                       href={item.href}
                       onClick={() => setMobileOpen(false)}
-                      className={`flex h-10 items-center gap-3 rounded-lg px-3 text-xs font-semibold transition-all ${
+                      className={`flex items-center gap-3.5 rounded-lg px-3 py-2 text-xs font-bold transition-all touch-target ${
                         isActive
-                          ? "bg-amber-500/10 text-amber-400 border border-amber-500/20 active-nav-indicator"
-                          : "text-slate-400 hover:bg-slate-900/50 hover:text-slate-200"
+                          ? "bg-[#F2C202]/10 text-[#8A7300] active-nav-indicator"
+                          : "text-[#6B6B6B] hover:bg-[#F7F7F5] hover:text-[#111111]"
                       }`}
-                      title={collapsed && !mobileOpen ? item.name : undefined}
                     >
-                      <Icon className={`h-4.5 w-4.5 shrink-0 ${isActive ? "text-amber-400" : "text-slate-400"}`} />
-                      {(!collapsed || mobileOpen) && <span className="truncate">{item.name}</span>}
+                      <item.icon className="h-4 w-4 shrink-0" />
+                      {(!collapsed || mobileOpen) && <span>{item.name}</span>}
                     </Link>
                   );
                 })}
@@ -325,92 +482,130 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
           ))}
         </div>
 
-        {/* SIMULATED CONTEXT FOOTER */}
-        <div className="shrink-0 border-t border-[#1b253b]/45 p-3 space-y-2.5 bg-[#060a13]">
-          {(!collapsed || mobileOpen) ? (
-            <div className="space-y-2 text-xs">
-              <div className="flex items-center gap-1.5 font-bold text-slate-400 uppercase tracking-wide text-[9px]">
-                <Sliders className="h-3 w-3 text-amber-500" />
-                <span>Simulate Context</span>
+        {/* SUPER ADMIN PREVIEW / SIMULATOR PANEL */}
+        {session?.role === "SUPER_ADMIN" && (
+          <div className="border-t border-[#EAEAEA] p-4 bg-white space-y-3">
+            {(!collapsed || mobileOpen) ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 border-b border-[#EAEAEA] pb-1.5">
+                  <Sliders className="h-3.5 w-3.5 text-[#F2C202]" />
+                  <span className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">Inspect Preview Role</span>
+                </div>
+
+                <div className="space-y-1">
+                  <p className="text-[9px] text-[#6B6B6B] font-bold uppercase">Viewing As</p>
+                  <select
+                    value={role}
+                    onChange={(e) => handleRoleChange(e.target.value as UserRole)}
+                    className="w-full rounded-lg border border-[#EAEAEA] bg-white p-1.5 text-xs text-[#111111] focus:border-[#F2C202] focus:outline-hidden font-bold"
+                  >
+                    <option value="SUPER_ADMIN">Super Admin (Default)</option>
+                    <option value="MANAGER">Manager</option>
+                    <option value="SHOWROOM_INCHARGE">Showroom In-Charge</option>
+                    <option value="SHOWROOM_STAFF">Showroom Staff</option>
+                    <option value="DEALER">Dealer Partner</option>
+                    <option value="VIEWER">Read-Only Viewer</option>
+                  </select>
+                </div>
+
+                {role === "DEALER" && dealers.length > 0 && (
+                  <div className="space-y-1">
+                    <p className="text-[9px] text-[#6B6B6B] font-bold uppercase">Dealer Scope</p>
+                    <select
+                      value={dealerId}
+                      onChange={(e) => handleDealerChange(e.target.value)}
+                      className="w-full rounded-lg border border-[#EAEAEA] bg-white p-1.5 text-xs text-[#111111] focus:border-[#F2C202] focus:outline-hidden"
+                    >
+                      {dealers.map((d) => (
+                        <option key={d.id} value={d.id}>{d.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {role === "MANAGER" && warehouses.length > 0 && (
+                  <div className="space-y-1">
+                    <p className="text-[9px] text-[#6B6B6B] font-bold uppercase">Depot Context</p>
+                    <select
+                      value={warehouseId}
+                      onChange={(e) => handleWarehouseChange(e.target.value)}
+                      className="w-full rounded-lg border border-[#EAEAEA] bg-white p-1.5 text-xs text-[#111111] focus:border-[#F2C202] focus:outline-hidden"
+                    >
+                      {warehouses.map((w) => (
+                        <option key={w.id} value={w.id}>{w.name} ({w.code})</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {(role === "SHOWROOM_STAFF" || role === "SHOWROOM_INCHARGE") && showrooms.length > 0 && (
+                  <div className="space-y-1">
+                    <p className="text-[9px] text-[#6B6B6B] font-bold uppercase">Showroom Context</p>
+                    <select
+                      value={showroomId}
+                      onChange={(e) => handleShowroomChange(e.target.value)}
+                      className="w-full rounded-lg border border-[#EAEAEA] bg-white p-1.5 text-xs text-[#111111] focus:border-[#F2C202] focus:outline-hidden"
+                    >
+                      {showrooms.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
-              
-              <select
-                value={role}
-                onChange={(e) => handleRoleChange(e.target.value as UserRole)}
-                className="w-full rounded-lg border border-[#1b253b]/50 bg-slate-950 p-1.5 text-xs text-white focus:border-amber-500 focus:outline-hidden"
-              >
-                <option value="SUPER_ADMIN">Super Admin (Master)</option>
-                <option value="WAREHOUSE_MANAGER">Warehouse Manager</option>
-                <option value="DEALER">Dealer Profile</option>
-                <option value="VIEWER">Auditor (Read Only)</option>
-              </select>
-
-              {role === "DEALER" && dealers.length > 0 && (
-                <div className="space-y-1">
-                  <p className="text-[9px] text-slate-500 font-bold uppercase">Active Dealer</p>
-                  <select
-                    value={dealerId}
-                    onChange={(e) => handleDealerChange(e.target.value)}
-                    className="w-full rounded-lg border border-[#1b253b]/50 bg-slate-950 p-1.5 text-xs text-white focus:border-amber-500 focus:outline-hidden"
-                  >
-                    {dealers.map((d) => (
-                      <option key={d.id} value={d.id}>{d.name}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              {role === "WAREHOUSE_MANAGER" && warehouses.length > 0 && (
-                <div className="space-y-1">
-                  <p className="text-[9px] text-slate-500 font-bold uppercase">Depot Context</p>
-                  <select
-                    value={warehouseId}
-                    onChange={(e) => handleWarehouseChange(e.target.value)}
-                    className="w-full rounded-lg border border-[#1b253b]/50 bg-slate-950 p-1.5 text-xs text-white focus:border-amber-500 focus:outline-hidden"
-                  >
-                    {warehouses.map((w) => (
-                      <option key={w.id} value={w.id}>{w.name}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="flex justify-center">
-              <button
-                onClick={() => setCollapsed(false)}
-                className="rounded-lg p-2 bg-slate-900 border border-slate-800 text-amber-500 hover:text-amber-400"
-                title="Expand Simulator"
-              >
-                <Sliders className="h-4 w-4" />
-              </button>
-            </div>
-          )}
-        </div>
+            ) : (
+              <div className="flex justify-center">
+                <button
+                  onClick={() => setCollapsed(false)}
+                  className="rounded-lg p-2 bg-[#F7F7F5] border border-[#EAEAEA] text-[#F2C202] hover:text-[#D8AD02]"
+                  title="Expand Simulation controls"
+                >
+                  <Sliders className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </aside>
 
       {/* CONTENT INNER CONTAINER */}
       <div className="flex flex-1 flex-col overflow-hidden pb-16 lg:pb-0">
+        {/* PREVIEW MODE WARNING BANNER */}
+        {isPreviewMode && (
+          <div className="flex items-center justify-between bg-amber-50 border-b border-amber-200 px-4 py-2 text-xs font-bold text-amber-900 shadow-xs">
+            <span className="flex items-center gap-1.5">
+              <Sliders className="h-4 w-4 text-amber-600 animate-pulse" />
+              <span>Preview Mode: Viewing portal layout as {role.replace(/_/g, " ")}. Changes do not modify your Super Admin role status.</span>
+            </span>
+            <button
+              onClick={() => handleRoleChange("SUPER_ADMIN")}
+              className="rounded bg-white border border-amber-300 px-2 py-0.5 text-[10px] font-black text-amber-950 hover:bg-amber-100 transition-all"
+            >
+              Exit Preview
+            </button>
+          </div>
+        )}
+
         {/* PWA INSTALL BANNER */}
         {showInstallBanner && (
-          <div className="flex items-center justify-between gap-4 bg-slate-900 border-b border-[#1b253b]/60 px-4 py-2.5 sm:px-6 animate-shimmer">
+          <div className="flex items-center justify-between gap-4 bg-[#F2C202]/10 border-b border-[#EAEAEA] px-4 py-2.5 sm:px-6">
             <div className="flex items-center gap-2">
-              <Smartphone className="h-5 w-5 text-amber-500 shrink-0" />
+              <Smartphone className="h-5 w-5 text-[#F2C202] shrink-0" />
               <div className="text-xs">
-                <span className="font-bold text-white">Install Prestige Inventory</span>
-                <span className="hidden sm:inline text-slate-350 ml-1.5">Access dashboard and reserves faster on home screen.</span>
+                <span className="font-bold text-[#111111]">Install Prestige Inventory</span>
+                <span className="hidden sm:inline text-[#6B6B6B] ml-1.5">Access dashboard and reserves faster on home screen.</span>
               </div>
             </div>
             <div className="flex items-center gap-2">
               <button
                 onClick={handleInstallClick}
-                className="rounded-lg bg-amber-500 px-3 py-1 text-[10px] font-black text-slate-950 hover:bg-amber-400 transition-all"
+                className="rounded-lg bg-[#F2C202] px-3 py-1 text-[10px] font-black text-white hover:bg-[#D8AD02] transition-all"
               >
                 Install
               </button>
               <button
                 onClick={handleDismissInstall}
-                className="rounded-lg p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+                className="rounded-lg p-1 text-[#6B6B6B] hover:bg-[#F7F7F5] hover:text-[#111111]"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -419,65 +614,93 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
         )}
 
         {/* HEADER / TOPBAR */}
-        <header className="flex h-16 shrink-0 items-center justify-between border-b border-[#1b253b]/45 bg-[#070b17] px-4 sm:px-6 backdrop-blur-md">
+        <header className="flex h-16 shrink-0 items-center justify-between border-b border-[#EAEAEA] bg-white px-4 sm:px-6">
           <div className="flex items-center gap-3">
-            {/* Hamburger for Non-dealer mobile menu */}
-            {role !== "DEALER" && (
-              <button
-                onClick={() => setMobileOpen(true)}
-                className="rounded-lg border border-slate-800 bg-slate-900/90 p-2 text-slate-400 hover:text-white lg:hidden touch-target"
-              >
-                <Menu className="h-5 w-5" />
-              </button>
-            )}
+            {/* Hamburger for mobile menu */}
+            <button
+              onClick={() => setMobileOpen(true)}
+              className="rounded-lg border border-[#EAEAEA] bg-white p-2 text-[#6B6B6B] hover:text-[#111111] lg:hidden touch-target"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
 
-            {/* Clickable Search input triggering palette */}
+            {/* Clickable Search input */}
             <button
               onClick={triggerSearch}
-              className="flex items-center gap-3 rounded-lg border border-[#1b253b]/40 bg-slate-900/60 py-1.5 px-3 w-48 sm:w-80 text-left text-xs text-slate-450 hover:border-slate-700 transition-all touch-target"
+              className="flex items-center gap-3 rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] py-1.5 px-3 w-48 sm:w-80 text-left text-xs text-[#6B6B6B] hover:border-slate-300 transition-all touch-target"
             >
-              <Search className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-              <span className="truncate flex-1 text-slate-500">Search (⌘K or /)</span>
-              <kbd className="hidden sm:inline-block rounded bg-slate-950 border border-slate-800 px-1.5 py-0.5 text-[9px] font-mono font-bold text-slate-500">
+              <Search className="h-3.5 w-3.5 text-[#6B6B6B] shrink-0" />
+              <span className="truncate flex-1 text-[#6B6B6B]">Search (⌘K or /)</span>
+              <kbd className="hidden sm:inline-block rounded bg-white border border-[#EAEAEA] px-1.5 py-0.5 text-[9px] font-mono font-bold text-[#6B6B6B]">
                 ⌘K
               </kbd>
             </button>
           </div>
 
-          <div className="flex items-center gap-3">
-            {/* Live Context Badge */}
-            <div className="hidden sm:flex items-center gap-1.5 rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-1 text-[10px] font-black text-amber-400 uppercase tracking-wide">
-              <UserCheck className="h-3 w-3 shrink-0" />
-              <span>
-                {role === "SUPER_ADMIN" && "Super Admin"}
-                {role === "VIEWER" && "Read-Only"}
-                {role === "WAREHOUSE_MANAGER" && `Manager @ ${currentWarehouseName.split(" ")[0]}`}
-                {role === "DEALER" && `${currentDealerName}`}
+          <div className="flex items-center gap-4">
+            {/* Profile Dropdown */}
+            <div className="relative" ref={dropdownRef}>
+              <button
+                onClick={() => setProfileDropdownOpen(!profileDropdownOpen)}
+                className="flex items-center gap-2 rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] py-1.5 px-3.5 text-xs text-[#111111] hover:bg-[#EAEAEA] transition-all touch-target font-bold select-none"
+              >
+                <UserIcon className="h-4 w-4 text-[#F2C202] shrink-0" />
+                <span className="hidden sm:inline">{session?.name || "B2B User"}</span>
+              </button>
+
+              {profileDropdownOpen && (
+                <div className="absolute right-0 mt-2 w-56 origin-top-right rounded-xl border border-[#EAEAEA] bg-white p-2 shadow-md z-50 text-xs">
+                  <div className="px-3 py-2 border-b border-[#EAEAEA] mb-1.5 text-[#6B6B6B]">
+                    <p className="font-bold text-[#111111] truncate">{session?.name || "B2B User"}</p>
+                    <p className="text-[10px] truncate mt-0.5">{session?.email || "user@prestigetiles.co"}</p>
+                    <p className="mt-1.5 font-bold font-mono text-[9px] text-[#8A7300] uppercase tracking-wide">
+                      {actualRole.replace(/_/g, " ")} {isPreviewMode && `(Preview)`}
+                    </p>
+                  </div>
+                  <Link
+                    href={`${pathPrefix}/settings`}
+                    onClick={() => setProfileDropdownOpen(false)}
+                    className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-[#F7F7F5] text-[#111111] font-bold"
+                  >
+                    <Settings className="h-4 w-4 text-[#6B6B6B]" /> User Settings
+                  </Link>
+                  <button
+                    onClick={() => { setProfileDropdownOpen(false); handleLogout(); }}
+                    className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-rose-50 text-rose-700 font-bold"
+                  >
+                    <LogOut className="h-4 w-4 text-rose-600" /> Sign Out
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Connectivity status */}
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#EAEAEA] bg-white text-[10px] font-bold select-none">
+              <span className={`h-2 w-2 rounded-full ${isOnline ? "bg-emerald-500" : "bg-rose-500 animate-ping"}`}></span>
+              <span className={isOnline ? "text-[#6B6B6B]" : "text-rose-700"}>
+                {isOnline ? "Connected" : "Offline"}
               </span>
             </div>
 
             {/* Notification Indicator */}
-            <button className="relative rounded-lg border border-slate-800 bg-slate-900/60 p-2 text-slate-400 hover:text-slate-200 touch-target">
-              <Bell className="h-4 w-4" />
-              <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-amber-500 animate-ping"></span>
-            </button>
+            <NotificationCenter session={session} />
           </div>
         </header>
 
         {/* CONTAINER CONTENT */}
-        <main className="flex-1 overflow-y-auto bg-[#050812] p-4 sm:p-6 lg:p-8">
+        <main className="flex-1 overflow-y-auto bg-[#F7F7F5] p-4 sm:p-6 lg:p-8">
           <div className="mx-auto max-w-[1600px]">{children}</div>
         </main>
       </div>
 
       {/* MOBILE BOTTOM NAVIGATION BAR FOR DEALER */}
       {role === "DEALER" && (
-        <nav className="fixed bottom-0 left-0 right-0 z-40 flex h-16 items-center justify-around border-t border-[#1b253b]/65 bg-[#090e1af2] backdrop-blur-md px-2 lg:hidden mobile-bottom-nav">
-          <BottomTabLink href="/dashboard" icon={LayoutDashboard} label="Home" active={pathname === "/dashboard"} />
-          <BottomTabLink href="/inventory" icon={Boxes} label="Products" active={pathname === "/inventory"} />
-          <BottomTabLink href="/bookings/new" icon={Store} label="Book" active={pathname === "/bookings/new"} />
-          <BottomTabLink href="/bookings" icon={FileSpreadsheet} label="Bookings" active={pathname === "/bookings"} />
-          <BottomTabLink href="/reports" icon={Download} label="Reports" active={pathname === "/reports"} />
+        <nav className="fixed bottom-0 left-0 right-0 z-40 flex h-16 items-center justify-around border-t border-[#EAEAEA] bg-white/95 backdrop-blur-md px-2 lg:hidden mobile-bottom-nav">
+          <BottomTabLink href={`${pathPrefix}/dashboard`} icon={LayoutDashboard} label="Home" active={pathname === `${pathPrefix}/dashboard`} />
+          <BottomTabLink href={`${pathPrefix}/inventory`} icon={Boxes} label="Products" active={pathname === `${pathPrefix}/inventory`} />
+          <BottomTabLink href={`${pathPrefix}/bookings/new`} icon={Store} label="Book" active={pathname === `${pathPrefix}/bookings/new`} />
+          <BottomTabLink href={`${pathPrefix}/bookings`} icon={FileSpreadsheet} label="Bookings" active={pathname === `${pathPrefix}/bookings`} />
+          <BottomTabLink href={`${pathPrefix}/settings`} icon={Settings} label="Settings" active={pathname === `${pathPrefix}/settings`} />
         </nav>
       )}
     </div>
@@ -489,10 +712,10 @@ function BottomTabLink({ href, icon: Icon, label, active }: { href: string; icon
     <Link
       href={href}
       className={`flex flex-col items-center justify-center gap-1 flex-1 h-full text-[10px] font-bold ${
-        active ? "text-amber-400" : "text-slate-400"
+        active ? "text-[#8A7300]" : "text-[#6B6B6B]"
       }`}
     >
-      <Icon className={`h-5 w-5 ${active ? "text-amber-400" : "text-slate-400"}`} />
+      <Icon className={`h-5 w-5 ${active ? "text-[#8A7300]" : "text-[#6B6B6B]"}`} />
       <span>{label}</span>
     </Link>
   );

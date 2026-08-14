@@ -11,11 +11,12 @@ import {
   Plus, 
   Minus, 
   CheckCircle2, 
-  Clock, 
   ArrowRight,
   HelpCircle
 } from "lucide-react";
 import { SessionContext } from "@/lib/session";
+import { getProductThumbnailUrl } from "@/lib/s3";
+import { ShimmerImage } from "@/components/Skeleton";
 
 interface ProductItem {
   id: string;
@@ -24,7 +25,10 @@ interface ProductItem {
   size: string;
   brandName: string;
   categoryName: string;
-  image: string;
+  image_key?: string | null;
+  thumbnail_key?: string | null;
+  lifestyleImage?: string | null;
+  textureImage?: string | null;
   availableStock: number;
   transitStock: number;
   warehouseId: string;
@@ -35,7 +39,7 @@ interface CartItem {
   product: ProductItem;
   quantity: number;
   remarks: string;
-  isWaitlist: boolean; // Flag to join waitlist for this item
+  isWaitlist: boolean;
 }
 
 interface NewBookingClientProps {
@@ -54,7 +58,6 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // Filter products by search query
   const filteredProducts = products.filter((p) => {
     const terms = search.toLowerCase();
     return (
@@ -93,7 +96,6 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
           return {
             ...item,
             quantity: qty,
-            // If they increase quantity above available stock, we default waitlist flag to true
             isWaitlist: isOverStock ? true : item.isWaitlist,
           };
         }
@@ -130,11 +132,10 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
 
     setIsSubmitting(true);
     try {
-      // If ANY item in the cart is waitlisted (exceeds stock), we flag the whole booking as waitlisted (status ON_HOLD)
       const hasWaitlistedItems = cart.some((item) => item.isWaitlist);
 
       const payload = {
-        dealerId: session.dealerId || "abc-dealer-id-placeholder", // If SuperAdmin creating booking, defaults to first dealer
+        dealerId: session.dealerId || "abc-dealer-id-placeholder",
         warehouseId: selectedWarehouseId,
         requestedBy: session.role === "DEALER" ? `Dealer Representative` : `Sales Manager (${session.role})`,
         priority,
@@ -151,9 +152,10 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
       setSuccessMessage(`Booking ${booking.bookingNumber} created successfully! Redirecting...`);
       setCart([]);
       
+      // Snappy transition
       setTimeout(() => {
         router.push(`/bookings/${booking.id}`);
-      }, 2000);
+      }, 100);
     } catch (err: any) {
       alert(`Error submitting booking: ${err.message}`);
     } finally {
@@ -165,22 +167,22 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
       {/* PRODUCT PICKER (7 cols) */}
       <div className="lg:col-span-7 space-y-4">
-        <div className="rounded-xl border border-slate-800 bg-[#0f172a] p-4 shadow-xl">
+        <div className="rounded-xl border border-[#EAEAEA] bg-white p-4 shadow-sm">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#6B6B6B]" />
             <input
               type="text"
               placeholder="Search products by SKU, name, brand, size..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full rounded-lg border border-slate-800 bg-slate-950 py-2.5 pl-10 pr-4 text-xs text-slate-200 placeholder-slate-500 focus:border-amber-500 focus:outline-hidden focus:ring-1 focus:ring-amber-500"
+              className="w-full rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] py-2.5 pl-10 pr-4 text-xs text-[#111111] placeholder-[#6B6B6B] focus:border-[#F2C202] focus:outline-hidden"
             />
           </div>
         </div>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {filteredProducts.length === 0 ? (
-            <div className="col-span-2 py-12 text-center text-xs text-slate-500 rounded-xl border border-slate-800 bg-[#0f172a]">
+            <div className="col-span-2 py-12 text-center text-xs text-[#6B6B6B] rounded-xl border border-[#EAEAEA] bg-white">
               No products found.
             </div>
           ) : (
@@ -190,42 +192,50 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
               return (
                 <div 
                   key={p.id} 
-                  className={`flex flex-col justify-between rounded-xl border border-slate-800 bg-[#0f172a] overflow-hidden shadow-lg transition-all ${
-                    inCart ? "ring-1 ring-amber-500/50" : "hover:border-slate-700"
+                  className={`flex flex-col justify-between rounded-xl border border-[#EAEAEA] bg-white overflow-hidden shadow-xs transition-all ${
+                    inCart ? "ring-2 ring-[#F2C202]/40" : "hover:border-slate-300"
                   }`}
                 >
                   <div className="p-4 space-y-3">
-                    <div className="flex justify-between items-start gap-2">
-                      <div>
-                        <span className="rounded-md bg-amber-500/10 px-2 py-0.5 text-[9px] font-bold text-amber-400 uppercase">
+                    <div className="flex gap-3">
+                      {/* Product Thumbnail with Shimmer */}
+                      <ShimmerImage
+                        src={getProductThumbnailUrl(p)}
+                        alt={p.name}
+                        wrapperClassName="h-16 w-16 relative overflow-hidden rounded-lg border border-[#EAEAEA] shrink-0"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <span className="inline-flex rounded-md bg-[#F2C202]/10 px-2 py-0.5 text-[9px] font-bold text-[#8A7300] uppercase">
                           {p.brandName}
                         </span>
-                        <h3 className="mt-1.5 text-sm font-bold text-white tracking-tight">{p.name}</h3>
-                        <p className="text-[10px] text-slate-400 font-mono mt-0.5">{p.sku}</p>
+                        <h3 className="mt-1 text-xs font-black text-[#111111] tracking-tight truncate">{p.name}</h3>
+                        <p className="text-[10px] text-[#6B6B6B] font-mono mt-0.5">{p.sku}</p>
                       </div>
-                      <span className="text-[10px] text-slate-400 font-medium bg-slate-900 border border-slate-800 rounded px-1.5 py-0.5">
-                        {p.size}
-                      </span>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-2 text-[10px] bg-slate-950/60 rounded-lg p-2.5 border border-slate-850">
+                    <div className="flex justify-between items-center text-[10px] text-[#6B6B6B]">
+                      <span>Size: <strong className="text-[#111111]">{p.size}</strong></span>
+                      <span>Style: <strong className="text-[#111111]">{p.categoryName}</strong></span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-[10px] bg-[#F7F7F5] rounded-lg p-2.5 border border-[#EAEAEA]">
                       <div>
-                        <p className="text-slate-550 font-semibold uppercase tracking-wider text-[8px]">Available Stock</p>
-                        <p className={`font-bold mt-0.5 ${isOut ? "text-rose-400" : "text-emerald-400"}`}>
+                        <p className="text-[#6B6B6B] font-semibold uppercase tracking-wider text-[8px]">Available Stock</p>
+                        <p className={`font-bold mt-0.5 ${isOut ? "text-rose-600" : "text-emerald-600"}`}>
                           {p.availableStock} Boxes
                         </p>
                       </div>
                       <div>
-                        <p className="text-slate-550 font-semibold uppercase tracking-wider text-[8px]">In Transit</p>
-                        <p className="text-indigo-400 font-bold mt-0.5">
+                        <p className="text-[#6B6B6B] font-semibold uppercase tracking-wider text-[8px]">In Transit</p>
+                        <p className="text-indigo-600 font-bold mt-0.5">
                           {p.transitStock > 0 ? `${p.transitStock} Boxes` : "—"}
                         </p>
                       </div>
                     </div>
                   </div>
 
-                  <div className="border-t border-slate-850 bg-slate-900/40 px-4 py-2.5 flex items-center justify-between gap-3">
-                    <span className="text-[9.5px] text-slate-400 font-medium truncate">
+                  <div className="border-t border-[#EAEAEA] bg-[#F7F7F5]/40 px-4 py-2.5 flex items-center justify-between gap-3">
+                    <span className="text-[9.5px] text-[#6B6B6B] font-medium truncate">
                       Loc: {p.warehouseName.split(" ")[0]}
                     </span>
                     <button
@@ -234,8 +244,8 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
                       onClick={() => addToCart(p)}
                       className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-all ${
                         inCart
-                          ? "bg-slate-850 text-slate-500 cursor-not-allowed border border-slate-800"
-                          : "bg-amber-500 text-slate-950 hover:bg-amber-400"
+                          ? "bg-[#F7F7F5] text-[#6B6B6B]/40 cursor-not-allowed border border-[#EAEAEA]"
+                          : "bg-[#F2C202] text-white hover:bg-[#D8AD02]"
                       }`}
                     >
                       {inCart ? "Added" : "Add to Hold"}
@@ -251,19 +261,19 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
       {/* BOOKING CART & DETAILS (5 cols) */}
       <form onSubmit={handleSubmit} className="lg:col-span-5 space-y-4">
         {successMessage && (
-          <div className="flex items-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-xs font-semibold text-emerald-400">
-            <CheckCircle2 className="h-4 w-4 shrink-0" />
+          <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-xs font-semibold text-emerald-950">
+            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
             <span>{successMessage}</span>
           </div>
         )}
 
-        <div className="rounded-xl border border-slate-800 bg-[#0f172a] p-5 shadow-xl space-y-5">
-          <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-            <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <ShoppingCart className="h-4 w-4 text-amber-500" />
+        <div className="rounded-xl border border-[#EAEAEA] bg-white p-5 shadow-sm space-y-5">
+          <div className="flex items-center justify-between border-b border-[#EAEAEA] pb-3">
+            <h2 className="text-base font-bold text-[#111111] flex items-center gap-2">
+              <ShoppingCart className="h-4 w-4 text-[#F2C202]" />
               <span>Hold Request Cart</span>
             </h2>
-            <span className="rounded-full bg-slate-800 px-2 py-0.5 text-xs font-semibold text-slate-300">
+            <span className="rounded-full bg-[#F7F7F5] px-2.5 py-0.5 text-xs font-semibold text-[#6B6B6B] border border-[#EAEAEA]">
               {cart.length} Items
             </span>
           </div>
@@ -271,23 +281,23 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
           {/* Cart items list */}
           <div className="space-y-3 max-h-[350px] overflow-y-auto pr-1">
             {cart.length === 0 ? (
-              <div className="py-8 text-center text-xs text-slate-500">
+              <div className="py-8 text-center text-xs text-[#6B6B6B]">
                 Cart is empty. Select products from the list to begin reservation request.
               </div>
             ) : (
               cart.map((item) => {
                 const exceedsStock = item.quantity > item.product.availableStock;
                 return (
-                  <div key={item.product.id} className="rounded-lg border border-slate-850 bg-slate-900/60 p-3 space-y-2.5">
+                  <div key={item.product.id} className="rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] p-3 space-y-2.5">
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <h4 className="text-xs font-bold text-white">{item.product.name}</h4>
-                        <p className="text-[10px] text-slate-400 font-mono mt-0.5">SKU: {item.product.sku}</p>
+                        <h4 className="text-xs font-bold text-[#111111]">{item.product.name}</h4>
+                        <p className="text-[10px] text-[#6B6B6B] font-mono mt-0.5">SKU: {item.product.sku}</p>
                       </div>
                       <button
                         type="button"
                         onClick={() => removeFromCart(item.product.id)}
-                        className="text-slate-400 hover:text-rose-400 transition-colors"
+                        className="text-[#6B6B6B] hover:text-rose-600 transition-colors"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
@@ -295,11 +305,11 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
 
                     {/* Quantity controls */}
                     <div className="flex items-center justify-between gap-4">
-                      <div className="flex items-center gap-1 bg-slate-950 border border-slate-800 rounded-lg p-0.5">
+                      <div className="flex items-center gap-1 bg-white border border-[#EAEAEA] rounded-lg p-0.5">
                         <button
                           type="button"
                           onClick={() => updateQuantity(item.product.id, item.quantity - 1)}
-                          className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+                          className="rounded p-1 text-[#6B6B6B] hover:bg-[#F7F7F5]"
                         >
                           <Minus className="h-3 w-3" />
                         </button>
@@ -307,27 +317,27 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
                           type="number"
                           value={item.quantity}
                           onChange={(e) => updateQuantity(item.product.id, parseInt(e.target.value) || 1)}
-                          className="w-12 bg-transparent text-center text-xs font-bold text-white focus:outline-hidden"
+                          className="w-12 bg-transparent text-center text-xs font-bold text-[#111111] focus:outline-hidden"
                         />
                         <button
                           type="button"
                           onClick={() => updateQuantity(item.product.id, item.quantity + 1)}
-                          className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+                          className="rounded p-1 text-[#6B6B6B] hover:bg-[#F7F7F5]"
                         >
                           <Plus className="h-3 w-3" />
                         </button>
                       </div>
-                      <span className="text-[10px] text-slate-400">Available: {item.product.availableStock}</span>
+                      <span className="text-[10px] text-[#6B6B6B]">Available: {item.product.availableStock}</span>
                     </div>
 
                     {/* Exceeds Stock Warning & Waitlist selector */}
                     {exceedsStock && (
-                      <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 p-2.5 space-y-2">
-                        <div className="flex items-start gap-1.5 text-[10px] font-bold text-amber-400">
-                          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                      <div className="rounded-lg bg-amber-50 border border-amber-200 p-2.5 space-y-2">
+                        <div className="flex items-start gap-1.5 text-[10px] font-bold text-amber-850">
+                          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-600" />
                           <span>Insufficient Available Stock!</span>
                         </div>
-                        <p className="text-[9.5px] text-slate-300">
+                        <p className="text-[9.5px] text-amber-900">
                           You requested {item.quantity} boxes, but only {item.product.availableStock} boxes are in stock.
                         </p>
                         <div className="flex items-center gap-2">
@@ -336,8 +346,8 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
                             onClick={() => toggleWaitlist(item.product.id)}
                             className={`w-full rounded px-2.5 py-1 text-[9px] font-bold transition-all border ${
                               item.isWaitlist
-                                ? "bg-amber-500 text-slate-950 border-amber-500"
-                                : "bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700"
+                                ? "bg-amber-600 text-white border-amber-600"
+                                : "bg-white text-[#6B6B6B] border-[#EAEAEA] hover:bg-[#F7F7F5]"
                             }`}
                           >
                             {item.isWaitlist ? "✓ Join Waitlist" : "Join Waitlist"}
@@ -346,9 +356,8 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
                             type="button"
                             onClick={() => {
                               updateQuantity(item.product.id, item.product.availableStock);
-                              setCart(cart.map(c => c.product.id === item.product.id ? { ...c, quantity: item.product.availableStock, isWaitlist: false } : c));
                             }}
-                            className="w-full rounded bg-slate-800 px-2.5 py-1 text-[9px] font-bold text-slate-300 border border-slate-700 hover:bg-slate-700"
+                            className="w-full rounded bg-white px-2.5 py-1 text-[9px] font-bold text-[#6B6B6B] border border-[#EAEAEA] hover:bg-[#F7F7F5]"
                           >
                             Limit to {item.product.availableStock}
                           </button>
@@ -362,7 +371,7 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
                       placeholder="Remarks (e.g. Booking for Room A)"
                       value={item.remarks}
                       onChange={(e) => updateRemarks(item.product.id, e.target.value)}
-                      className="w-full rounded bg-slate-950 border border-slate-800/80 p-1.5 text-[10px] text-slate-350 focus:border-amber-500 focus:outline-hidden"
+                      className="w-full rounded border border-[#EAEAEA] bg-white p-1.5 text-[10px] text-[#111111] placeholder-[#6B6B6B] focus:border-[#F2C202] focus:outline-hidden"
                     />
                   </div>
                 );
@@ -372,19 +381,19 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
 
           {/* Booking Options */}
           {cart.length > 0 && (
-            <div className="space-y-4 pt-3 border-t border-slate-800">
+            <div className="space-y-4 pt-3 border-t border-[#EAEAEA]">
               {/* Target Warehouse */}
               <div className="space-y-1.5">
-                <label className="text-[10px] font-black uppercase text-slate-450 tracking-wider flex items-center gap-1">
+                <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider flex items-center gap-1">
                   <span>Warehouse Source</span>
                   <span title="Which warehouse holds requested items">
-                    <HelpCircle className="h-3 w-3 text-slate-500" />
+                    <HelpCircle className="h-3 w-3 text-[#6B6B6B]" />
                   </span>
                 </label>
                 <select
                   value={selectedWarehouseId}
                   onChange={(e) => setSelectedWarehouseId(e.target.value)}
-                  className="w-full rounded-lg border border-slate-800 bg-slate-950 p-2 text-xs text-white focus:border-amber-500 focus:outline-hidden"
+                  className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2 text-xs text-[#111111] focus:border-[#F2C202] focus:outline-hidden"
                 >
                   {warehouses.map((w) => (
                     <option key={w.id} value={w.id}>
@@ -396,18 +405,18 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
 
               {/* Priority */}
               <div className="space-y-1.5">
-                <label className="text-[10px] font-black uppercase text-slate-455 tracking-wider">Priority Level</label>
+                <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">Priority Level</label>
                 <div className="grid grid-cols-3 gap-2">
                   {(["NORMAL", "HIGH", "URGENT"] as const).map((p) => {
                     const colorMap = {
-                      NORMAL: "border-slate-850 text-slate-400 hover:text-white",
-                      HIGH: "border-amber-500/20 text-amber-400 hover:bg-amber-500/5",
-                      URGENT: "border-rose-500/20 text-rose-400 hover:bg-rose-500/5",
+                      NORMAL: "border-[#EAEAEA] text-[#6B6B6B] hover:text-[#111111]",
+                      HIGH: "border-amber-200 text-amber-700 hover:bg-amber-50",
+                      URGENT: "border-rose-200 text-rose-700 hover:bg-rose-50",
                     };
                     const activeColorMap = {
-                      NORMAL: "bg-slate-800 text-white border-slate-600",
-                      HIGH: "bg-amber-500/10 text-amber-400 border-amber-500/50 shadow-xs",
-                      URGENT: "bg-rose-500/10 text-rose-400 border-rose-500/50 shadow-xs",
+                      NORMAL: "bg-[#F7F7F5] text-[#111111] border-[#CCCCCC]",
+                      HIGH: "bg-amber-100 text-amber-800 border-amber-300 shadow-xs",
+                      URGENT: "bg-rose-100 text-rose-800 border-rose-300 shadow-xs",
                     };
                     const isSelected = priority === p;
                     return (
@@ -428,13 +437,13 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
 
               {/* Notes */}
               <div className="space-y-1.5">
-                <label className="text-[10px] font-black uppercase text-slate-455 tracking-wider">Admin Booking Notes</label>
+                <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">Admin Booking Notes</label>
                 <textarea
                   placeholder="Additional notes for Warehouse Manager..."
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
                   rows={3}
-                  className="w-full rounded-lg border border-slate-800 bg-slate-950 p-2 text-xs text-white focus:border-amber-500 focus:outline-hidden"
+                  className="w-full rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] p-2 text-xs text-[#111111] focus:border-[#F2C202] focus:outline-hidden"
                 />
               </div>
 
@@ -442,7 +451,7 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
               <button
                 type="submit"
                 disabled={isSubmitting || cart.length === 0}
-                className="w-full flex items-center justify-center gap-2 rounded-lg bg-amber-500 py-2.5 text-xs font-bold text-slate-950 hover:bg-amber-400 transition-all shadow-lg shadow-amber-500/15 disabled:bg-slate-850 disabled:text-slate-550 disabled:shadow-none"
+                className="w-full flex items-center justify-center gap-2 rounded-lg bg-[#F2C202] py-2.5 text-xs font-black text-white hover:bg-[#D8AD02] transition-all shadow-sm disabled:bg-[#F7F7F5] disabled:text-[#6B6B6B]/40 disabled:border-[#EAEAEA] disabled:shadow-none cursor-pointer"
               >
                 {isSubmitting ? "Creating Booking Request..." : "Submit Booking Request"}
                 {!isSubmitting && <ArrowRight className="h-4 w-4" />}

@@ -829,11 +829,13 @@ export async function getBookingList(filters: {
   status?: string;
   priority?: string;
   search?: string;
+  requestedBy?: string;
 }) {
   const where: any = {};
   
   if (filters.dealerId) where.dealerId = filters.dealerId;
   if (filters.warehouseId) where.warehouseId = filters.warehouseId;
+  if (filters.requestedBy) where.requestedBy = filters.requestedBy;
   
   if (filters.status === "EXPIRING") {
     const next24h = new Date();

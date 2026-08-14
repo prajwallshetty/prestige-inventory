@@ -7,13 +7,10 @@ import {
   X, 
   Clock, 
   AlertTriangle, 
-  Calendar, 
   ArrowLeft, 
   Download, 
-  FileText,
   User,
   MapPin,
-  MessageSquare,
   ShieldAlert,
   Sliders,
   Play
@@ -29,6 +26,8 @@ import {
   allocateBookingStockAction,
   fulfillBookingStockAction
 } from "@/app/actions";
+import { getProductThumbnailUrl } from "@/lib/s3";
+import { ShimmerImage } from "@/components/Skeleton";
 
 interface BookingItem {
   id: string;
@@ -48,6 +47,10 @@ interface BookingItem {
     size: string;
     brandName: string;
     availableStock: number;
+    image_key?: string | null;
+    thumbnail_key?: string | null;
+    lifestyleImage?: string | null;
+    textureImage?: string | null;
   };
 }
 
@@ -112,7 +115,7 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
     updateTimer();
     const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
-  }, [booking.expiresAt, booking.status]);
+  }, [booking.expiresAt, booking.status, router]);
 
   // Approval override quantities (for Partial Approval)
   const [approvedQuantities, setApprovedQuantities] = useState<Record<string, number>>(
@@ -195,12 +198,10 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
     executeAction(`fulfill`, fulfillBookingStockAction(booking.id, `Manager`));
   };
 
-  // Mock PDF Generation / Print slip
   const handlePrint = () => {
     window.print();
   };
 
-  // Build current step for Progress Timeline
   const getTimelineSteps = () => {
     const steps = [
       { name: "Draft", completed: true },
@@ -232,31 +233,30 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
         <div className="flex items-center gap-3">
           <Link
             href="/bookings"
-            className="rounded-lg border border-slate-800 bg-slate-900 p-2 text-slate-400 hover:text-white transition-colors"
+            className="rounded-lg border border-[#EAEAEA] bg-white p-2 text-[#6B6B6B] hover:text-[#111111] transition-colors"
           >
             <ArrowLeft className="h-4 w-4" />
           </Link>
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-xl font-bold text-white font-mono">{booking.bookingNumber}</h1>
-              <span className="rounded-full bg-slate-800 border border-slate-700 px-2 py-0.5 text-[10px] font-bold text-slate-300 uppercase">
+              <h1 className="text-xl font-bold text-[#111111] font-mono">{booking.bookingNumber}</h1>
+              <span className="rounded-full bg-[#F7F7F5] border border-[#EAEAEA] px-2.5 py-0.5 text-[9px] font-bold text-[#6B6B6B] uppercase">
                 {booking.priority}
               </span>
-              <span className="rounded-full bg-blue-500/10 border border-blue-500/25 px-2.5 py-0.5 text-[10px] font-bold text-blue-400 uppercase">
+              <span className="rounded-full bg-blue-50 border border-blue-200 px-2.5 py-0.5 text-[9px] font-bold text-blue-700 uppercase">
                 {booking.status.replace(/_/g, " ")}
               </span>
             </div>
-            <p className="text-[10px] text-slate-400 mt-1">
+            <p className="text-[10px] text-[#6B6B6B] mt-1">
               Created on {new Date(booking.requestedAt).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
             </p>
           </div>
         </div>
 
         <div className="flex gap-2">
-          {/* Print slip button */}
           <button
             onClick={handlePrint}
-            className="flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-xs font-bold text-slate-200 hover:bg-slate-800 transition-all"
+            className="flex items-center gap-1.5 rounded-lg border border-[#EAEAEA] bg-white px-3 py-2 text-xs font-bold text-[#111111] hover:bg-[#F7F7F5] transition-all"
           >
             <Download className="h-4 w-4" /> Print Slip
           </button>
@@ -265,15 +265,15 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
 
       {/* READ-ONLY DISCLAIMER */}
       {isReadOnly && (
-        <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-4 text-xs font-medium text-rose-400 flex items-center gap-2">
-          <ShieldAlert className="h-4 w-4" />
+        <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-xs font-medium text-rose-800 flex items-center gap-2">
+          <ShieldAlert className="h-4 w-4 text-rose-600" />
           <span>You are viewing this reservation details in read-only audit mode. Access is restricted.</span>
         </div>
       )}
 
       {/* TIMELINE PROGRESS */}
-      <div className="rounded-xl border border-slate-800 bg-[#0f172a] p-5 shadow-xl">
-        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Reservation Timeline</h3>
+      <div className="rounded-xl border border-[#EAEAEA] bg-white p-5 shadow-xs">
+        <h3 className="text-xs font-bold text-[#6B6B6B] uppercase tracking-wider mb-4">Reservation Timeline</h3>
         <div className="flex flex-col md:flex-row items-center justify-between gap-4 md:gap-0">
           {timelineSteps.map((step, idx) => (
             <React.Fragment key={idx}>
@@ -281,20 +281,20 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
                 <div
                   className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold ${
                     step.completed
-                      ? "bg-amber-500 text-slate-950 font-black shadow-md shadow-amber-500/15"
-                      : "border border-slate-800 bg-slate-900 text-slate-500"
+                      ? "bg-[#F2C202] text-white font-black shadow-xs"
+                      : "border border-[#EAEAEA] bg-[#F7F7F5] text-[#6B6B6B]"
                   }`}
                 >
                   {step.completed ? "✓" : idx + 1}
                 </div>
-                <span className={`text-xs font-bold ${step.completed ? "text-white" : "text-slate-500"}`}>
+                <span className={`text-xs font-bold ${step.completed ? "text-[#111111]" : "text-[#6B6B6B]"}`}>
                   {step.name}
                 </span>
               </div>
               {idx < timelineSteps.length - 1 && (
                 <div
                   className={`hidden md:block h-0.5 flex-1 mx-4 transition-all duration-300 ${
-                    timelineSteps[idx + 1].completed ? "bg-amber-500" : "bg-slate-800"
+                    timelineSteps[idx + 1].completed ? "bg-[#F2C202]" : "bg-[#EAEAEA]"
                   }`}
                 />
               )}
@@ -308,37 +308,37 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
         {/* DETAILS COLUMN (8 cols) */}
         <div className="lg:col-span-8 space-y-6">
           {/* INFO CARD */}
-          <div className="rounded-xl border border-slate-800 bg-[#0f172a] p-5 shadow-xl grid grid-cols-1 sm:grid-cols-3 gap-5">
+          <div className="rounded-xl border border-[#EAEAEA] bg-white p-5 shadow-xs grid grid-cols-1 sm:grid-cols-3 gap-5">
             <div className="space-y-1">
-              <span className="text-[10px] font-black uppercase text-slate-550 tracking-wider flex items-center gap-1">
-                <User className="h-3.5 w-3.5 text-amber-500" /> Dealer Client
+              <span className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider flex items-center gap-1">
+                <User className="h-3.5 w-3.5 text-[#F2C202]" /> Dealer Client
               </span>
-              <p className="text-xs font-bold text-white mt-1.5">{booking.dealer.name}</p>
-              <p className="text-[10px] text-slate-400">{booking.dealer.company || "No Company Info"}</p>
-              <p className="text-[10px] text-slate-400">{booking.dealer.email} • {booking.dealer.phone}</p>
+              <p className="text-xs font-bold text-[#111111] mt-1.5">{booking.dealer.name}</p>
+              <p className="text-[10px] text-[#6B6B6B]">{booking.dealer.company || "No Company Info"}</p>
+              <p className="text-[10px] text-[#6B6B6B]">{booking.dealer.email} • {booking.dealer.phone}</p>
             </div>
 
             <div className="space-y-1">
-              <span className="text-[10px] font-black uppercase text-slate-550 tracking-wider flex items-center gap-1">
-                <MapPin className="h-3.5 w-3.5 text-amber-500" /> Source Depot
+              <span className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider flex items-center gap-1">
+                <MapPin className="h-3.5 w-3.5 text-[#F2C202]" /> Source Depot
               </span>
-              <p className="text-xs font-bold text-white mt-1.5">{booking.warehouse.name}</p>
-              <p className="text-[10px] text-slate-455 font-mono">Code: {booking.warehouse.code}</p>
+              <p className="text-xs font-bold text-[#111111] mt-1.5">{booking.warehouse.name}</p>
+              <p className="text-[10px] text-[#6B6B6B] font-mono">Code: {booking.warehouse.code}</p>
             </div>
 
             <div className="space-y-1">
-              <span className="text-[10px] font-black uppercase text-slate-550 tracking-wider flex items-center gap-1">
-                <Clock className="h-3.5 w-3.5 text-amber-500" /> Reservation Timer
+              <span className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider flex items-center gap-1">
+                <Clock className="h-3.5 w-3.5 text-[#F2C202]" /> Reservation Timer
               </span>
               {booking.status === "AWAITING_DEALER_CONFIRMATION" ? (
                 <div className="mt-1.5 space-y-0.5">
-                  <p className="text-xs font-black text-amber-400 animate-pulse flex items-center gap-1">
+                  <p className="text-xs font-black text-amber-600 animate-pulse flex items-center gap-1">
                     <Clock className="h-3.5 w-3.5" /> {timeLeft}
                   </p>
-                  <p className="text-[9px] text-slate-400">Expires {new Date(booking.expiresAt!).toLocaleString()}</p>
+                  <p className="text-[9px] text-[#6B6B6B]">Expires {new Date(booking.expiresAt!).toLocaleString()}</p>
                 </div>
               ) : (
-                <p className="text-xs text-slate-455 font-semibold mt-1.5">
+                <p className="text-xs text-[#6B6B6B] font-semibold mt-1.5">
                   {booking.status === "EXPIRED" ? "Expired & Released" : "No Expiry Active"}
                 </p>
               )}
@@ -346,8 +346,8 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
           </div>
 
           {/* PRODUCTS LIST */}
-          <div className="rounded-xl border border-slate-800 bg-[#0f172a] p-5 shadow-xl space-y-4">
-            <h3 className="text-xs font-bold text-slate-450 uppercase tracking-wider">Reserved Item Specifications</h3>
+          <div className="rounded-xl border border-[#EAEAEA] bg-white p-5 shadow-xs space-y-4">
+            <h3 className="text-xs font-bold text-[#6B6B6B] uppercase tracking-wider">Reserved Item Specifications</h3>
             
             <div className="space-y-3">
               {booking.items.map((item) => {
@@ -357,39 +357,46 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
                   !isReadOnly;
 
                 return (
-                  <div key={item.id} className="rounded-lg border border-slate-855 bg-slate-905 p-4 space-y-3">
+                  <div key={item.id} className="rounded-lg border border-[#EAEAEA] bg-[#F7F7F5]/50 p-4 space-y-3">
                     <div className="flex flex-col sm:flex-row justify-between items-start gap-4">
-                      <div>
-                        <h4 className="text-xs font-bold text-white">{item.product.name}</h4>
-                        <div className="flex items-center gap-3 text-[10px] text-slate-450 mt-1">
-                          <span>SKU: <strong className="font-mono text-slate-350">{item.product.sku}</strong></span>
-                          <span>Size: <strong>{item.product.size}</strong></span>
-                          <span>Warehouse Stock: <strong className="text-emerald-400">{item.product.availableStock} Box</strong></span>
+                      <div className="flex gap-3">
+                        <ShimmerImage
+                          src={getProductThumbnailUrl(item.product)}
+                          alt={item.product.name}
+                          wrapperClassName="h-12 w-12 relative overflow-hidden rounded-lg border border-[#EAEAEA] shrink-0"
+                        />
+                        <div>
+                          <h4 className="text-xs font-bold text-[#111111]">{item.product.name}</h4>
+                          <div className="flex flex-col sm:flex-row sm:items-center gap-2 text-[10px] text-[#6B6B6B] mt-1">
+                            <span>SKU: <strong className="font-mono text-[#111111]">{item.product.sku}</strong></span>
+                            <span>Size: <strong>{item.product.size}</strong></span>
+                            <span>Warehouse Stock: <strong className="text-emerald-600">{item.product.availableStock} Box</strong></span>
+                          </div>
                         </div>
                       </div>
 
                       {/* Display quantities */}
-                      <div className="flex flex-wrap gap-4 text-right sm:text-left text-xs bg-slate-950/65 rounded-lg p-2.5 border border-slate-850/80">
+                      <div className="flex flex-wrap gap-4 text-right sm:text-left text-xs bg-white rounded-lg p-2.5 border border-[#EAEAEA]">
                         <div>
-                          <p className="text-[9px] uppercase font-black text-slate-550">Requested</p>
-                          <p className="font-bold text-white mt-0.5">{item.requestedQuantity} {item.unit}</p>
+                          <p className="text-[9px] uppercase font-bold text-[#6B6B6B]">Requested</p>
+                          <p className="font-bold text-[#111111] mt-0.5">{item.requestedQuantity} {item.unit}</p>
                         </div>
                         {booking.status !== "PENDING_APPROVAL" && (
                           <div>
-                            <p className="text-[9px] uppercase font-black text-slate-550">Approved</p>
-                            <p className="font-bold text-amber-400 mt-0.5">{item.approvedQuantity} {item.unit}</p>
+                            <p className="text-[9px] uppercase font-bold text-[#6B6B6B]">Approved</p>
+                            <p className="font-bold text-amber-600 mt-0.5">{item.approvedQuantity} {item.unit}</p>
                           </div>
                         )}
                         {item.allocatedQuantity > 0 && (
                           <div>
-                            <p className="text-[9px] uppercase font-black text-slate-550">Allocated</p>
-                            <p className="font-bold text-cyan-400 mt-0.5">{item.allocatedQuantity} {item.unit}</p>
+                            <p className="text-[9px] uppercase font-bold text-[#6B6B6B]">Allocated</p>
+                            <p className="font-bold text-cyan-600 mt-0.5">{item.allocatedQuantity} {item.unit}</p>
                           </div>
                         )}
                         {item.fulfilledQuantity > 0 && (
                           <div>
-                            <p className="text-[9px] uppercase font-black text-slate-550">Fulfilled</p>
-                            <p className="font-bold text-emerald-400 mt-0.5">{item.fulfilledQuantity} {item.unit}</p>
+                            <p className="text-[9px] uppercase font-bold text-[#6B6B6B]">Fulfilled</p>
+                            <p className="font-bold text-emerald-600 mt-0.5">{item.fulfilledQuantity} {item.unit}</p>
                           </div>
                         )}
                       </div>
@@ -397,8 +404,8 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
 
                     {/* Quantity Adjustment form for Manager Review */}
                     {showQtyAdjustment && (
-                      <div className="flex items-center gap-4 bg-slate-950 p-2.5 rounded-lg border border-slate-850">
-                        <span className="text-[10px] font-bold text-slate-400 uppercase">Approve Quantity:</span>
+                      <div className="flex items-center gap-4 bg-white p-2.5 rounded-lg border border-[#EAEAEA]">
+                        <span className="text-[10px] font-bold text-[#6B6B6B] uppercase">Approve Quantity:</span>
                         <div className="flex items-center gap-2">
                           <input
                             type="number"
@@ -406,12 +413,12 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
                             max={item.product.availableStock}
                             value={approvedQuantities[item.id]}
                             onChange={(e) => handleQtyChange(item.id, parseInt(e.target.value) || 0)}
-                            className="w-16 rounded bg-slate-900 border border-slate-800 p-1 text-center text-xs font-bold text-white focus:outline-hidden"
+                            className="w-16 rounded bg-[#F7F7F5] border border-[#EAEAEA] p-1 text-center text-xs font-bold text-[#111111] focus:outline-hidden"
                           />
-                          <span className="text-[10px] text-slate-450">Boxes</span>
+                          <span className="text-[10px] text-[#6B6B6B]">Boxes</span>
                         </div>
                         {approvedQuantities[item.id] > item.product.availableStock && (
-                          <span className="text-[10px] font-bold text-rose-400 flex items-center gap-1">
+                          <span className="text-[10px] font-bold text-rose-600 flex items-center gap-1">
                             <AlertTriangle className="h-3 w-3" /> Exceeds Stock!
                           </span>
                         )}
@@ -419,7 +426,7 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
                     )}
 
                     {item.remarks && (
-                      <p className="text-[10px] italic text-slate-400">
+                      <p className="text-[10px] italic text-[#6B6B6B]">
                         Remarks: "{item.remarks}"
                       </p>
                     )}
@@ -434,9 +441,9 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
         <div className="lg:col-span-4 space-y-6">
           {/* ACTIVE ACTIONS PANEL */}
           {!isReadOnly && (
-            <div className="rounded-xl border border-slate-800 bg-[#0f172a] p-5 shadow-xl space-y-4">
-              <h3 className="text-xs font-bold text-slate-455 uppercase tracking-wider flex items-center gap-2">
-                <Sliders className="h-4 w-4 text-amber-500" />
+            <div className="rounded-xl border border-[#EAEAEA] bg-white p-5 shadow-xs space-y-4">
+              <h3 className="text-xs font-bold text-[#6B6B6B] uppercase tracking-wider flex items-center gap-2">
+                <Sliders className="h-4 w-4 text-[#F2C202]" />
                 <span>Control Actions</span>
               </h3>
 
@@ -445,12 +452,12 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
                 <div className="space-y-3">
                   {/* Extension Requests Review */}
                   {booking.extensionRequested && (
-                    <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 p-3.5 space-y-2.5">
-                      <div className="flex items-start gap-1.5 text-xs font-bold text-amber-400">
-                        <Clock className="h-4 w-4 shrink-0 mt-0.5" />
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-3.5 space-y-2.5">
+                      <div className="flex items-start gap-1.5 text-xs font-bold text-amber-800">
+                        <Clock className="h-4 w-4 shrink-0 mt-0.5 text-amber-600" />
                         <span>Extension Requested (+{booking.extensionHours}h)</span>
                       </div>
-                      <p className="text-[10px] text-slate-300 italic">"{booking.extensionReason}"</p>
+                      <p className="text-[10px] text-amber-900 italic">"{booking.extensionReason}"</p>
                       <div className="flex gap-2">
                         <button
                           onClick={() => handleReviewExtension("APPROVE")}
@@ -462,7 +469,7 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
                         <button
                           onClick={() => handleReviewExtension("REJECT")}
                           disabled={loadingAction !== null}
-                          className="w-full rounded bg-slate-800 border border-slate-700 py-1 text-[10px] font-bold text-slate-300 hover:bg-slate-700"
+                          className="w-full rounded bg-white border border-[#EAEAEA] py-1 text-[10px] font-bold text-[#6B6B6B] hover:bg-[#F7F7F5]"
                         >
                           Deny
                         </button>
@@ -474,19 +481,19 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
                   {(booking.status === "PENDING_APPROVAL" || booking.status === "ON_HOLD") && (
                     <div className="space-y-3">
                       <div className="space-y-1">
-                        <label className="text-[10px] font-bold text-slate-500 uppercase">Review Notes / Remarks</label>
+                        <label className="text-[10px] font-bold text-[#6B6B6B] uppercase">Review Notes / Remarks</label>
                         <textarea
                           placeholder="Type notes for dealer..."
                           value={reviewNote}
                           onChange={(e) => setReviewNote(e.target.value)}
                           rows={2}
-                          className="w-full rounded bg-slate-950 border border-slate-850 p-2 text-xs text-white focus:outline-hidden"
+                          className="w-full rounded bg-[#F7F7F5] border border-[#EAEAEA] p-2 text-xs text-[#111111] focus:outline-hidden focus:border-[#F2C202]"
                         />
                       </div>
                       <button
                         onClick={() => handleManagerReview("APPROVED")}
                         disabled={loadingAction !== null}
-                        className="w-full rounded-lg bg-emerald-600 py-2 text-xs font-bold text-white hover:bg-emerald-500 transition-all flex items-center justify-center gap-1"
+                        className="w-full rounded-lg bg-emerald-600 py-2 text-xs font-bold text-white hover:bg-emerald-500 transition-all flex items-center justify-center gap-1 cursor-pointer"
                       >
                         <Check className="h-4 w-4" /> Approve Reservation
                       </button>
@@ -494,14 +501,14 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
                         <button
                           onClick={() => handleManagerReview("REJECTED")}
                           disabled={loadingAction !== null}
-                          className="rounded-lg bg-rose-600/10 border border-rose-500/20 py-2 text-xs font-bold text-rose-400 hover:bg-rose-600 hover:text-white transition-all flex items-center justify-center gap-1"
+                          className="rounded-lg bg-rose-50 border border-rose-200 py-2 text-xs font-bold text-rose-700 hover:bg-rose-600 hover:text-white transition-all flex items-center justify-center gap-1 cursor-pointer"
                         >
                           <X className="h-3.5 w-3.5" /> Reject
                         </button>
                         <button
                           onClick={() => handleManagerReview("ON_HOLD")}
                           disabled={loadingAction !== null}
-                          className="rounded-lg bg-slate-850 border border-slate-805 py-2 text-xs font-bold text-slate-300 hover:bg-slate-800 transition-all flex items-center justify-center gap-1"
+                          className="rounded-lg bg-[#F7F7F5] border border-[#EAEAEA] py-2 text-xs font-bold text-[#6B6B6B] hover:bg-[#EAEAEA] transition-all flex items-center justify-center gap-1 cursor-pointer"
                         >
                           Hold Request
                         </button>
@@ -514,7 +521,7 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
                     <button
                       onClick={handleAllocate}
                       disabled={loadingAction !== null}
-                      className="w-full rounded-lg bg-blue-600 py-2.5 text-xs font-bold text-white hover:bg-blue-500 transition-all flex items-center justify-center gap-1.5"
+                      className="w-full rounded-lg bg-blue-600 py-2.5 text-xs font-bold text-white hover:bg-blue-500 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                     >
                       <Play className="h-3.5 w-3.5" /> Allocate Stock for Dispatch
                     </button>
@@ -525,7 +532,7 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
                     <button
                       onClick={handleFulfill}
                       disabled={loadingAction !== null}
-                      className="w-full rounded-lg bg-emerald-600 py-2.5 text-xs font-bold text-white hover:bg-emerald-500 transition-all flex items-center justify-center gap-1.5"
+                      className="w-full rounded-lg bg-[#F2C202] py-2.5 text-xs font-bold text-white hover:bg-[#D8AD02] transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                     >
                       <Check className="h-4 w-4" /> Fulfill / Dispatch Stock Out
                     </button>
@@ -533,11 +540,11 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
 
                   {/* General Cancel button for manager */}
                   {["PENDING_APPROVAL", "ON_HOLD", "APPROVED", "AWAITING_DEALER_CONFIRMATION", "CONFIRMED"].includes(booking.status) && (
-                    <div className="pt-2 border-t border-slate-850">
+                    <div className="pt-2 border-t border-[#EAEAEA]">
                       {!showCancelForm ? (
                         <button
                           onClick={() => setShowCancelForm(true)}
-                          className="w-full rounded-lg border border-rose-500/25 bg-rose-500/5 hover:bg-rose-550 hover:text-white text-rose-400 py-1.5 text-[10.5px] font-bold transition-all"
+                          className="w-full rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-600 hover:text-white text-rose-700 py-1.5 text-[10.5px] font-bold transition-all cursor-pointer"
                         >
                           Force Cancel Reservation
                         </button>
@@ -548,7 +555,7 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
                             placeholder="Cancellation reason..."
                             value={cancelReason}
                             onChange={(e) => setCancelReason(e.target.value)}
-                            className="w-full rounded bg-slate-950 border border-slate-800 p-1.5 text-xs text-white"
+                            className="w-full rounded bg-[#F7F7F5] border border-[#EAEAEA] p-1.5 text-xs text-[#111111] focus:outline-hidden"
                           />
                           <div className="flex gap-2">
                             <button
@@ -559,7 +566,7 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
                             </button>
                             <button
                               onClick={() => setShowCancelForm(false)}
-                              className="w-full rounded bg-slate-800 py-1 text-[10px] font-bold text-slate-350"
+                              className="w-full rounded bg-[#F7F7F5] border border-[#EAEAEA] py-1 text-[10px] font-bold text-[#6B6B6B]"
                             >
                               Abort
                             </button>
@@ -580,7 +587,7 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
                       <button
                         onClick={handleConfirm}
                         disabled={loadingAction !== null}
-                        className="w-full rounded-lg bg-emerald-600 py-2.5 text-xs font-bold text-white hover:bg-emerald-500 transition-all flex items-center justify-center gap-1.5"
+                        className="w-full rounded-lg bg-emerald-600 py-2.5 text-xs font-bold text-white hover:bg-emerald-500 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                       >
                         <Check className="h-4 w-4" /> Confirm Booking Hold
                       </button>
@@ -589,32 +596,32 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
                       {!showExtensionForm ? (
                         <button
                           onClick={() => setShowExtensionForm(true)}
-                          className="w-full rounded-lg border border-slate-800 bg-slate-900 py-1.5 text-[10.5px] font-semibold text-slate-300 hover:bg-slate-800"
+                          className="w-full rounded-lg border border-[#EAEAEA] bg-white py-1.5 text-[10.5px] font-semibold text-[#6B6B6B] hover:bg-[#F7F7F5] cursor-pointer"
                         >
                           Request Expiry Extension
                         </button>
                       ) : (
-                        <div className="rounded-lg bg-slate-950 p-2.5 border border-slate-850 space-y-2">
-                          <label className="text-[9px] uppercase font-bold text-slate-500">Extension Reason</label>
+                        <div className="rounded-lg bg-[#F7F7F5] p-2.5 border border-[#EAEAEA] space-y-2">
+                          <label className="text-[9px] uppercase font-bold text-[#6B6B6B]">Extension Reason</label>
                           <input
                             type="text"
-                            placeholder="e.g. Awaiting client payment"
+                            placeholder="Reason (e.g. Awaiting client site clearance)..."
                             value={extensionReason}
                             onChange={(e) => setExtensionReason(e.target.value)}
-                            className="w-full rounded bg-slate-900 border border-slate-800 p-1.5 text-xs text-white focus:outline-hidden"
+                            className="w-full rounded border border-[#EAEAEA] bg-white p-1.5 text-xs text-[#111111] focus:outline-hidden"
                           />
                           <div className="flex gap-2">
                             <button
                               onClick={handleRequestExtension}
-                              className="w-full rounded bg-amber-500 py-1 text-[9.5px] font-bold text-slate-950 hover:bg-amber-400"
+                              className="w-full rounded bg-[#F2C202] py-1 text-[10px] font-bold text-white hover:bg-[#D8AD02]"
                             >
-                              Request +24h
+                              Send Request
                             </button>
                             <button
                               onClick={() => setShowExtensionForm(false)}
-                              className="w-full rounded bg-slate-800 py-1 text-[9.5px] font-bold text-slate-400"
+                              className="w-full rounded bg-white border border-[#EAEAEA] py-1 text-[10px] font-bold text-[#6B6B6B]"
                             >
-                              Abort
+                              Cancel
                             </button>
                           </div>
                         </div>
@@ -622,89 +629,37 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
                     </div>
                   )}
 
-                  {/* Cancellation request (Dealer) */}
-                  {["PENDING_APPROVAL", "AWAITING_DEALER_CONFIRMATION", "CONFIRMED"].includes(booking.status) && (
-                    <div className="pt-2 border-t border-slate-850">
-                      {!showCancelForm ? (
-                        <button
-                          onClick={() => setShowCancelForm(true)}
-                          className="w-full rounded-lg border border-rose-500/25 bg-rose-500/5 hover:bg-rose-550 hover:text-white text-rose-400 py-1.5 text-[10.5px] font-bold transition-all"
-                        >
-                          Cancel Booking Request
-                        </button>
-                      ) : (
-                        <div className="space-y-2 pt-1">
-                          <input
-                            type="text"
-                            placeholder="Cancellation reason..."
-                            value={cancelReason}
-                            onChange={(e) => setCancelReason(e.target.value)}
-                            className="w-full rounded bg-slate-950 border border-slate-800 p-1.5 text-xs text-white focus:outline-hidden"
-                          />
-                          <div className="flex gap-2">
-                            <button
-                              onClick={handleCancel}
-                              className="w-full rounded bg-rose-600 py-1 text-[9.5px] font-bold text-white hover:bg-rose-500"
-                            >
-                              Confirm Cancel
-                            </button>
-                            <button
-                              onClick={() => setShowCancelForm(false)}
-                              className="w-full rounded bg-slate-850 py-1 text-[9.5px] font-bold text-slate-400"
-                            >
-                              Abort
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Disable other statuses disclaimer */}
-                  {!["PENDING_APPROVAL", "AWAITING_DEALER_CONFIRMATION", "CONFIRMED"].includes(booking.status) && (
-                    <p className="text-[10px] text-slate-500 italic text-center">
-                      No customer-facing actions available in current status.
-                    </p>
+                  {/* Cancel Hold */}
+                  {["PENDING_APPROVAL", "ON_HOLD", "APPROVED", "AWAITING_DEALER_CONFIRMATION", "CONFIRMED"].includes(booking.status) && (
+                    <button
+                      onClick={handleCancel}
+                      disabled={loadingAction !== null}
+                      className="w-full rounded-lg border border-rose-200 bg-rose-50 text-rose-700 py-2 text-xs font-bold hover:bg-rose-600 hover:text-white transition-all cursor-pointer"
+                    >
+                      Release / Cancel Hold
+                    </button>
                   )}
                 </div>
               )}
             </div>
           )}
 
-          {/* NOTES AND REMARKS LOG */}
-          {booking.notes && (
-            <div className="rounded-xl border border-slate-850 bg-[#0f172a] p-5 shadow-xl space-y-2.5">
-              <h3 className="text-xs font-bold text-slate-450 uppercase tracking-wider flex items-center gap-1">
-                <MessageSquare className="h-3.5 w-3.5 text-amber-500" />
-                <span>Special Instructions</span>
-              </h3>
-              <div className="rounded-lg bg-slate-950 p-3 border border-slate-900">
-                <p className="text-xs text-slate-200 leading-relaxed font-serif">"{booking.notes}"</p>
-              </div>
-            </div>
-          )}
-
-          {/* AUDIT LOG LIST */}
-          <div className="rounded-xl border border-slate-800 bg-[#0f172a] p-5 shadow-xl space-y-4">
-            <h3 className="text-xs font-bold text-slate-455 uppercase tracking-wider flex items-center gap-2">
-              <FileText className="h-4 w-4 text-amber-500" />
-              <span>Activity History Trail</span>
-            </h3>
-
-            <div className="space-y-3.5 max-h-[300px] overflow-y-auto pr-1">
+          {/* AUDIT TIMELINE LOGS */}
+          <div className="rounded-xl border border-[#EAEAEA] bg-white p-5 shadow-xs space-y-4">
+            <h3 className="text-xs font-bold text-[#6B6B6B] uppercase tracking-wider">Audit logs</h3>
+            <div className="relative border-l border-[#EAEAEA] ml-3 pl-5 space-y-4 max-h-[300px] overflow-y-auto">
               {auditLogs.length === 0 ? (
-                <p className="text-xs text-slate-500 italic text-center py-4">No logged activity yet.</p>
+                <p className="text-xs text-[#6B6B6B]/60 italic">No logs recorded yet.</p>
               ) : (
                 auditLogs.map((log) => (
-                  <div key={log.id} className="relative pl-4 border-l border-slate-800 text-[11px] space-y-1">
-                    <div className="absolute left-[-4.5px] top-1 h-2 w-2 rounded-full bg-slate-800 border border-slate-700" />
-                    <div className="flex justify-between items-center text-slate-400 font-bold">
-                      <span>{log.performedBy}</span>
-                      <span className="font-mono text-[9px]">
-                        {new Date(log.createdAt).toLocaleDateString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-                      </span>
-                    </div>
-                    <p className="text-slate-300 leading-relaxed">{log.details}</p>
+                  <div key={log.id} className="relative text-xs space-y-1">
+                    <span className="absolute -left-[27.5px] top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-white border border-[#EAEAEA] text-[7px] text-[#6B6B6B]">
+                      ●
+                    </span>
+                    <p className="font-bold text-[#111111]">{log.details}</p>
+                    <p className="text-[10px] text-[#6B6B6B]">
+                      {log.performedBy} • {new Date(log.createdAt).toLocaleString("en-IN")}
+                    </p>
                   </div>
                 ))
               )}

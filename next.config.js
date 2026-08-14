@@ -8,6 +8,10 @@ const nextConfig = {
       { protocol: 'https', hostname: '**' }
     ]
   },
+  experimental: {
+    workerThreads: false,
+    cpus: 1
+  },
   webpack: (config) => {
     config.resolve.alias = {
       ...config.resolve.alias,

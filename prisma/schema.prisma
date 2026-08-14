@@ -25,18 +25,19 @@ datasource db {
 
 enum Role {
   SUPER_ADMIN
-  OWNER
-  MARKETING
-  CONTENT
-  SEO
-  SUPPORT
+  MANAGER
   VIEWER
+  SHOWROOM_INCHARGE
+  SHOWROOM_STAFF
+  DEALER
 }
 
 enum UserStatus {
   ACTIVE
   INVITED
   DEACTIVATED
+  INACTIVE
+  SUSPENDED
 }
 
 model User {
@@ -48,6 +49,13 @@ model User {
   status    UserStatus @default(ACTIVE)
   avatar    String?
   lastLogin DateTime?
+
+  dealer_id    String?
+  dealer       Dealer?    @relation(fields: [dealer_id], references: [id], onDelete: SetNull)
+  warehouse_id String?
+  warehouse    Warehouse? @relation(fields: [warehouse_id], references: [id], onDelete: SetNull)
+  showroomId   String?
+  showroom     Showroom?  @relation(fields: [showroomId], references: [id], onDelete: SetNull)
 
   inviteToken     String?   @unique
   inviteExpiresAt DateTime?
@@ -62,6 +70,10 @@ model User {
   auditLogs        AuditLog[]
   posts            Post[]
   bookingsAssigned Booking[]  @relation("AssignedBookings")
+  
+  notifications         Notification[]
+  announcements         Announcement[]
+  announcementRecipients AnnouncementRecipient[]
 
   @@index([status])
   @@index([role])
@@ -153,6 +165,8 @@ model Product {
   sku             String? @unique
   surface         String? // "Glossy" | "Matt" | "Carving" | ... (finish is the family)
   lifestyleImage  String? // dominant hero/card image — full room scene
+  image_key       String?
+  thumbnail_key   String?
   blurData        String? // tiny base64 data URI behind the hero, for next/image placeholder
   textureImage    String? // macro material close-up
   images          Json? // string[] — gallery/angle/installation media
@@ -590,6 +604,8 @@ model Showroom {
   testimonials Testimonial[]
   faqs         Faq[]
   googlePosts  GooglePost[]
+  users        User[]
+  stockBlocks  StockBlock[]
 
   createdById String?
   updatedById String?
@@ -1081,6 +1097,7 @@ model Warehouse {
   stockBlocks        StockBlock[]
   shipments          Shipment[]
   stockBookings      StockBooking[]
+  users              User[]
 }
 
 model Dealer {
@@ -1097,6 +1114,7 @@ model Dealer {
 
   stockBlocks StockBlock[]
   stockBookings StockBooking[]
+  users         User[]
 }
 
 model Inventory {
@@ -1116,6 +1134,7 @@ model Inventory {
   maximumStock   Float     @default(0)
   reorderLevel   Float     @default(0)
   stockStatus    String    @default("OUT_OF_STOCK") // AVAILABLE | LOW_STOCK | OUT_OF_STOCK | INCOMING | BLOCKED | PARTIALLY_AVAILABLE | DAMAGED
+  deliveredStock Float     @default(0)
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -1127,31 +1146,44 @@ model Inventory {
   @@index([stockStatus])
 }
 
+enum BlockedBy {
+  SAMSHUDIN
+  SALMAN
+}
+
 model StockBlock {
-  id          String    @id @default(cuid())
-  productId   String
-  inventoryId String
-  inventory   Inventory @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
-  warehouseId String?
-  warehouse   Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
-  dealerId    String?
-  dealer      Dealer?   @relation(fields: [dealerId], references: [id], onDelete: SetNull)
-  quantity    Float
-  requestedBy String
-  approvedBy  String?
-  status      String    @default("PENDING") // PENDING | APPROVED | REJECTED | CONFIRMED | EXPIRED | CANCELLED | RELEASED
-  remarks     String?
-  createdAt   DateTime  @default(now())
-  approvedAt  DateTime?
-  expiresAt   DateTime?
-  confirmedAt DateTime?
-  releasedAt  DateTime?
+  id            String    @id @default(cuid())
+  block_number  String?   @unique
+  block_type    String    @default("BLOCKED") // BLOCKED | CONFIRMED
+  productId     String
+  inventoryId   String
+  inventory     Inventory @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+  warehouseId   String?
+  warehouse     Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  dealerId      String?
+  dealer        Dealer?   @relation(fields: [dealerId], references: [id], onDelete: SetNull)
+  showroomId    String?
+  showroom      Showroom?  @relation(fields: [showroomId], references: [id], onDelete: SetNull)
+  quantity      Float
+  requestedBy   String
+  approvedBy    String?
+  blocked_by    BlockedBy?
+  status        String    @default("PENDING") // PENDING | APPROVED | REJECTED | CONFIRMED | EXPIRED | CANCELLED | RELEASED
+  remarks       String?
+  approvalRoute String    @default("DIRECT") // DIRECT | INCHARGE
+  createdAt     DateTime  @default(now())
+  approvedAt    DateTime?
+  expiresAt     DateTime?
+  confirmedAt   DateTime?
+  releasedAt    DateTime?
+  deliveredAt   DateTime?
 
   @@index([inventoryId])
   @@index([productId])
   @@index([dealerId])
   @@index([warehouseId])
   @@index([status])
+  @@index([expiresAt])
 }
 
 model InventoryMovement {
@@ -1290,6 +1322,8 @@ model StockBooking {
   @@index([warehouseId])
   @@index([status])
   @@index([bookingNumber])
+  @@index([createdAt])
+  @@index([expiresAt])
 }
 
 model StockBookingItem {
@@ -1309,4 +1343,53 @@ model StockBookingItem {
 
   @@index([bookingId])
   @@index([productId])
+}
+
+model Notification {
+  id         String    @id @default(cuid())
+  userId     String    @map("user_id")
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type       String    // BOOKING_CREATED, BLOCK_APPROVED, etc.
+  title      String
+  message    String
+  priority   String    @default("NORMAL") // LOW | NORMAL | HIGH | URGENT
+  data       Json?     // Navigation metadata, e.g. { bookingId: "..." }
+  isRead     Boolean   @default(false) @map("is_read")
+  readAt     DateTime? @map("read_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  expiresAt  DateTime? @map("expires_at")
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+}
+
+model Announcement {
+  id             String                 @id @default(cuid())
+  createdById    String                 @map("created_by_id")
+  createdBy      User                   @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  title          String
+  message        String
+  priority       String                 @default("NORMAL") // LOW | NORMAL | HIGH | URGENT
+  audienceType   String                 @map("audience_type") // ALL | DEALERS | MANAGERS | SHOWROOM_STAFF | SHOWROOM_INCHARGE | VIEWERS | SPECIFIC_DEALER | SPECIFIC_SHOWROOM | SPECIFIC_WAREHOUSE | SPECIFIC_USER
+  audienceFilter String?                @map("audience_filter") // Target ID if targeted audience
+  createdAt      DateTime               @default(now()) @map("created_at")
+  scheduledAt    DateTime?              @map("scheduled_at")
+  expiresAt      DateTime?              @map("expires_at")
+  status         String                 @default("SENT") // SENT | SCHEDULED | EXPIRED
+  recipients     AnnouncementRecipient[]
+}
+
+model AnnouncementRecipient {
+  id             String       @id @default(cuid())
+  announcementId String       @map("announcement_id")
+  announcement   Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  userId         String       @map("user_id")
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveredAt    DateTime?    @map("delivered_at")
+  readAt         DateTime?    @map("read_at")
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([announcementId])
 }

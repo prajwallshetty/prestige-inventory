@@ -31,6 +31,8 @@ export async function getInventoryList({
   stockStatus,
   page = 1,
   limit = 20,
+  userRole,
+  warehouseId,
 }: {
   search?: string;
   brandId?: string;
@@ -38,6 +40,8 @@ export async function getInventoryList({
   stockStatus?: string;
   page?: number;
   limit?: number;
+  userRole?: string;
+  warehouseId?: string;
 }) {
   const skip = (page - 1) * limit;
 
@@ -47,6 +51,13 @@ export async function getInventoryList({
 
   if (brandId) whereCondition.brandId = brandId;
   if (categoryId) whereCondition.categoryId = categoryId;
+
+  // Restrict to warehouse if specified (Warehouse Manager isolation)
+  if (warehouseId) {
+    whereCondition.inventory = {
+      warehouseId: warehouseId,
+    };
+  }
 
   if (search) {
     whereCondition.OR = [
@@ -66,6 +77,12 @@ export async function getInventoryList({
         inventory: {
           include: {
             warehouse: { select: { id: true, name: true, code: true } },
+            stockBlocks: {
+              where: {
+                status: { in: ["APPROVED", "PENDING"] },
+              },
+              orderBy: { createdAt: "desc" },
+            },
           },
         },
       },
@@ -88,6 +105,7 @@ export async function getInventoryList({
       reorderLevel: 0,
       stockStatus: "OUT_OF_STOCK",
       warehouse: { name: "Main Central Depot", code: "MAIN-DEPOT", id: "" },
+      stockBlocks: [],
     };
 
     let calculatedStatus = inv.stockStatus;
@@ -99,6 +117,9 @@ export async function getInventoryList({
       calculatedStatus = "AVAILABLE";
     }
 
+    const isDealer = userRole === "DEALER";
+
+    // Strip internal attributes if role is DEALER
     return {
       id: p.id,
       sku: p.sku || p.productCode || p.id.slice(-6).toUpperCase(),
@@ -106,17 +127,33 @@ export async function getInventoryList({
       size: p.size || "Standard",
       brandName: p.brand?.name || "Unbranded",
       categoryName: p.category?.name || "General",
-      lifestyleImage: p.lifestyleImage || p.textureImage || null,
+      image_key: p.image_key,
+      thumbnail_key: p.thumbnail_key,
+      lifestyleImage: p.lifestyleImage,
+      textureImage: p.textureImage,
       availableStock: inv.availableStock,
-      blockedStock: inv.blockedStock,
-      allocatedStock: inv.allocatedStock,
+      
+      // Stripped attributes for dealers
+      blockedStock: isDealer ? 0 : inv.blockedStock,
+      allocatedStock: isDealer ? 0 : inv.allocatedStock,
       transitStock: inv.transitStock,
-      damagedStock: inv.damagedStock,
-      minimumStock: inv.minimumStock,
-      reorderLevel: inv.reorderLevel,
+      damagedStock: isDealer ? 0 : inv.damagedStock,
+      minimumStock: isDealer ? 0 : inv.minimumStock,
+      reorderLevel: isDealer ? 0 : inv.reorderLevel,
       status: calculatedStatus,
       warehouseName: inv.warehouse?.name || "Main Central Depot",
       inventoryId: p.inventory?.id || null,
+      
+      // Strip blocks list detail for dealers
+      activeBlocks: isDealer ? [] : (inv.stockBlocks || []).map((sb) => ({
+        id: sb.id,
+        quantity: sb.quantity,
+        status: sb.status,
+        requestedBy: sb.requestedBy,
+        blocked_by: null, // strip controller ID
+        remarks: null,    // strip internal remarks
+        createdAt: sb.createdAt,
+      })),
     };
   });
 

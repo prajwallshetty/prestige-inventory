@@ -18,9 +18,18 @@ export default async function InventoryPage({
   const stockStatus = typeof params.status === "string" ? params.status : "";
   const page = parseInt(typeof params.page === "string" ? params.page : "1");
 
-  const [session, inventoryData, brands, categories] = await Promise.all([
-    getSessionContext(),
-    getInventoryList({ search, brandId, categoryId, stockStatus, page }),
+  const session = await getSessionContext();
+
+  const [inventoryData, brands, categories] = await Promise.all([
+    getInventoryList({
+      search,
+      brandId,
+      categoryId,
+      stockStatus,
+      page,
+      userRole: session.role,
+      warehouseId: session.role === "MANAGER" ? session.warehouseId : undefined,
+    }),
     db.brand.findMany({ select: { id: true, name: true } }),
     db.category.findMany({ select: { id: true, name: true } }),
   ]);

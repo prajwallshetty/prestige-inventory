@@ -29,8 +29,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
-      <body className="bg-[#050811] text-slate-100 antialiased font-sans">
+    <html lang="en">
+      <body className="bg-[#F7F7F5] text-[#111111] antialiased font-sans">
         <PWARegister />
         <CommandSearch />
         {children}

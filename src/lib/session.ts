@@ -1,11 +1,17 @@
 import { cookies } from "next/headers";
+import { getEffectiveSession, SessionPayload } from "./auth";
 
-export type UserRole = "SUPER_ADMIN" | "WAREHOUSE_MANAGER" | "DEALER" | "VIEWER";
+export type UserRole = "SUPER_ADMIN" | "MANAGER" | "VIEWER" | "SHOWROOM_INCHARGE" | "SHOWROOM_STAFF" | "DEALER";
 
 export interface SessionContext {
   role: UserRole;
   dealerId?: string;
   warehouseId?: string;
+  showroomId?: string;
+  userId?: string;
+  email?: string;
+  name?: string;
+  isPreview?: boolean;
 }
 
 export async function getSessionContext(): Promise<SessionContext> {
@@ -19,48 +25,38 @@ export async function getSessionContext(): Promise<SessionContext> {
     };
     
     return {
-      role: (getCookie("prestige_role") as UserRole) || "SUPER_ADMIN",
+      role: (getCookie("prestige_role") as UserRole) || "VIEWER",
       dealerId: getCookie("prestige_dealer_id"),
       warehouseId: getCookie("prestige_warehouse_id"),
+      showroomId: getCookie("prestige_showroom_id"),
     };
   }
 
   // Server-side context
   try {
+    const session = await getEffectiveSession();
+    if (session) {
+      return {
+        role: session.role as UserRole,
+        dealerId: session.dealerId,
+        warehouseId: session.warehouseId,
+        showroomId: session.showroomId,
+        userId: session.userId,
+        email: session.email,
+        name: session.name,
+        isPreview: session.isPreview,
+      };
+    }
+    
+    // Fallback if headers/cookies are unavailable during static render
     const cookieStore = await cookies();
-    const role = (cookieStore.get("prestige_role")?.value as UserRole) || "SUPER_ADMIN";
+    const role = (cookieStore.get("prestige_role")?.value as UserRole) || "VIEWER";
     const dealerId = cookieStore.get("prestige_dealer_id")?.value || undefined;
     const warehouseId = cookieStore.get("prestige_warehouse_id")?.value || undefined;
+    const showroomId = cookieStore.get("prestige_showroom_id")?.value || undefined;
 
-    return { role, dealerId, warehouseId };
+    return { role, dealerId, warehouseId, showroomId };
   } catch (err) {
-    // Fallback if headers/cookies are unavailable during static render
-    return { role: "SUPER_ADMIN" };
-  }
-}
-
-export async function setSessionContext(context: Partial<SessionContext>) {
-  if (typeof window !== "undefined") {
-    if (context.role) {
-      document.cookie = `prestige_role=${context.role}; path=/; max-age=31536000; SameSite=Lax`;
-    }
-    if (context.dealerId !== undefined) {
-      document.cookie = `prestige_dealer_id=${context.dealerId}; path=/; max-age=31536000; SameSite=Lax`;
-    }
-    if (context.warehouseId !== undefined) {
-      document.cookie = `prestige_warehouse_id=${context.warehouseId}; path=/; max-age=31536000; SameSite=Lax`;
-    }
-    return;
-  }
-
-  const cookieStore = await cookies();
-  if (context.role) {
-    cookieStore.set("prestige_role", context.role, { path: "/", maxAge: 31536000 });
-  }
-  if (context.dealerId !== undefined) {
-    cookieStore.set("prestige_dealer_id", context.dealerId, { path: "/", maxAge: 31536000 });
-  }
-  if (context.warehouseId !== undefined) {
-    cookieStore.set("prestige_warehouse_id", context.warehouseId, { path: "/", maxAge: 31536000 });
+    return { role: "VIEWER" };
   }
 }

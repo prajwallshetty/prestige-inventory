@@ -48,7 +48,10 @@ export default async function NewBookingPage() {
       size: p.size || "Std",
       brandName: p.brand?.name || "Unbranded",
       categoryName: p.category?.name || "General",
-      image: p.lifestyleImage || p.textureImage || "",
+      image_key: p.image_key,
+      thumbnail_key: p.thumbnail_key,
+      lifestyleImage: p.lifestyleImage,
+      textureImage: p.textureImage,
       availableStock: inv.availableStock,
       transitStock: inv.transitStock,
       warehouseId: inv.warehouseId || "",
@@ -60,14 +63,14 @@ export default async function NewBookingPage() {
     <SidebarLayout>
       <div className="space-y-6">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white">Create New Stock Reservation</h1>
-          <p className="text-xs text-slate-400">
+          <h1 className="text-2xl font-bold tracking-tight text-[#111111]">Create New Stock Reservation</h1>
+          <p className="text-xs text-[#6B6B6B]">
             Select products and quantities to request warehouse stock reservations. Multi-product requests are supported.
           </p>
         </div>
 
         <NewBookingClient 
-          products={serializedProducts} 
+          products={serializedProducts as any} 
           warehouses={warehouses} 
           session={session} 
         />
