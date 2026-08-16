@@ -1,4 +1,3 @@
-import { SidebarLayout } from "@/components/layout/SidebarLayout";
 import { db } from "@/lib/db";
 
 export const revalidate = 0;
@@ -13,7 +12,7 @@ export default async function InTransitPage() {
   });
 
   return (
-    <SidebarLayout>
+    <>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
@@ -67,6 +66,6 @@ export default async function InTransitPage() {
           </table>
         </div>
       </div>
-    </SidebarLayout>
+    </>
   );
 }

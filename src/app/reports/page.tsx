@@ -1,6 +1,5 @@
-import { SidebarLayout } from "@/components/layout/SidebarLayout";
 import { db } from "@/lib/db";
-import { ReportsClient } from "./ReportsClient";
+import { ReportsClient } from "@/app/reports/ReportsClient";
 
 export const revalidate = 0;
 
@@ -13,7 +12,7 @@ export default async function ReportsPage() {
   ]);
 
   return (
-    <SidebarLayout>
+    <>
       <div className="space-y-6">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-white">Inventory Reports & Export</h1>
@@ -29,6 +28,6 @@ export default async function ReportsPage() {
           movements={movements}
         />
       </div>
-    </SidebarLayout>
+    </>
   );
 }

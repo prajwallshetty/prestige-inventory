@@ -1,12 +1,14 @@
 "use client";
 
-import React, { useState } from "react";
-import { 
-  approveBlockAction, 
-  releaseBlockAction, 
-  rejectBlockAction, 
-  confirmBlockAction, 
-  deliverBlockAction 
+import React, { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import {
+  approveBlockAction,
+  releaseBlockAction,
+  rejectBlockAction,
+  confirmBlockAction,
+  deliverBlockAction
 } from "@/app/actions";
 import { 
   Check, 
@@ -27,6 +29,8 @@ interface BlocksClientListProps {
 }
 
 export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
+  const router = useRouter();
+  const [isRefreshing, startTransition] = useTransition();
   const [loadingMap, setLoadingMap] = useState<Record<string, boolean>>({});
   const [selectedBlockDetail, setSelectedBlockDetail] = useState<any | null>(null);
 
@@ -48,8 +52,18 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
     if (!activeAction) return;
 
     const { block, type } = activeAction;
+    // Guard: ignore a second submit while this block's action is in flight.
+    if (loadingMap[block.id]) return;
+
     setLoadingMap((prev) => ({ ...prev, [block.id]: true }));
     setActiveAction(null);
+
+    const verb =
+      type === "APPROVE" ? "approved"
+      : type === "REJECT" ? "rejected"
+      : type === "DELIVER" ? "dispatched"
+      : type === "RELEASE" ? "released"
+      : "updated";
 
     try {
       if (type === "APPROVE") {
@@ -64,9 +78,12 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
         // Admin override can adjust quantity or status
         await approveBlockAction(block.id, qtyInput);
       }
-      window.location.reload();
+      toast.success(`Block ${block.block_number || block.id.slice(-8)} ${verb}.`);
+      // Re-fetch server data in place. A full window reload here discarded the
+      // whole shell and re-paid every query — expensive given remote-DB latency.
+      startTransition(() => router.refresh());
     } catch (err: any) {
-      alert(`Operation failed: ${err.message}`);
+      toast.error(`Operation failed: ${err.message}`);
     } finally {
       setLoadingMap((prev) => ({ ...prev, [block.id]: false }));
     }
@@ -79,27 +96,31 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
   };
 
   const handleCancelStaff = async (id: string) => {
+    if (loadingMap[id]) return;
     const confirmMsg = "Are you sure you want to cancel this pending block reservation?";
     if (!confirm(confirmMsg)) return;
 
     setLoadingMap((prev) => ({ ...prev, [id]: true }));
     try {
       await rejectBlockAction(id, "Cancelled by requesting staff member.");
-      window.location.reload();
+      toast.success("Reservation cancelled.");
+      startTransition(() => router.refresh());
     } catch (err: any) {
-      alert(`Cancellation failed: ${err.message}`);
+      toast.error(`Cancellation failed: ${err.message}`);
     } finally {
       setLoadingMap((prev) => ({ ...prev, [id]: false }));
     }
   };
 
   const handleConfirmDealer = async (id: string) => {
+    if (loadingMap[id]) return;
     setLoadingMap((prev) => ({ ...prev, [id]: true }));
     try {
       await confirmBlockAction(id);
-      window.location.reload();
+      toast.success("Booking confirmed.");
+      startTransition(() => router.refresh());
     } catch (err: any) {
-      alert(`Confirmation failed: ${err.message}`);
+      toast.error(`Confirmation failed: ${err.message}`);
     } finally {
       setLoadingMap((prev) => ({ ...prev, [id]: false }));
     }
@@ -239,6 +260,7 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
                             <button
                               onClick={() => openActionDialog(block, "APPROVE")}
                               disabled={loadingMap[block.id]}
+                              aria-busy={loadingMap[block.id]}
                               className="rounded-lg bg-emerald-600 px-2 py-1 text-[10px] font-black text-white hover:bg-emerald-500 transition-all touch-target"
                             >
                               Approve Hold
@@ -246,6 +268,7 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
                             <button
                               onClick={() => openActionDialog(block, "REJECT")}
                               disabled={loadingMap[block.id]}
+                              aria-busy={loadingMap[block.id]}
                               className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-black text-rose-700 hover:bg-rose-600 hover:text-white transition-all touch-target"
                             >
                               Reject
@@ -259,6 +282,7 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
                             <button
                               onClick={() => openActionDialog(block, "APPROVE")}
                               disabled={loadingMap[block.id]}
+                              aria-busy={loadingMap[block.id]}
                               className="rounded-lg bg-emerald-600 px-2 py-1 text-[10px] font-black text-white hover:bg-emerald-500 transition-all touch-target"
                             >
                               Approve
@@ -266,6 +290,7 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
                             <button
                               onClick={() => openActionDialog(block, "REJECT")}
                               disabled={loadingMap[block.id]}
+                              aria-busy={loadingMap[block.id]}
                               className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-black text-rose-700 hover:bg-rose-600 hover:text-white transition-all touch-target"
                             >
                               Reject
@@ -278,6 +303,7 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
                           <button
                             onClick={() => handleConfirmDealer(block.id)}
                             disabled={loadingMap[block.id]}
+                              aria-busy={loadingMap[block.id]}
                             className="rounded-lg bg-[#F2C202] px-2.5 py-1 text-[10px] font-black text-white hover:bg-[#D8AD02] transition-all touch-target shadow-xs"
                           >
                             Confirm Booking
@@ -289,6 +315,7 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
                           <button
                             onClick={() => handleCancelStaff(block.id)}
                             disabled={loadingMap[block.id]}
+                              aria-busy={loadingMap[block.id]}
                             className="rounded-lg border border-[#EAEAEA] bg-white px-2 py-1 text-[10px] font-bold text-[#6B6B6B] hover:bg-[#F7F7F5] transition-all touch-target"
                           >
                             Cancel Request
@@ -300,6 +327,7 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
                           <button
                             onClick={() => openActionDialog(block, "DELIVER")}
                             disabled={loadingMap[block.id]}
+                              aria-busy={loadingMap[block.id]}
                             className="rounded-lg bg-blue-600 px-2.5 py-1 text-[10px] font-black text-white hover:bg-blue-500 transition-all touch-target flex items-center gap-1"
                           >
                             <Truck className="h-3 w-3" /> Dispatch Stock
@@ -311,6 +339,7 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
                           <button
                             onClick={() => openActionDialog(block, "RELEASE")}
                             disabled={loadingMap[block.id]}
+                              aria-busy={loadingMap[block.id]}
                             className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-bold text-slate-700 hover:bg-slate-200 transition-all touch-target"
                           >
                             Release Hold
@@ -322,6 +351,7 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
                           <button
                             onClick={() => openActionDialog(block, "OVERRIDE")}
                             disabled={loadingMap[block.id]}
+                              aria-busy={loadingMap[block.id]}
                             className="rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-[10px] font-bold text-amber-800 hover:bg-amber-100 transition-all touch-target"
                             title="Force Admin Override"
                           >

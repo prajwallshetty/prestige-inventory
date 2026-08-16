@@ -669,15 +669,43 @@ export async function broadcastAnnouncementAction(payload: {
   priority: "LOW" | "NORMAL" | "HIGH" | "URGENT";
   audienceType: string;
   audienceFilter?: string | null;
+  /** ISO strings from the composer; empty/absent means send now / never expire. */
+  scheduledAt?: string | null;
+  expiresAt?: string | null;
 }) {
   const { createAnnouncement } = await import("@/services/NotificationService");
   const session = await getEffectiveSession();
   if (!session || (session.role !== "SUPER_ADMIN" && session.role !== "MANAGER")) {
     throw new Error("Unauthorized: Only Super Admin and Managers can broadcast announcements.");
   }
-  return await createAnnouncement({
+
+  const { scheduledAt, expiresAt, ...rest } = payload;
+  const scheduled = scheduledAt ? new Date(scheduledAt) : null;
+  const expires = expiresAt ? new Date(expiresAt) : null;
+
+  if (scheduled && Number.isNaN(scheduled.getTime())) throw new Error("Invalid schedule date.");
+  if (expires && Number.isNaN(expires.getTime())) throw new Error("Invalid expiry date.");
+  if (scheduled && expires && expires <= scheduled) {
+    throw new Error("Expiry must be after the scheduled send time.");
+  }
+
+  const result = await createAnnouncement({
     createdById: session.userId,
-    ...payload,
+    ...rest,
+    scheduledAt: scheduled,
+    expiresAt: expires,
   });
+  revalidatePath("/admin/announcements");
+  revalidatePath("/warehouse/announcements");
+  return result;
+}
+
+export async function getAnnouncementsHistoryAction(limit = 20) {
+  const { getAnnouncementsHistory } = await import("@/services/NotificationService");
+  const session = await getEffectiveSession();
+  if (!session || (session.role !== "SUPER_ADMIN" && session.role !== "MANAGER")) {
+    return [];
+  }
+  return await getAnnouncementsHistory(limit);
 }
 

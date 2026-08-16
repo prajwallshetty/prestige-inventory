@@ -1,27 +1,77 @@
-import { SidebarLayout } from "@/components/layout/SidebarLayout";
 import { getInventorySummary } from "@/services/InventoryService";
 import { getSessionContext } from "@/lib/session";
 import { db } from "@/lib/db";
-import { DashboardClient } from "./DashboardClient";
+import { DashboardClient } from "@/app/dashboard/DashboardClient";
 
 export const revalidate = 0; // Dynamic server-side rendering
 
 export default async function DashboardPage() {
+  // Session is cookie-only (no DB round trip), so it can gate the dealer
+  // queries without costing latency.
   const session = await getSessionContext();
-  const summary = await getInventorySummary();
+  const isDealer = session.role === "DEALER" && !!session.dealerId;
 
-  // Fetch recent stock movements
-  const recentMovements = await db.inventoryMovement.findMany({
-    take: 8,
-    orderBy: { createdAt: "desc" },
-    include: {
-      inventory: {
-        include: {
-          product: { select: { name: true, sku: true, size: true } },
+  // Every independent read goes out in ONE parallel batch. The database is
+  // geographically remote (~1.5s per round trip), so awaiting these in
+  // sequence costs seconds of pure network wait — parallel is ~7x faster.
+  const [
+    summary,
+    recentMovements,
+    pendingBlocks,
+    dealerBookingsRaw,
+    dealerPending,
+    dealerAwaiting,
+    dealerConfirmed,
+    dealerItemsSum,
+  ] = await Promise.all([
+    getInventorySummary(),
+    db.inventoryMovement.findMany({
+      take: 8,
+      orderBy: { createdAt: "desc" },
+      include: {
+        inventory: {
+          include: {
+            product: { select: { name: true, sku: true, size: true } },
+          },
         },
       },
-    },
-  });
+    }),
+    db.stockBlock.findMany({
+      where: { status: "PENDING" },
+      take: 5,
+      include: {
+        dealer: { select: { name: true, company: true } },
+      },
+    }),
+    isDealer
+      ? db.stockBooking.findMany({
+          where: { dealerId: session.dealerId },
+          orderBy: { requestedAt: "desc" },
+          take: 5,
+          include: { items: { select: { requestedQuantity: true } } },
+        })
+      : Promise.resolve([]),
+    isDealer
+      ? db.stockBooking.count({ where: { dealerId: session.dealerId, status: "PENDING_APPROVAL" } })
+      : Promise.resolve(0),
+    isDealer
+      ? db.stockBooking.count({ where: { dealerId: session.dealerId, status: "AWAITING_DEALER_CONFIRMATION" } })
+      : Promise.resolve(0),
+    isDealer
+      ? db.stockBooking.count({ where: { dealerId: session.dealerId, status: "CONFIRMED" } })
+      : Promise.resolve(0),
+    isDealer
+      ? db.stockBookingItem.aggregate({
+          where: {
+            booking: {
+              dealerId: session.dealerId,
+              status: { in: ["APPROVED", "AWAITING_DEALER_CONFIRMATION", "CONFIRMED", "ALLOCATED", "FULFILLED"] },
+            },
+          },
+          _sum: { approvedQuantity: true },
+        })
+      : Promise.resolve(null),
+  ]);
 
   // Serialize movements dates
   const serializedMovements = recentMovements.map((m) => ({
@@ -40,15 +90,6 @@ export default async function DashboardPage() {
     } : null
   }));
 
-  // Fetch active pending blocks (for manager alerts)
-  const pendingBlocks = await db.stockBlock.findMany({
-    where: { status: "PENDING" },
-    take: 5,
-    include: {
-      dealer: { select: { name: true, company: true } },
-    },
-  });
-
   const serializedPendingBlocks = pendingBlocks.map((b) => ({
     id: b.id,
     quantity: b.quantity,
@@ -61,56 +102,27 @@ export default async function DashboardPage() {
     } : null
   }));
 
-  // Dealer portal metrics
-  let dealerBookings: any[] = [];
-  let dealerSummary = { pendingCount: 0, awaitingConfirmCount: 0, confirmedCount: 0, totalBoxes: 0 };
+  // Dealer portal metrics — the underlying queries already ran in the batch
+  // above (resolving to empty/zero for non-dealers), so this is pure shaping.
+  const dealerBookings = dealerBookingsRaw.map((b) => ({
+    id: b.id,
+    bookingNumber: b.bookingNumber,
+    status: b.status,
+    requestedAt: b.requestedAt.toISOString(),
+    items: b.items.map((i) => ({
+      requestedQuantity: i.requestedQuantity,
+    })),
+  }));
 
-  if (session.role === "DEALER" && session.dealerId) {
-    const bookings = await db.stockBooking.findMany({
-      where: { dealerId: session.dealerId },
-      orderBy: { requestedAt: "desc" },
-      take: 5,
-      include: {
-        items: { select: { requestedQuantity: true } }
-      }
-    });
-
-    dealerBookings = bookings.map((b) => ({
-      id: b.id,
-      bookingNumber: b.bookingNumber,
-      status: b.status,
-      requestedAt: b.requestedAt.toISOString(),
-      items: b.items.map((i) => ({
-        requestedQuantity: i.requestedQuantity
-      }))
-    }));
-
-    const [pending, awaiting, confirmed] = await Promise.all([
-      db.stockBooking.count({ where: { dealerId: session.dealerId, status: "PENDING_APPROVAL" } }),
-      db.stockBooking.count({ where: { dealerId: session.dealerId, status: "AWAITING_DEALER_CONFIRMATION" } }),
-      db.stockBooking.count({ where: { dealerId: session.dealerId, status: "CONFIRMED" } }),
-    ]);
-
-    const itemsSum = await db.stockBookingItem.aggregate({
-      where: { 
-        booking: { 
-          dealerId: session.dealerId, 
-          status: { in: ["APPROVED", "AWAITING_DEALER_CONFIRMATION", "CONFIRMED", "ALLOCATED", "FULFILLED"] } 
-        } 
-      },
-      _sum: { approvedQuantity: true }
-    });
-
-    dealerSummary = {
-      pendingCount: pending,
-      awaitingConfirmCount: awaiting,
-      confirmedCount: confirmed,
-      totalBoxes: itemsSum._sum.approvedQuantity || 0
-    };
-  }
+  const dealerSummary = {
+    pendingCount: dealerPending,
+    awaitingConfirmCount: dealerAwaiting,
+    confirmedCount: dealerConfirmed,
+    totalBoxes: dealerItemsSum?._sum.approvedQuantity || 0,
+  };
 
   return (
-    <SidebarLayout>
+    <>
       <DashboardClient
         summary={summary}
         recentMovements={serializedMovements}
@@ -119,6 +131,6 @@ export default async function DashboardPage() {
         dealerSummary={dealerSummary}
         session={session}
       />
-    </SidebarLayout>
+    </>
   );
 }

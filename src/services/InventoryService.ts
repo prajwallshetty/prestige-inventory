@@ -1,26 +1,32 @@
 import { db } from "@/lib/db";
 
 export async function getInventorySummary() {
-  const [totalProducts, availableStock, blockedStock, transitStock, lowStockCount, outOfStockCount, activeBlocks, pendingBlocks] = await Promise.all([
+  // Collapsed from 8 round trips to 4. The three stock sums share one
+  // aggregate, and the per-status counts become groupBy rollups. Round-trip
+  // latency dominates here, so query *count* matters more than query shape.
+  const [totalProducts, stockTotals, inventoryByStatus, blocksByStatus] = await Promise.all([
     db.product.count({ where: { deletedAt: null } }),
-    db.inventory.aggregate({ _sum: { availableStock: true } }),
-    db.inventory.aggregate({ _sum: { blockedStock: true } }),
-    db.inventory.aggregate({ _sum: { transitStock: true } }),
-    db.inventory.count({ where: { stockStatus: "LOW_STOCK" } }),
-    db.inventory.count({ where: { stockStatus: "OUT_OF_STOCK" } }),
-    db.stockBlock.count({ where: { status: "APPROVED" } }),
-    db.stockBlock.count({ where: { status: "PENDING" } }),
+    db.inventory.aggregate({
+      _sum: { availableStock: true, blockedStock: true, transitStock: true },
+    }),
+    db.inventory.groupBy({ by: ["stockStatus"], _count: { _all: true } }),
+    db.stockBlock.groupBy({ by: ["status"], _count: { _all: true } }),
   ]);
+
+  const inventoryCount = (status: string) =>
+    inventoryByStatus.find((r) => r.stockStatus === status)?._count._all ?? 0;
+  const blockCount = (status: string) =>
+    blocksByStatus.find((r) => r.status === status)?._count._all ?? 0;
 
   return {
     totalProducts,
-    totalAvailableStock: availableStock._sum.availableStock || 0,
-    totalBlockedStock: blockedStock._sum.blockedStock || 0,
-    totalInTransit: transitStock._sum.transitStock || 0,
-    lowStock: lowStockCount,
-    outOfStock: outOfStockCount,
-    activeBlocks,
-    pendingBlocks,
+    totalAvailableStock: stockTotals._sum.availableStock || 0,
+    totalBlockedStock: stockTotals._sum.blockedStock || 0,
+    totalInTransit: stockTotals._sum.transitStock || 0,
+    lowStock: inventoryCount("LOW_STOCK"),
+    outOfStock: inventoryCount("OUT_OF_STOCK"),
+    activeBlocks: blockCount("APPROVED"),
+    pendingBlocks: blockCount("PENDING"),
   };
 }
 
@@ -52,10 +58,11 @@ export async function getInventoryList({
   if (brandId) whereCondition.brandId = brandId;
   if (categoryId) whereCondition.categoryId = categoryId;
 
-  // Restrict to warehouse if specified (Warehouse Manager isolation)
-  if (warehouseId) {
+  // Restrict to warehouse or stock status if specified
+  if (warehouseId || stockStatus) {
     whereCondition.inventory = {
-      warehouseId: warehouseId,
+      ...(warehouseId ? { warehouseId } : {}),
+      ...(stockStatus ? { stockStatus } : {}),
     };
   }
 
@@ -71,17 +78,44 @@ export async function getInventoryList({
   const [products, total] = await Promise.all([
     db.product.findMany({
       where: whereCondition,
-      include: {
+      // `select`, not `include` — the mapper below uses ~12 fields, while
+      // `include` dragged every Product column plus full Inventory rows and
+      // unbounded StockBlock history into the RSC payload for every row.
+      select: {
+        id: true,
+        name: true,
+        sku: true,
+        productCode: true,
+        size: true,
+        image_key: true,
+        thumbnail_key: true,
+        lifestyleImage: true,
+        textureImage: true,
         brand: { select: { id: true, name: true } },
         category: { select: { id: true, name: true } },
         inventory: {
-          include: {
+          select: {
+            id: true,
+            availableStock: true,
+            blockedStock: true,
+            allocatedStock: true,
+            damagedStock: true,
+            transitStock: true,
+            minimumStock: true,
+            reorderLevel: true,
+            stockStatus: true,
             warehouse: { select: { id: true, name: true, code: true } },
             stockBlocks: {
-              where: {
-                status: { in: ["APPROVED", "PENDING"] },
-              },
+              where: { status: { in: ["APPROVED", "PENDING"] } },
               orderBy: { createdAt: "desc" },
+              take: 5,
+              select: {
+                id: true,
+                quantity: true,
+                status: true,
+                requestedBy: true,
+                createdAt: true,
+              },
             },
           },
         },

@@ -1,0 +1,79 @@
+{
+  "generatedAt": "2026-08-16T15:12:35.360Z",
+  "sourceFile": "E:\\growthbridge\\prestige-inv\\data\\prestige-products.json",
+  "fileHash": "63da7e1d765e0af84d849c8d2c70614ae245f7429f0660b803e73fa3d2882bb3",
+  "mode": "OPENING_INVENTORY",
+  "dryRun": false,
+  "totalRecords": 1124,
+  "created": 0,
+  "updated": 1124,
+  "skipped": 0,
+  "warnings": 7,
+  "errors": 0,
+  "inventoryCreated": 0,
+  "inventoryPreserved": 1124,
+  "missingImages": 1124,
+  "ignoredSourceColumns": [
+    "Unnamed: 29",
+    "Sanitaryware / bathroom"
+  ],
+  "issues": [
+    {
+      "row": 70,
+      "productNumber": "METRO-0070",
+      "productName": "200X1000 15240",
+      "issue": "Physical Stock of 15240 boxes is unusually large — verify this isn't a data entry error.",
+      "severity": "WARNING",
+      "suggestedFix": "Confirm the true opening box count against the physical warehouse count."
+    },
+    {
+      "row": 71,
+      "productNumber": "METRO-0071",
+      "productName": "200X1000 15247",
+      "issue": "Physical Stock of 15247 boxes is unusually large — verify this isn't a data entry error.",
+      "severity": "WARNING",
+      "suggestedFix": "Confirm the true opening box count against the physical warehouse count."
+    },
+    {
+      "row": 73,
+      "productNumber": "METRO-0073",
+      "productName": "200X1000 15249",
+      "issue": "Physical Stock of 15249 boxes is unusually large — verify this isn't a data entry error.",
+      "severity": "WARNING",
+      "suggestedFix": "Confirm the true opening box count against the physical warehouse count."
+    },
+    {
+      "row": 72,
+      "productNumber": "METRO-0072",
+      "productName": "200X1000 15256",
+      "issue": "Physical Stock of 15256 boxes is unusually large — verify this isn't a data entry error.",
+      "severity": "WARNING",
+      "suggestedFix": "Confirm the true opening box count against the physical warehouse count."
+    },
+    {
+      "row": 74,
+      "productNumber": "METRO-0074",
+      "productName": "200X1000 15261",
+      "issue": "Physical Stock of 15261 boxes is unusually large — verify this isn't a data entry error.",
+      "severity": "WARNING",
+      "suggestedFix": "Confirm the true opening box count against the physical warehouse count."
+    },
+    {
+      "row": 75,
+      "productNumber": "METRO-0075",
+      "productName": "200X1000 20155",
+      "issue": "Physical Stock of 20155 boxes is unusually large — verify this isn't a data entry error.",
+      "severity": "WARNING",
+      "suggestedFix": "Confirm the true opening box count against the physical warehouse count."
+    },
+    {
+      "row": 76,
+      "productNumber": "METRO-0076",
+      "productName": "200X1000 615355",
+      "issue": "Physical Stock of 615355 boxes is unusually large — verify this isn't a data entry error.",
+      "severity": "WARNING",
+      "suggestedFix": "Confirm the true opening box count against the physical warehouse count."
+    }
+  ],
+  "durationMs": 460955
+}

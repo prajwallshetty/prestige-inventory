@@ -1,16 +1,16 @@
-import { SidebarLayout } from "@/components/layout/SidebarLayout";
 import { getSessionContext } from "@/lib/session";
+import { NotificationPreferencesForm } from "@/components/notifications/NotificationPreferencesForm";
 
 export default async function SettingsPage() {
   const session = await getSessionContext();
 
   return (
-    <SidebarLayout>
+    <>
       <div className="space-y-6 max-w-2xl">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-[#111111]">Portal Settings</h1>
           <p className="text-xs text-[#6B6B6B]">
-            Configure your B2B account profile, security passwords, and session tokens.
+            Configure your B2B account profile, notification alerts, and security settings.
           </p>
         </div>
 
@@ -48,6 +48,9 @@ export default async function SettingsPage() {
           </div>
         </div>
 
+        {/* Notification Preferences */}
+        <NotificationPreferencesForm />
+
         <div className="rounded-xl border border-[#EAEAEA] bg-white p-6 shadow-xs space-y-4 text-xs">
           <div>
             <h3 className="text-sm font-bold text-[#111111]">Security Settings</h3>
@@ -55,6 +58,6 @@ export default async function SettingsPage() {
           </div>
         </div>
       </div>
-    </SidebarLayout>
+    </>
   );
 }

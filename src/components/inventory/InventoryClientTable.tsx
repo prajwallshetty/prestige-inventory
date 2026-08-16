@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useEffect, useTransition } from "react";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { adjustStockAction, createBlockAction, getDealersAndWarehousesAction } from "@/app/actions";
 import { 
   Search, 
@@ -15,7 +16,12 @@ import {
   Plus, 
   Info,
   Calendar,
-  Layers
+  Layers,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  RotateCcw
 } from "lucide-react";
 import Link from "next/link";
 import { getProductThumbnailUrl, getProductImageUrl } from "@/lib/s3";
@@ -24,6 +30,10 @@ import { ShimmerImage } from "@/components/Skeleton";
 interface Props {
   initialData: {
     items: any[];
+    total?: number;
+    page?: number;
+    totalPages?: number;
+    limit?: number;
   };
   brands: any[];
   categories: any[];
@@ -35,11 +45,19 @@ interface Props {
 }
 
 export function InventoryClientTable({ initialData, brands, categories, session }: Props) {
-  const [search, setSearch] = useState("");
-  const [selectedBrand, setSelectedBrand] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("");
-  const [selectedStatus, setSelectedStatus] = useState("");
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const [isPending, startTransition] = useTransition();
 
+  const currentSearch = searchParams.get("search") || "";
+  const currentBrandId = searchParams.get("brandId") || "";
+  const currentCategoryId = searchParams.get("categoryId") || "";
+  const currentStatus = searchParams.get("status") || "";
+  const currentPage = parseInt(searchParams.get("page") || "1");
+  const currentLimit = parseInt(searchParams.get("limit") || "20");
+
+  const [search, setSearch] = useState(currentSearch);
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
   const [adjustingProduct, setAdjustingProduct] = useState<any>(null);
   const [blockingProduct, setBlockingProduct] = useState<any>(null);
@@ -48,6 +66,42 @@ export function InventoryClientTable({ initialData, brands, categories, session 
   const [dealers, setDealers] = useState<any[]>([]);
   const [showrooms, setShowrooms] = useState<any[]>([]);
   const [buttonState, setButtonState] = useState<"IDLE" | "CHECKING" | "CREATING" | "SUCCESS">("IDLE");
+
+  // Keep search input synced when URL parameters change
+  useEffect(() => {
+    setSearch(currentSearch);
+  }, [currentSearch]);
+
+  const updateFilters = (updates: Record<string, string | number | undefined>) => {
+    const params = new URLSearchParams(searchParams.toString());
+    
+    Object.entries(updates).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        params.set(key, String(value));
+      } else {
+        params.delete(key);
+      }
+    });
+
+    // Reset to page 1 unless page itself is explicitly specified
+    if (!("page" in updates)) {
+      params.set("page", "1");
+    }
+
+    startTransition(() => {
+      router.push(`${pathname}?${params.toString()}`);
+    });
+  };
+
+  // Debounced search sync to URL (queries full database server-side)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (search !== currentSearch) {
+        updateFilters({ search });
+      }
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [search]);
 
   React.useEffect(() => {
     if (session?.role === "SUPER_ADMIN" || session?.role === "MANAGER") {
@@ -61,22 +115,38 @@ export function InventoryClientTable({ initialData, brands, categories, session 
   const isDealer = session?.role === "DEALER";
   const isReadOnly = session?.role === "VIEWER";
 
-  // Filter logic
-  const filteredItems = useMemo(() => {
-    return initialData.items.filter((item) => {
-      const matchesSearch =
-        !search ||
-        item.productName.toLowerCase().includes(search.toLowerCase()) ||
-        item.sku.toLowerCase().includes(search.toLowerCase()) ||
-        item.brandName.toLowerCase().includes(search.toLowerCase());
+  const items = initialData.items || [];
+  const total = initialData.total ?? items.length;
+  const page = initialData.page ?? currentPage;
+  const totalPages = initialData.totalPages ?? Math.max(1, Math.ceil(total / currentLimit));
+  
+  const startIndex = total > 0 ? (page - 1) * currentLimit + 1 : 0;
+  const endIndex = Math.min(page * currentLimit, total);
 
-      const matchesBrand = !selectedBrand || item.brandName === selectedBrand;
-      const matchesCategory = !selectedCategory || item.categoryName === selectedCategory;
-      const matchesStatus = !selectedStatus || item.status === selectedStatus;
+  const getPageNumbers = () => {
+    const pages: (number | string)[] = [];
+    const maxVisible = 5;
 
-      return matchesSearch && matchesBrand && matchesCategory && matchesStatus;
-    });
-  }, [initialData.items, search, selectedBrand, selectedCategory, selectedStatus]);
+    if (totalPages <= maxVisible + 2) {
+      for (let i = 1; i <= totalPages; i++) pages.push(i);
+    } else {
+      pages.push(1);
+      let start = Math.max(2, page - 1);
+      let end = Math.min(totalPages - 1, page + 1);
+
+      if (page <= 3) {
+        end = 4;
+      } else if (page >= totalPages - 2) {
+        start = totalPages - 3;
+      }
+
+      if (start > 2) pages.push("...");
+      for (let i = start; i <= end; i++) pages.push(i);
+      if (end < totalPages - 1) pages.push("...");
+      pages.push(totalPages);
+    }
+    return pages;
+  };
 
   const handleActionClick = (itemId: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -92,7 +162,7 @@ export function InventoryClientTable({ initialData, brands, categories, session 
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#6B6B6B]" />
           <input
             type="text"
-            placeholder="Search catalog by SKU, name or brand..."
+            placeholder="Search catalog across all 1,100+ items by SKU, name or brand..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] py-2 pl-9 pr-4 text-xs text-[#111111] placeholder-[#6B6B6B] focus:border-[#F2C202] focus:outline-hidden"
@@ -102,37 +172,54 @@ export function InventoryClientTable({ initialData, brands, categories, session 
         {/* Dropdown Filters */}
         <div className="flex flex-wrap items-center gap-2">
           <select
-            value={selectedBrand}
-            onChange={(e) => setSelectedBrand(e.target.value)}
-            className="rounded-lg border border-[#EAEAEA] bg-white p-2 text-xs text-[#111111] focus:border-[#F2C202] focus:outline-hidden"
+            value={currentBrandId}
+            onChange={(e) => updateFilters({ brandId: e.target.value })}
+            className="rounded-lg border border-[#EAEAEA] bg-white p-2 text-xs text-[#111111] focus:border-[#F2C202] focus:outline-hidden cursor-pointer"
           >
             <option value="">All Brands</option>
             {brands.map((b) => (
-              <option key={b.id} value={b.name}>{b.name}</option>
+              <option key={b.id} value={b.id}>{b.name}</option>
             ))}
           </select>
 
           <select
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
-            className="rounded-lg border border-[#EAEAEA] bg-white p-2 text-xs text-[#111111] focus:border-[#F2C202] focus:outline-hidden"
+            value={currentCategoryId}
+            onChange={(e) => updateFilters({ categoryId: e.target.value })}
+            className="rounded-lg border border-[#EAEAEA] bg-white p-2 text-xs text-[#111111] focus:border-[#F2C202] focus:outline-hidden cursor-pointer"
           >
             <option value="">All Categories</option>
             {categories.map((c) => (
-              <option key={c.id} value={c.name}>{c.name}</option>
+              <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </select>
 
           <select
-            value={selectedStatus}
-            onChange={(e) => setSelectedStatus(e.target.value)}
-            className="rounded-lg border border-[#EAEAEA] bg-white p-2 text-xs text-[#111111] focus:border-[#F2C202] focus:outline-hidden"
+            value={currentStatus}
+            onChange={(e) => updateFilters({ status: e.target.value })}
+            className="rounded-lg border border-[#EAEAEA] bg-white p-2 text-xs text-[#111111] focus:border-[#F2C202] focus:outline-hidden cursor-pointer"
           >
             <option value="">All Statuses</option>
             <option value="AVAILABLE">Available</option>
             <option value="LOW_STOCK">Low Stock</option>
             <option value="OUT_OF_STOCK">Out of Stock</option>
+            <option value="INCOMING">Incoming</option>
+            <option value="BLOCKED">Blocked</option>
           </select>
+
+          {(currentSearch || currentBrandId || currentCategoryId || currentStatus) && (
+            <button
+              onClick={() => {
+                setSearch("");
+                startTransition(() => {
+                  router.push(pathname);
+                });
+              }}
+              className="flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-600 hover:bg-rose-100 transition-colors cursor-pointer"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Reset Filters
+            </button>
+          )}
         </div>
       </div>
 
@@ -155,7 +242,7 @@ export function InventoryClientTable({ initialData, brands, categories, session 
             </tr>
           </thead>
           <tbody className="divide-y divide-[#EAEAEA] font-medium text-[#111111]">
-            {filteredItems.map((item) => {
+            {items.map((item) => {
               // Extract unique blocked by persons from activeBlocks
               const uniqueBlockedBy = Array.from(
                 new Set(item.activeBlocks.map((b: any) => b.blocked_by).filter(Boolean))
@@ -240,7 +327,7 @@ export function InventoryClientTable({ initialData, brands, categories, session 
 
       {/* MOBILE-FIRST VIEW: PREMIUM TAP-FRIENDLY CARDS */}
       <div className="md:hidden space-y-3">
-        {filteredItems.map((item) => {
+        {items.map((item) => {
           const uniqueBlockedBy = Array.from(
             new Set(item.activeBlocks.map((b: any) => b.blocked_by).filter(Boolean))
           ) as string[];
@@ -340,6 +427,115 @@ export function InventoryClientTable({ initialData, brands, categories, session 
             </div>
           );
         })}
+      </div>
+
+      {/* EMPTY STATE */}
+      {items.length === 0 && (
+        <div className="flex flex-col items-center justify-center p-12 text-center border border-[#EAEAEA] bg-white rounded-xl space-y-3">
+          <AlertCircle className="h-10 w-10 text-amber-500" />
+          <h3 className="text-sm font-bold text-[#111111]">No Stock Items Found</h3>
+          <p className="text-xs text-[#6B6B6B] max-w-sm">
+            No products matched your current search or filter criteria. Try resetting filters or searching with a different term.
+          </p>
+          <button
+            onClick={() => {
+              setSearch("");
+              startTransition(() => {
+                router.push(pathname);
+              });
+            }}
+            className="mt-2 rounded-lg bg-[#F2C202] px-4 py-2 text-xs font-bold text-white hover:bg-[#D8AD02] cursor-pointer"
+          >
+            Clear All Filters
+          </button>
+        </div>
+      )}
+
+      {/* PAGINATION & STATS BAR */}
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-4 rounded-xl border border-[#EAEAEA] bg-white p-4 shadow-sm text-xs">
+        <div className="flex flex-wrap items-center gap-3 text-[#6B6B6B]">
+          <span>
+            Showing <strong className="text-[#111111]">{startIndex}</strong> to <strong className="text-[#111111]">{endIndex}</strong> of <strong className="text-[#111111]">{total.toLocaleString()}</strong> catalog items
+          </span>
+          <div className="hidden sm:block h-4 w-px bg-[#EAEAEA]" />
+          <div className="flex items-center gap-2">
+            <span>Per page:</span>
+            <select
+              value={currentLimit}
+              onChange={(e) => updateFilters({ limit: Number(e.target.value) })}
+              className="rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] px-2 py-1 text-xs font-bold text-[#111111] focus:border-[#F2C202] focus:outline-hidden cursor-pointer"
+            >
+              <option value="20">20</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+              <option value="250">250</option>
+              <option value="500">500</option>
+              <option value="1200">All ({total})</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Page Nav Buttons */}
+        {totalPages > 1 && (
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => updateFilters({ page: 1 })}
+              disabled={page <= 1 || isPending}
+              className="rounded-lg border border-[#EAEAEA] p-1.5 text-[#6B6B6B] hover:bg-[#F7F7F5] hover:text-[#111111] disabled:opacity-30 disabled:hover:bg-transparent cursor-pointer"
+              title="First Page"
+            >
+              <ChevronsLeft className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => updateFilters({ page: page - 1 })}
+              disabled={page <= 1 || isPending}
+              className="rounded-lg border border-[#EAEAEA] p-1.5 text-[#6B6B6B] hover:bg-[#F7F7F5] hover:text-[#111111] disabled:opacity-30 disabled:hover:bg-transparent cursor-pointer"
+              title="Previous Page"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+
+            <div className="flex items-center gap-1 px-1">
+              {getPageNumbers().map((p, idx) =>
+                typeof p === "number" ? (
+                  <button
+                    key={idx}
+                    onClick={() => updateFilters({ page: p })}
+                    disabled={isPending}
+                    className={`min-w-[32px] h-8 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      p === page
+                        ? "bg-[#F2C202] text-white font-black shadow-xs"
+                        : "border border-[#EAEAEA] bg-white text-[#6B6B6B] hover:bg-[#F7F7F5] hover:text-[#111111]"
+                    }`}
+                  >
+                    {p}
+                  </button>
+                ) : (
+                  <span key={idx} className="px-1 text-[#6B6B6B]/40 font-mono">
+                    {p}
+                  </span>
+                )
+              )}
+            </div>
+
+            <button
+              onClick={() => updateFilters({ page: page + 1 })}
+              disabled={page >= totalPages || isPending}
+              className="rounded-lg border border-[#EAEAEA] p-1.5 text-[#6B6B6B] hover:bg-[#F7F7F5] hover:text-[#111111] disabled:opacity-30 disabled:hover:bg-transparent cursor-pointer"
+              title="Next Page"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => updateFilters({ page: totalPages })}
+              disabled={page >= totalPages || isPending}
+              className="rounded-lg border border-[#EAEAEA] p-1.5 text-[#6B6B6B] hover:bg-[#F7F7F5] hover:text-[#111111] disabled:opacity-30 disabled:hover:bg-transparent cursor-pointer"
+              title="Last Page"
+            >
+              <ChevronsRight className="h-4 w-4" />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* DETAIL DRAWER: RESPONSIVE SHEET */}

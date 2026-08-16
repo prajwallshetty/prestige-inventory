@@ -19,6 +19,7 @@ import {
   AlertTriangle, 
   ExternalLink 
 } from "lucide-react";
+import { toast } from "sonner";
 import Link from "next/link";
 
 interface NotificationCenterProps {
@@ -56,16 +57,44 @@ export function NotificationCenter({ session }: NotificationCenterProps) {
 
   useEffect(() => {
     fetchCount();
-    // Near real-time polling every 10 seconds to keep counts and alerts updated
+
+    // Setup SSE connection for instant push notifications
+    let eventSource: EventSource | null = null;
+    if (typeof window !== "undefined" && session) {
+      try {
+        eventSource = new EventSource("/api/v1/notifications/stream");
+        eventSource.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.action === "NEW_NOTIFICATION" && data.notification) {
+              setUnreadCount((prev) => prev + 1);
+              toast.info(data.notification.title, {
+                description: data.notification.message,
+              });
+              setNotifications((prev) => [data.notification, ...prev]);
+            }
+          } catch (err) {
+            console.warn("[SSE] Event parse error:", err);
+          }
+        };
+      } catch (err) {
+        console.warn("[SSE] EventSource init failed, using polling fallback.", err);
+      }
+    }
+
+    // Polling fallback every 12 seconds
     const timer = setInterval(() => {
       fetchCount();
       if (isOpen) {
         getNotificationsAction(20).then(setNotifications);
       }
-    }, 10000);
+    }, 12000);
 
-    return () => clearInterval(timer);
-  }, [isOpen]);
+    return () => {
+      clearInterval(timer);
+      if (eventSource) eventSource.close();
+    };
+  }, [isOpen, session]);
 
   useEffect(() => {
     if (isOpen) {

@@ -1,12 +1,11 @@
 "use client";
 
 import React from "react";
-import { SidebarLayout } from "@/components/layout/SidebarLayout";
 import { CardSkeleton } from "@/components/Skeleton";
 
 export default function ReportsLoading() {
   return (
-    <SidebarLayout>
+    <>
       <div className="space-y-6">
         <div className="h-8 w-64 bg-[#EAEAEA] rounded-md animate-pulse" />
         <div className="h-4 w-96 bg-[#EAEAEA] rounded-md animate-pulse" />
@@ -17,6 +16,6 @@ export default function ReportsLoading() {
           <CardSkeleton />
         </div>
       </div>
-    </SidebarLayout>
+    </>
   );
 }

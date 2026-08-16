@@ -1,8 +1,7 @@
-import { SidebarLayout } from "@/components/layout/SidebarLayout";
 import { db } from "@/lib/db";
 import { getSessionContext } from "@/lib/session";
 import { redirect } from "next/navigation";
-import { NewBookingClient } from "./NewBookingClient";
+import { NewBookingClient } from "@/app/bookings/new/NewBookingClient";
 
 export const revalidate = 0;
 
@@ -60,7 +59,7 @@ export default async function NewBookingPage() {
   });
 
   return (
-    <SidebarLayout>
+    <>
       <div className="space-y-6">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-[#111111]">Create New Stock Reservation</h1>
@@ -75,6 +74,6 @@ export default async function NewBookingPage() {
           session={session} 
         />
       </div>
-    </SidebarLayout>
+    </>
   );
 }

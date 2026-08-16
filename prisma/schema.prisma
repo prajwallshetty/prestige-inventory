@@ -205,6 +205,16 @@ model Product {
   // live catalogue.
   sourceImportId String?
 
+  // Flat-file (Excel/CSV/JSON) import identity — distinct from the PDF-based
+  // CatalogImport/ExtractedProduct pipeline above. `importKey` is the stable
+  // per-row key (e.g. "ASHVIN-0005") used to upsert products across repeated
+  // imports when a manufacturer SKU isn't available. sourceSheet/sourceRow
+  // trace a row back to its original spreadsheet tab + row for auditing.
+  importKey   String? @unique
+  sourceSheet String?
+  sourceRow   Int?
+  unit        String? // "Piece" | "Box" | "Bag/Unit"
+
   createdById String?
   updatedById String?
   deletedById String?
@@ -1059,6 +1069,41 @@ model GooglePost {
   @@index([showroomId])
 }
 
+// ————— Flat-file catalogue/inventory imports —————
+//
+// Tracks runs of the Excel/CSV/JSON tabular importer (scripts/import-prestige-products.ts).
+// Deliberately separate from CatalogImport, which drives the AI PDF-extraction
+// pipeline (ExtractedProduct staging + review) — this is a much simpler
+// straight-line upsert job over already-structured rows.
+model ProductImportBatch {
+  id          String    @id @default(cuid())
+  fileName    String
+  fileHash    String
+  mode        String    @default("OPENING_INVENTORY") // MASTER_ONLY | OPENING_INVENTORY
+  dryRun      Boolean   @default(false)
+  status      String    @default("RUNNING") // RUNNING | COMPLETED | FAILED
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  totalRows    Int @default(0)
+  createdRows  Int @default(0)
+  updatedRows  Int @default(0)
+  skippedRows  Int @default(0)
+  warningRows  Int @default(0)
+  failedRows   Int @default(0)
+
+  brandsCreated      Int @default(0)
+  categoriesCreated  Int @default(0)
+  collectionsCreated Int @default(0)
+  inventoryCreated   Int @default(0)
+
+  createdBy   String?
+  errorReport Json?
+
+  @@index([status])
+  @@index([startedAt])
+}
+
 // ————— E-Commerce Upgrades —————
 
 model Collection {
@@ -1124,6 +1169,7 @@ model Inventory {
   warehouseId    String?   
   warehouse      Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
   totalStock     Float     @default(0)
+  looseStock     Float     @default(0) // pieces beyond full boxes, tracked separately from totalStock (boxes)
   availableStock Float     @default(0)
   blockedStock   Float     @default(0)
   allocatedStock Float     @default(0)

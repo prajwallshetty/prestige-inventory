@@ -1,0 +1,8 @@
+Row,Product Number,Product Name,Issue,Severity,Suggested Fix
+70,METRO-0070,200X1000 15240,Physical Stock of 15240 boxes is unusually large — verify this isn't a data entry error.,WARNING,Confirm the true opening box count against the physical warehouse count.
+71,METRO-0071,200X1000 15247,Physical Stock of 15247 boxes is unusually large — verify this isn't a data entry error.,WARNING,Confirm the true opening box count against the physical warehouse count.
+73,METRO-0073,200X1000 15249,Physical Stock of 15249 boxes is unusually large — verify this isn't a data entry error.,WARNING,Confirm the true opening box count against the physical warehouse count.
+72,METRO-0072,200X1000 15256,Physical Stock of 15256 boxes is unusually large — verify this isn't a data entry error.,WARNING,Confirm the true opening box count against the physical warehouse count.
+74,METRO-0074,200X1000 15261,Physical Stock of 15261 boxes is unusually large — verify this isn't a data entry error.,WARNING,Confirm the true opening box count against the physical warehouse count.
+75,METRO-0075,200X1000 20155,Physical Stock of 20155 boxes is unusually large — verify this isn't a data entry error.,WARNING,Confirm the true opening box count against the physical warehouse count.
+76,METRO-0076,200X1000 615355,Physical Stock of 615355 boxes is unusually large — verify this isn't a data entry error.,WARNING,Confirm the true opening box count against the physical warehouse count.

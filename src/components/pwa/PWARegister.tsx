@@ -60,36 +60,29 @@ export function PWARegister() {
     <>
       {/* Offline Alert Bar */}
       {isOffline && (
-        <div className="fixed top-0 left-0 right-0 z-50 flex items-center justify-center gap-2 bg-rose-600 px-4 py-2 text-xs font-bold text-white shadow-lg animate-pulse">
-          <WifiOff className="h-4 w-4" />
-          <span>You are currently offline. Critical stock reservations are disabled.</span>
-        </div>
-      )}
-
-      {/* Online Re-connection Alert Bar */}
-      {!isOffline && typeof window !== "undefined" && !navigator.onLine && (
-        <div className="fixed top-0 left-0 right-0 z-50 flex items-center justify-center gap-2 bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-lg">
-          <Wifi className="h-4 w-4" />
-          <span>Reconnected to Prestige server. Live database active.</span>
+        <div className="fixed top-0 left-0 right-0 z-50 flex items-center justify-center gap-2 bg-rose-600 px-4 py-2 text-xs font-bold text-white shadow-md">
+          <WifiOff className="h-4 w-4 shrink-0" />
+          <span>You're offline. Reconnect to continue. Critical operations are disabled.</span>
         </div>
       )}
 
       {/* PWA Update Banner */}
       {showUpdate && (
-        <div className="fixed bottom-20 right-4 z-50 max-w-sm rounded-xl border border-slate-800 bg-slate-900 p-4 shadow-2xl animate-bounce">
-          <p className="text-xs font-bold text-white">A new app version is available.</p>
-          <div className="mt-3 flex gap-2">
+        <div className="fixed bottom-20 right-4 z-50 max-w-sm rounded-xl border border-[#EAEAEA] bg-white p-4 shadow-xl text-xs space-y-2">
+          <p className="font-bold text-[#111111]">New version available</p>
+          <p className="text-[11px] text-[#6B6B6B]">An updated version of Prestige Inventory is ready.</p>
+          <div className="flex gap-2 pt-1">
             <button
               onClick={handleUpdateApp}
-              className="flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-[10px] font-black text-slate-950 hover:bg-amber-400"
+              className="flex items-center gap-1.5 rounded-lg bg-[#F2C202] px-3.5 py-1.5 text-[10px] font-black text-white hover:bg-[#D8AD02] transition-all cursor-pointer"
             >
-              <RefreshCw className="h-3 w-3" /> Update Now
+              <RefreshCw className="h-3 w-3" /> Update
             </button>
             <button
               onClick={() => setShowUpdate(false)}
-              className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-1.5 text-[10px] font-bold text-slate-400 hover:text-white"
+              className="rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] px-3 py-1.5 text-[10px] font-bold text-[#6B6B6B] hover:text-[#111111] transition-all cursor-pointer"
             >
-              Not Now
+              Later
             </button>
           </div>
         </div>

@@ -1,4 +1,6 @@
 import { db } from "@/lib/db";
+import { sendNotificationsToUsers } from "@/services/NotificationService";
+import { invalidateCache } from "@/lib/redis";
 
 // Helper to generate a unique block/booking number
 function generateBlockNumber(): string {
@@ -32,7 +34,7 @@ export async function createBlockRequest({
   approvalRoute?: "DIRECT" | "INCHARGE";
   userRole?: string;
 }) {
-  return await db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     // 1. Lock inventory record for concurrency safety
     const inventory = await tx.inventory.findUnique({
       where: { productId },
@@ -111,51 +113,7 @@ export async function createBlockRequest({
       },
     });
 
-    // 5. Create Notification for Approvers
-    // If SHOWROOM_STAFF creates with Route B: notify Showroom In-Charge
-    if (userRole === "SHOWROOM_STAFF" && approvalRoute === "INCHARGE") {
-      const inchargeUsers = await tx.user.findMany({
-        where: { role: "SHOWROOM_INCHARGE", showroomId: block.showroomId },
-        select: { id: true }
-      });
-      for (const u of inchargeUsers) {
-        await tx.notification.create({
-          data: {
-            userId: u.id,
-            type: "BLOCK_CREATED",
-            title: "Showroom Block Awaiting Review",
-            message: `Staff ${requestedBy} requested a block of ${quantity} boxes for ${inventory.productId}.`,
-            priority: "NORMAL",
-            data: { blockId: block.id }
-          }
-        });
-      }
-    } else {
-      // Direct Route: notify Managers and Super Admins
-      const targetUsers = await tx.user.findMany({
-        where: {
-          OR: [
-            { role: "SUPER_ADMIN" },
-            { role: "MANAGER", warehouse_id: inventory.warehouseId }
-          ]
-        },
-        select: { id: true }
-      });
-      for (const u of targetUsers) {
-        await tx.notification.create({
-          data: {
-            userId: u.id,
-            type: "BLOCK_CREATED",
-            title: "New Block Hold Request",
-            message: `A block hold of ${quantity} boxes has been submitted for approval.`,
-            priority: "NORMAL",
-            data: { blockId: block.id }
-          }
-        });
-      }
-    }
-
-    // 6. Create Audit Log
+    // 5. Create Audit Log
     await tx.auditLog.create({
       data: {
         action: "CREATE_BLOCK",
@@ -172,6 +130,42 @@ export async function createBlockRequest({
 
     return block;
   });
+
+  // Post-transaction Cache & Notifications
+  await invalidateCache("inventory:*");
+  await invalidateCache("dashboard:*");
+
+  if (userRole === "SHOWROOM_STAFF" && approvalRoute === "INCHARGE") {
+    const inchargeUsers = await db.user.findMany({
+      where: { role: "SHOWROOM_INCHARGE", showroomId },
+      select: { id: true },
+    });
+    await sendNotificationsToUsers({
+      userIds: inchargeUsers.map((u) => u.id),
+      type: "BLOCK_CREATED",
+      title: "Showroom Block Awaiting Review",
+      message: `Staff ${requestedBy} requested a block of ${quantity} boxes.`,
+      priority: "NORMAL",
+      data: { blockId: result.id },
+    });
+  } else {
+    const targetUsers = await db.user.findMany({
+      where: {
+        OR: [{ role: "SUPER_ADMIN" }, { role: "MANAGER" }],
+      },
+      select: { id: true },
+    });
+    await sendNotificationsToUsers({
+      userIds: targetUsers.map((u) => u.id),
+      type: "BLOCK_CREATED",
+      title: "New Block Hold Request",
+      message: `A block hold of ${quantity} boxes has been submitted for approval.`,
+      priority: "NORMAL",
+      data: { blockId: result.id },
+    });
+  }
+
+  return result;
 }
 
 export async function approveBlock({
@@ -185,7 +179,7 @@ export async function approveBlock({
   role: string;
   approvedQuantity?: number;
 }) {
-  return await db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     const block = await tx.stockBlock.findUnique({
       where: { id: blockId },
       include: { inventory: true },
@@ -236,7 +230,7 @@ export async function approveBlock({
         },
       });
 
-      return updatedBlock;
+      return { updatedBlock, isStageOne: true };
     }
 
     // Route A, B, C: Final MANAGER or SUPER_ADMIN approval
@@ -365,19 +359,6 @@ export async function approveBlock({
       if (requester) notifyUsers.push(requester.id);
     }
 
-    for (const uid of notifyUsers) {
-      await tx.notification.create({
-        data: {
-          userId: uid,
-          type: "BLOCK_APPROVED",
-          title: "Stock Block Approved",
-          message: `Your request for ${finalQty} boxes has been approved.`,
-          priority: "NORMAL",
-          data: { blockId: block.id }
-        }
-      });
-    }
-
     await tx.auditLog.create({
       data: {
         action: "APPROVE_BLOCK",
@@ -392,8 +373,37 @@ export async function approveBlock({
       },
     });
 
-    return updatedBlock;
+    return { updatedBlock, notifyUsers, finalQty, isStageOne: false };
   });
+
+  if (result.isStageOne) {
+    const managers = await db.user.findMany({
+      where: { role: "MANAGER", warehouse_id: result.updatedBlock.warehouseId },
+      select: { id: true }
+    });
+    await sendNotificationsToUsers({
+      userIds: managers.map(u => u.id),
+      type: "BLOCK_APPROVED",
+      title: "Showroom Approved Block Review",
+      message: `Showroom In-Charge approved block #${result.updatedBlock.block_number || result.updatedBlock.id.slice(-8)}. Final approval required.`,
+      priority: "NORMAL",
+      data: { blockId: result.updatedBlock.id }
+    });
+  } else if (result.notifyUsers && result.notifyUsers.length > 0) {
+    await sendNotificationsToUsers({
+      userIds: result.notifyUsers,
+      type: "BLOCK_APPROVED",
+      title: "Stock Block Approved",
+      message: `Your request for ${result.finalQty} boxes has been approved.`,
+      priority: "NORMAL",
+      data: { blockId: blockId }
+    });
+  }
+
+  await invalidateCache("inventory:*");
+  await invalidateCache("dashboard:*");
+
+  return result.updatedBlock;
 }
 
 export async function rejectBlock({
@@ -844,6 +854,42 @@ export async function releaseBlock({
 
 export async function releaseExpiredBlocks() {
   const now = new Date();
+  const twoHoursFromNow = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+
+  // 1. Send warning notifications for blocks expiring in the next 2 hours
+  const expiringSoon = await db.stockBlock.findMany({
+    where: {
+      status: { in: ["APPROVED", "PENDING", "PENDING_INCHARGE_APPROVAL", "PENDING_MANAGER_APPROVAL"] },
+      expiresAt: { gte: now, lte: twoHoursFromNow },
+    },
+  });
+
+  for (const block of expiringSoon) {
+    const notifyUsers: string[] = [];
+    if (block.dealerId) {
+      const dlrs = await db.user.findMany({ where: { dealer_id: block.dealerId }, select: { id: true } });
+      dlrs.forEach((d) => notifyUsers.push(d.id));
+    }
+    if (block.showroomId) {
+      const stff = await db.user.findMany({ where: { showroomId: block.showroomId }, select: { id: true } });
+      stff.forEach((s) => notifyUsers.push(s.id));
+    }
+    if (notifyUsers.length === 0) {
+      const req = await db.user.findFirst({ where: { name: block.requestedBy }, select: { id: true } });
+      if (req) notifyUsers.push(req.id);
+    }
+
+    await sendNotificationsToUsers({
+      userIds: notifyUsers,
+      type: "BLOCK_EXPIRING",
+      title: "Reservation Expiring Soon",
+      message: `Your reservation for ${block.quantity} boxes expires in less than 2 hours.`,
+      priority: "HIGH",
+      data: { blockId: block.id },
+    });
+  }
+
+  // 2. Release blocks that have passed their expiry date
   const expiredBlocks = await db.stockBlock.findMany({
     where: {
       status: { in: ["APPROVED", "PENDING", "PENDING_INCHARGE_APPROVAL", "PENDING_MANAGER_APPROVAL"] },
@@ -865,11 +911,36 @@ export async function releaseExpiredBlocks() {
         where: { id: block.id },
         data: { status: "EXPIRED" },
       });
+
+      const notifyUsers: string[] = [];
+      if (block.dealerId) {
+        const dlrs = await db.user.findMany({ where: { dealer_id: block.dealerId }, select: { id: true } });
+        dlrs.forEach((d) => notifyUsers.push(d.id));
+      }
+      if (block.showroomId) {
+        const stff = await db.user.findMany({ where: { showroomId: block.showroomId }, select: { id: true } });
+        stff.forEach((s) => notifyUsers.push(s.id));
+      }
+
+      await sendNotificationsToUsers({
+        userIds: notifyUsers,
+        type: "BOOKING_EXPIRED",
+        title: "Reservation Expired",
+        message: `Your reservation for ${block.quantity} boxes has expired and the stock has been released.`,
+        priority: "HIGH",
+        data: { blockId: block.id },
+      });
+
       releasedCount++;
     } catch (err) {
       console.error(`[EXPIRATION WORKER] Failed releasing block ${block.id}:`, err);
     }
   }
 
-  return { found: expiredBlocks.length, released: releasedCount };
+  if (releasedCount > 0) {
+    await invalidateCache("inventory:*");
+    await invalidateCache("dashboard:*");
+  }
+
+  return { found: expiredBlocks.length, released: releasedCount, warningsSent: expiringSoon.length };
 }

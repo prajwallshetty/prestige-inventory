@@ -1,4 +1,3 @@
-import { SidebarLayout } from "@/components/layout/SidebarLayout";
 import { db } from "@/lib/db";
 
 export const revalidate = 0;
@@ -17,7 +16,7 @@ export default async function AuditLogPage() {
   });
 
   return (
-    <SidebarLayout>
+    <>
       <div className="space-y-6">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-[#111111]">Inventory Audit Trail</h1>
@@ -80,6 +79,6 @@ export default async function AuditLogPage() {
           </table>
         </div>
       </div>
-    </SidebarLayout>
+    </>
   );
 }

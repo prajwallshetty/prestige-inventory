@@ -6,7 +6,9 @@
     "dev": "next dev --port 3001",
     "build": "prisma generate && next build",
     "start": "next start --port 3001",
-    "db:generate": "prisma generate"
+    "db:generate": "prisma generate",
+    "seed:prestige": "tsx scripts/import-prestige-products.ts",
+    "migrate:db": "tsx scripts/migrate-database.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
@@ -31,6 +33,7 @@
     "@types/react": "19.0.2",
     "@types/react-dom": "19.0.2",
     "prisma": "^6.19.3",
+    "tsx": "^4.23.12",
     "typescript": "5.7.2"
   }
 }

@@ -1,4 +1,3 @@
-import { SidebarLayout } from "@/components/layout/SidebarLayout";
 import { db } from "@/lib/db";
 import { Warehouse as WarehouseIcon } from "lucide-react";
 
@@ -14,7 +13,7 @@ export default async function WarehousesPage() {
   });
 
   return (
-    <SidebarLayout>
+    <>
       <div className="space-y-6">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-[#111111]">Warehouses & Central Depots</h1>
@@ -58,6 +57,6 @@ export default async function WarehousesPage() {
           ))}
         </div>
       </div>
-    </SidebarLayout>
+    </>
   );
 }

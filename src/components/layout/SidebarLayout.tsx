@@ -31,32 +31,39 @@ import {
   Settings,
   Megaphone
 } from "lucide-react";
-import { getDealersAndWarehousesAction, setSimulatedSessionAction, signOutAction } from "@/app/actions";
+import { setSimulatedSessionAction, signOutAction } from "@/app/actions";
+import { toast } from "sonner";
 import { NotificationCenter } from "@/components/notifications/NotificationCenter";
 
 export type UserRole = "SUPER_ADMIN" | "MANAGER" | "VIEWER" | "SHOWROOM_INCHARGE" | "SHOWROOM_STAFF" | "DEALER";
 
 interface Props {
   children: React.ReactNode;
+  /** Fetched server-side by AppShell so the chrome never blocks on a client round trip. */
+  session: any;
+  dealers: any[];
+  warehouses: any[];
+  showrooms: any[];
 }
 
-export function SidebarLayout({ children }: Props) {
+export function SidebarLayout({ children, session, dealers, warehouses, showrooms }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [dealers, setDealers] = useState<any[]>([]);
-  const [warehouses, setWarehouses] = useState<any[]>([]);
-  const [showrooms, setShowrooms] = useState<any[]>([]);
-  
-  // Session details from secure JWT
-  const [session, setSession] = useState<any>(null);
-  const [role, setRole] = useState<UserRole>("VIEWER");
-  const [dealerId, setDealerId] = useState("");
-  const [warehouseId, setWarehouseId] = useState("");
-  const [showroomId, setShowroomId] = useState("");
-  const [loading, setLoading] = useState(true);
+
+  // Preview-simulator selections. Seeded from the server session; the change
+  // handlers reload the page, so these only need to hold the pending choice.
+  const activeRole: UserRole =
+    session?.role === "SUPER_ADMIN" && session?.previewRole ? session.previewRole : session?.role || "VIEWER";
+  const [role, setRole] = useState<UserRole>(activeRole);
+  const [dealerId, setDealerId] = useState(session?.dealerId || "");
+  const [warehouseId, setWarehouseId] = useState(session?.warehouseId || "");
+  const [showroomId, setShowroomId] = useState(session?.showroomId || "");
   const [isOnline, setIsOnline] = useState(true);
+
+  // Nav item awaiting route commit — drives the instant active/spinner state.
+  const [pendingHref, setPendingHref] = useState<string | null>(null);
 
   // Profile dropdown open state
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
@@ -79,8 +86,8 @@ export function SidebarLayout({ children }: Props) {
     setIsOnline(navigator.onLine);
     const handleOnlineStatus = () => {
       setIsOnline(true);
-      alert("Connection restored. Refreshing active data...");
-      window.location.reload();
+      toast.success("Connection restored");
+      router.refresh();
     };
     const handleOfflineStatus = () => {
       setIsOnline(false);
@@ -107,27 +114,6 @@ export function SidebarLayout({ children }: Props) {
     };
     document.addEventListener("mousedown", handleClickOutside);
 
-    // Fetch lists and current user session
-    getDealersAndWarehousesAction().then(({ dealers, warehouses, showrooms, session: userSession }) => {
-      setDealers(dealers);
-      setWarehouses(warehouses);
-      setShowrooms(showrooms || []);
-      setSession(userSession);
-      
-      if (userSession) {
-        // Use preview role if super-admin enabled simulated switch
-        const activeRole = (userSession.role === "SUPER_ADMIN" && userSession.previewRole) 
-          ? userSession.previewRole 
-          : userSession.role;
-
-        setRole(activeRole as UserRole);
-        setDealerId(userSession.dealerId || "");
-        setWarehouseId(userSession.warehouseId || "");
-        setShowroomId(userSession.showroomId || "");
-      }
-      setLoading(false);
-    });
-
     return () => {
       window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
       document.removeEventListener("mousedown", handleClickOutside);
@@ -135,6 +121,11 @@ export function SidebarLayout({ children }: Props) {
       window.removeEventListener("offline", handleOfflineStatus);
     };
   }, []);
+
+  // Route committed (or the user navigated elsewhere) — drop the pending mark.
+  useEffect(() => {
+    setPendingHref(null);
+  }, [pathname]);
 
   const handleInstallClick = async () => {
     if (!deferredPrompt) return;
@@ -387,17 +378,6 @@ export function SidebarLayout({ children }: Props) {
   // Checks if the user is in preview mode
   const isPreviewMode = session?.role === "SUPER_ADMIN" && !!session.previewRole;
 
-  if (loading) {
-    return (
-      <div className="flex h-screen w-screen items-center justify-center bg-[#F7F7F5]">
-        <div className="space-y-4 text-center">
-          <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-[#F2C202] border-t-transparent" />
-          <p className="text-xs font-bold text-[#6B6B6B]">Loading Session Context...</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#F7F7F5] text-[#111111] antialiased font-sans">
       {/* MOBILE BACKDROP */}
@@ -461,18 +441,33 @@ export function SidebarLayout({ children }: Props) {
               <div className="space-y-0.5">
                 {group.items.map((item) => {
                   const isActive = pathname === item.href.split("?")[0];
+                  const isPending = !isActive && pendingHref === item.href;
                   return (
                     <Link
                       key={item.name}
                       href={item.href}
-                      onClick={() => setMobileOpen(false)}
-                      className={`flex items-center gap-3.5 rounded-lg px-3 py-2 text-xs font-bold transition-all touch-target ${
-                        isActive
+                      // Mark active on the click itself. The route may take a
+                      // moment to commit, and waiting for it is what made
+                      // navigation feel unacknowledged.
+                      onClick={() => {
+                        setPendingHref(item.href);
+                        setMobileOpen(false);
+                      }}
+                      aria-current={isActive ? "page" : undefined}
+                      className={`flex items-center gap-3.5 rounded-lg px-3 py-2 text-xs font-bold transition-all touch-target active:scale-[0.98] ${
+                        isActive || isPending
                           ? "bg-[#F2C202]/10 text-[#8A7300] active-nav-indicator"
                           : "text-[#6B6B6B] hover:bg-[#F7F7F5] hover:text-[#111111]"
                       }`}
                     >
-                      <item.icon className="h-4 w-4 shrink-0" />
+                      {isPending ? (
+                        <span
+                          className="h-4 w-4 shrink-0 rounded-full border-2 border-[#F2C202] border-t-transparent animate-spin"
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <item.icon className="h-4 w-4 shrink-0" />
+                      )}
                       {(!collapsed || mobileOpen) && <span>{item.name}</span>}
                     </Link>
                   );

@@ -4,6 +4,8 @@ import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { AnnouncementsClient } from "@/components/admin/AnnouncementsClient";
 
+import { getAnnouncementsHistory } from "@/services/NotificationService";
+
 export const revalidate = 0;
 
 export default async function AdminAnnouncementsPage() {
@@ -12,15 +14,8 @@ export default async function AdminAnnouncementsPage() {
     redirect("/login");
   }
 
-  // Fetch past announcements
-  const announcements = await db.announcement.findMany({
-    orderBy: { createdAt: "desc" },
-    include: {
-      createdBy: {
-        select: { name: true }
-      }
-    }
-  });
+  // Fetch past announcements with recipient stats
+  const announcements = await getAnnouncementsHistory(20);
 
   // Fetch audiences targets (dealers, showrooms, warehouses)
   const dealers = await db.dealer.findMany({ orderBy: { name: "asc" } });

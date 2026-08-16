@@ -1,8 +1,7 @@
-import { SidebarLayout } from "@/components/layout/SidebarLayout";
 import { getBookingList, getBookingSummary } from "@/services/BookingService";
 import { getSessionContext } from "@/lib/session";
 import { db } from "@/lib/db";
-import { BookingsDashboardClient } from "./BookingsDashboardClient";
+import { BookingsDashboardClient } from "@/app/bookings/BookingsDashboardClient";
 
 export const revalidate = 0;
 
@@ -70,7 +69,7 @@ export default async function BookingsPage({
   }));
 
   return (
-    <SidebarLayout>
+    <>
       <div className="space-y-6">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -93,6 +92,6 @@ export default async function BookingsPage({
           session={session}
         />
       </div>
-    </SidebarLayout>
+    </>
   );
 }

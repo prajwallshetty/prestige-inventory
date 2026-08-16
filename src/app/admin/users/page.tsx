@@ -1,5 +1,4 @@
 import React from "react";
-import { SidebarLayout } from "@/components/layout/SidebarLayout";
 import { db } from "@/lib/db";
 import { UsersClient } from "./UsersClient";
 import { getSessionContext } from "@/lib/session";
@@ -46,7 +45,7 @@ export default async function UsersPage() {
   }));
 
   return (
-    <SidebarLayout>
+    <>
       <div className="space-y-6">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-[#111111]">User Management Control</h1>
@@ -62,6 +61,6 @@ export default async function UsersPage() {
           showrooms={showrooms}
         />
       </div>
-    </SidebarLayout>
+    </>
   );
 }

@@ -1,8 +1,7 @@
-import { SidebarLayout } from "@/components/layout/SidebarLayout";
 import { getBookingById } from "@/services/BookingService";
 import { getSessionContext } from "@/lib/session";
 import { notFound } from "next/navigation";
-import { BookingDetailClient } from "./BookingDetailClient";
+import { BookingDetailClient } from "@/app/bookings/[id]/BookingDetailClient";
 import { db } from "@/lib/db";
 
 export const revalidate = 0;
@@ -113,12 +112,12 @@ export default async function BookingDetailPage({
   });
 
   return (
-    <SidebarLayout>
+    <>
       <BookingDetailClient 
         booking={serializedBooking} 
         auditLogs={serializedAuditLogs}
         session={session} 
       />
-    </SidebarLayout>
+    </>
   );
 }

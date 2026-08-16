@@ -1,4 +1,3 @@
-import { SidebarLayout } from "@/components/layout/SidebarLayout";
 import { getInventoryList } from "@/services/InventoryService";
 import { getSessionContext } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -17,6 +16,7 @@ export default async function InventoryPage({
   const categoryId = typeof params.categoryId === "string" ? params.categoryId : "";
   const stockStatus = typeof params.status === "string" ? params.status : "";
   const page = parseInt(typeof params.page === "string" ? params.page : "1");
+  const limit = parseInt(typeof params.limit === "string" ? params.limit : "20");
 
   const session = await getSessionContext();
 
@@ -27,6 +27,7 @@ export default async function InventoryPage({
       categoryId,
       stockStatus,
       page,
+      limit,
       userRole: session.role,
       warehouseId: session.role === "MANAGER" ? session.warehouseId : undefined,
     }),
@@ -35,7 +36,7 @@ export default async function InventoryPage({
   ]);
 
   return (
-    <SidebarLayout>
+    <>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
@@ -54,6 +55,6 @@ export default async function InventoryPage({
           session={session} 
         />
       </div>
-    </SidebarLayout>
+    </>
   );
 }

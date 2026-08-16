@@ -129,6 +129,92 @@ export async function deleteNotification(userId: string, notificationId: string)
   await deleteCache(notificationsListKey(userId, 20));
 }
 
+/** Translates an audience selection into a User `where` clause. */
+function audienceWhere(audienceType: string, audienceFilter?: string | null) {
+  const where: any = {};
+  if (audienceType === "DEALERS") {
+    where.role = "DEALER";
+  } else if (audienceType === "MANAGERS") {
+    where.role = "MANAGER";
+  } else if (audienceType === "SHOWROOM_STAFF") {
+    where.role = "SHOWROOM_STAFF";
+  } else if (audienceType === "SHOWROOM_INCHARGE") {
+    where.role = "SHOWROOM_INCHARGE";
+  } else if (audienceType === "VIEWERS") {
+    where.role = "VIEWER";
+  } else if (audienceType === "SPECIFIC_DEALER") {
+    where.role = "DEALER";
+    where.dealer_id = audienceFilter;
+  } else if (audienceType === "SPECIFIC_SHOWROOM") {
+    where.showroomId = audienceFilter;
+  } else if (audienceType === "SPECIFIC_WAREHOUSE") {
+    where.warehouse_id = audienceFilter;
+  } else if (audienceType === "SPECIFIC_USER") {
+    where.id = audienceFilter;
+  }
+  return where;
+}
+
+/**
+ * Materialises an announcement for its audience: recipient rows, in-app
+ * notifications, cache invalidation and realtime push.
+ *
+ * Extracted so an immediate send and a scheduled send that fires later go
+ * through exactly the same path. `deliveredAt` is stamped here — it is the
+ * moment the message actually reached the user's feed, which is what the
+ * delivery analytics report on.
+ */
+async function fanOutAnnouncement(
+  tx: any,
+  announcement: { id: string; title: string; message: string; priority: string; audienceType: string; audienceFilter: string | null }
+) {
+  const targetUsers = await tx.user.findMany({
+    where: audienceWhere(announcement.audienceType, announcement.audienceFilter),
+    select: { id: true },
+  });
+
+  if (targetUsers.length === 0) return 0;
+
+  const deliveredAt = new Date();
+
+  await tx.announcementRecipient.createMany({
+    data: targetUsers.map((u: { id: string }) => ({
+      announcementId: announcement.id,
+      userId: u.id,
+      deliveredAt,
+    })),
+    skipDuplicates: true,
+  });
+
+  await tx.notification.createMany({
+    data: targetUsers.map((u: { id: string }) => ({
+      userId: u.id,
+      type: "SYSTEM_ANNOUNCEMENT",
+      title: `Broadcast: ${announcement.title}`,
+      message: announcement.message,
+      priority: announcement.priority,
+      data: JSON.stringify({ announcementId: announcement.id }),
+    })),
+  });
+
+  for (const u of targetUsers) {
+    await deleteCache(unreadCountKey(u.id));
+    await deleteCache(notificationsListKey(u.id, 20));
+    await publishEvent(`user-notifications:${u.id}`, {
+      action: "NEW_NOTIFICATION",
+      notification: {
+        title: `Broadcast: ${announcement.title}`,
+        message: announcement.message,
+        priority: announcement.priority,
+        createdAt: deliveredAt,
+        isRead: false,
+      },
+    });
+  }
+
+  return targetUsers.length;
+}
+
 export async function createAnnouncement({
   createdById,
   title,
@@ -136,6 +222,8 @@ export async function createAnnouncement({
   priority = "NORMAL",
   audienceType,
   audienceFilter = null,
+  scheduledAt = null,
+  expiresAt = null,
 }: {
   createdById: string;
   title: string;
@@ -143,9 +231,13 @@ export async function createAnnouncement({
   priority?: "LOW" | "NORMAL" | "HIGH" | "URGENT";
   audienceType: string;
   audienceFilter?: string | null;
+  /** Future date defers the send; null/past sends immediately. */
+  scheduledAt?: Date | null;
+  expiresAt?: Date | null;
 }) {
+  const isScheduled = !!scheduledAt && scheduledAt.getTime() > Date.now();
+
   return await db.$transaction(async (tx) => {
-    // 1. Save main announcement details
     const announcement = await tx.announcement.create({
       data: {
         createdById,
@@ -154,79 +246,132 @@ export async function createAnnouncement({
         priority,
         audienceType,
         audienceFilter,
+        scheduledAt,
+        expiresAt,
+        status: isScheduled ? "SCHEDULED" : "SENT",
       },
     });
 
-    // 2. Compile recipient user lists
-    const where: any = {};
-    if (audienceType === "DEALERS") {
-      where.role = "DEALER";
-    } else if (audienceType === "MANAGERS") {
-      where.role = "MANAGER";
-    } else if (audienceType === "SHOWROOM_STAFF") {
-      where.role = "SHOWROOM_STAFF";
-    } else if (audienceType === "SHOWROOM_INCHARGE") {
-      where.role = "SHOWROOM_INCHARGE";
-    } else if (audienceType === "VIEWERS") {
-      where.role = "VIEWER";
-    } else if (audienceType === "SPECIFIC_DEALER") {
-      where.role = "DEALER";
-      where.dealer_id = audienceFilter;
-    } else if (audienceType === "SPECIFIC_SHOWROOM") {
-      where.showroomId = audienceFilter;
-    } else if (audienceType === "SPECIFIC_WAREHOUSE") {
-      where.warehouse_id = audienceFilter;
-    } else if (audienceType === "SPECIFIC_USER") {
-      where.id = audienceFilter;
-    }
-
-    const targetUsers = await tx.user.findMany({
-      where,
-      select: { id: true },
-    });
-
-    if (targetUsers.length > 0) {
-      // 3. Create broadcast logs
-      const recipientsData = targetUsers.map((u) => ({
-        announcementId: announcement.id,
-        userId: u.id,
-      }));
-
-      await tx.announcementRecipient.createMany({
-        data: recipientsData,
-      });
-
-      // 4. Create in-app feed notifications
-      const notifsData = targetUsers.map((u) => ({
-        userId: u.id,
-        type: "SYSTEM_ANNOUNCEMENT",
-        title: `Broadcast: ${title}`,
-        message,
-        priority,
-        data: JSON.stringify({ announcementId: announcement.id }),
-      }));
-
-      await tx.notification.createMany({
-        data: notifsData,
-      });
-
-      // 5. Fan-out Redis cleanups and real-time triggers
-      for (const u of targetUsers) {
-        await deleteCache(unreadCountKey(u.id));
-        await deleteCache(notificationsListKey(u.id, 20));
-        await publishEvent(`user-notifications:${u.id}`, {
-          action: "NEW_NOTIFICATION",
-          notification: {
-            title: `Broadcast: ${title}`,
-            message,
-            priority,
-            createdAt: new Date(),
-            isRead: false,
-          },
-        });
-      }
+    // A scheduled announcement stays dormant — no recipients, no
+    // notifications — until the cron promotes it. Fanning out at creation
+    // time would deliver it immediately and defeat the schedule.
+    if (!isScheduled) {
+      await fanOutAnnouncement(tx, announcement);
     }
 
     return announcement;
   });
 }
+
+/**
+ * Promotes due SCHEDULED announcements to SENT and delivers them.
+ * Safe to call repeatedly — the status transition is the idempotency guard.
+ */
+export async function publishScheduledAnnouncements() {
+  const now = new Date();
+  const due = await db.announcement.findMany({
+    where: { status: "SCHEDULED", scheduledAt: { lte: now } },
+  });
+
+  let published = 0;
+  let delivered = 0;
+
+  for (const announcement of due) {
+    try {
+      await db.$transaction(async (tx) => {
+        // Re-check inside the transaction so two overlapping cron runs can't
+        // both fan out the same announcement.
+        const fresh = await tx.announcement.findUnique({ where: { id: announcement.id } });
+        if (!fresh || fresh.status !== "SCHEDULED") return;
+
+        const count = await fanOutAnnouncement(tx, fresh);
+        await tx.announcement.update({
+          where: { id: fresh.id },
+          data: { status: "SENT" },
+        });
+        published++;
+        delivered += count;
+      });
+    } catch (err) {
+      console.error(`[ANNOUNCEMENT SCHEDULER] Failed publishing ${announcement.id}:`, err);
+    }
+  }
+
+  return { due: due.length, published, delivered };
+}
+
+/** Marks SENT announcements past their expiry as EXPIRED. */
+export async function expireAnnouncements() {
+  const now = new Date();
+  const result = await db.announcement.updateMany({
+    where: { status: "SENT", expiresAt: { not: null, lte: now } },
+    data: { status: "EXPIRED" },
+  });
+  return { expired: result.count };
+}
+
+export async function sendNotificationsToUsers({
+  userIds,
+  type,
+  title,
+  message,
+  priority = "NORMAL",
+  data = null,
+}: {
+  userIds: string[];
+  type: string;
+  title: string;
+  message: string;
+  priority?: "LOW" | "NORMAL" | "HIGH" | "URGENT";
+  data?: any;
+}) {
+  if (!userIds || userIds.length === 0) return;
+  const uniqueIds = Array.from(new Set(userIds));
+
+  for (const uid of uniqueIds) {
+    await createNotification({
+      userId: uid,
+      type,
+      title,
+      message,
+      priority,
+      data,
+    });
+  }
+}
+
+export async function getAnnouncementsHistory(limit = 20) {
+  const announcements = await db.announcement.findMany({
+    orderBy: { createdAt: "desc" },
+    take: limit,
+    include: {
+      createdBy: { select: { id: true, name: true, email: true, role: true } },
+      recipients: {
+        select: {
+          id: true,
+          userId: true,
+          deliveredAt: true,
+          readAt: true,
+          user: { select: { name: true, email: true, role: true } },
+        },
+      },
+    },
+  });
+
+  return announcements.map((a) => {
+    const totalRecipients = a.recipients.length;
+    const readCount = a.recipients.filter((r) => r.readAt !== null).length;
+    const deliveredCount = a.recipients.filter((r) => r.deliveredAt !== null).length;
+    const unreadCount = totalRecipients - readCount;
+    return {
+      ...a,
+      totalRecipients,
+      readCount,
+      deliveredCount,
+      unreadCount,
+      // Rounded percentage; 0 recipients reads as 0 rather than NaN.
+      readRate: totalRecipients > 0 ? Math.round((readCount / totalRecipients) * 100) : 0,
+    };
+  });
+}
+
