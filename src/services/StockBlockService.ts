@@ -1,12 +1,161 @@
 import { db } from "@/lib/db";
 import { sendNotificationsToUsers } from "@/services/NotificationService";
 import { invalidateCache } from "@/lib/redis";
+import {
+  type Role,
+  type BlockStatus,
+  ACTIVE_BLOCK_STATUSES,
+  assertPermission,
+  canApproveBlock,
+  canCancelBlock,
+  canDeliverBlock,
+  canMarkReadyToShip,
+  canRejectBlock,
+  canReleaseBlock,
+  canShipBlock,
+  canTransition,
+} from "@/lib/permissions";
 
-// Helper to generate a unique block/booking number
-function generateBlockNumber(): string {
+/**
+ * Transaction settings for stock mutations.
+ *
+ * Prisma's 5s default is too tight here: the database is in another region
+ * (~1.5s per round trip from the operating location), and a block mutation
+ * legitimately needs 5-6 statements while holding a row lock. `maxWait` gives
+ * the *second* concurrent caller room to sit on the lock rather than failing
+ * spuriously — losing a race should mean "insufficient stock", not a timeout.
+ *
+ * These numbers can drop sharply once the database is moved closer.
+ */
+const STOCK_TX_OPTIONS = { timeout: 30_000, maxWait: 20_000 } as const;
+
+/**
+ * Locks a product's inventory row for the remainder of the transaction.
+ *
+ * `SELECT … FOR UPDATE` is the whole point: a plain findUnique lets two
+ * concurrent transactions both read the same availability, both pass the
+ * check, and both write — which double-reserves stock and loses one update.
+ * Every path that changes reserved quantities must go through this first.
+ */
+async function lockInventoryByProduct(tx: any, productId: string) {
+  const rows = await tx.$queryRaw<
+    Array<{
+      id: string;
+      totalStock: number;
+      availableStock: number;
+      blockedStock: number;
+      allocatedStock: number;
+      damagedStock: number;
+      deliveredStock: number;
+      transitStock: number;
+      reorderLevel: number;
+      stockStatus: string;
+      warehouseId: string | null;
+    }>
+  >`SELECT id, "totalStock", "availableStock", "blockedStock", "allocatedStock",
+           "damagedStock", "deliveredStock", "transitStock", "reorderLevel",
+           "stockStatus", "warehouseId"
+      FROM "Inventory"
+     WHERE "productId" = ${productId}
+     FOR UPDATE`;
+  return rows[0] ?? null;
+}
+
+/** Same lock, addressed by inventory id (used by approve/ship/cancel paths). */
+async function lockInventoryById(tx: any, inventoryId: string) {
+  const rows = await tx.$queryRaw<
+    Array<{
+      id: string;
+      totalStock: number;
+      availableStock: number;
+      blockedStock: number;
+      allocatedStock: number;
+      damagedStock: number;
+      deliveredStock: number;
+      transitStock: number;
+      reorderLevel: number;
+      stockStatus: string;
+      warehouseId: string | null;
+    }>
+  >`SELECT id, "totalStock", "availableStock", "blockedStock", "allocatedStock",
+           "damagedStock", "deliveredStock", "transitStock", "reorderLevel",
+           "stockStatus", "warehouseId"
+      FROM "Inventory"
+     WHERE id = ${inventoryId}
+     FOR UPDATE`;
+  return rows[0] ?? null;
+}
+
+/**
+ * Allocates the next human-readable block number, e.g. BLK-2026-000001.
+ *
+ * Runs inside the caller's transaction and relies on an atomic upsert+increment,
+ * so two concurrent creations can never receive the same number. Replaces the
+ * previous random suffix, which was neither sequential nor collision-proof.
+ */
+async function nextBlockNumber(tx: any): Promise<string> {
   const year = new Date().getFullYear();
-  const rand = Math.floor(100000 + Math.random() * 900000);
-  return `BLK-${year}-${rand}`;
+  const row = await tx.blockNumberSequence.upsert({
+    where: { year },
+    update: { lastValue: { increment: 1 } },
+    create: { year, lastValue: 1 },
+  });
+  return `BLK-${year}-${String(row.lastValue).padStart(6, "0")}`;
+}
+
+/**
+ * Records a status change on the shared AuditLog (rather than a parallel
+ * history table — AuditLog already has an indexed (entity, entityId) lookup
+ * and Json old/new columns, which is exactly what the timeline needs).
+ */
+async function recordBlockAudit(
+  tx: any,
+  {
+    action,
+    blockId,
+    userId,
+    userName,
+    role,
+    fromStatus,
+    toStatus,
+    reason,
+    meta,
+  }: {
+    action: string;
+    blockId: string;
+    userId?: string | null;
+    userName: string;
+    role?: string | null;
+    fromStatus?: string | null;
+    toStatus?: string | null;
+    reason?: string | null;
+    meta?: Record<string, unknown>;
+  }
+) {
+  await tx.auditLog.create({
+    data: {
+      action,
+      entity: "StockBlock",
+      entityId: blockId,
+      userId: userId || null,
+      roleAtTime: role || null,
+      oldValue: fromStatus ? { status: fromStatus } : undefined,
+      newValue: toStatus ? { status: toStatus } : undefined,
+      meta: { performedBy: userName, reason: reason ?? null, ...(meta || {}) },
+    },
+  });
+}
+
+/**
+ * Guards a status change. Throws unless the transition is in the state machine,
+ * so no caller — including the frontend — can force an arbitrary status.
+ */
+function assertTransition(from: string, to: BlockStatus) {
+  if (!canTransition(from as BlockStatus, to)) {
+    const err = new Error(`Illegal status transition: ${from} → ${to}.`);
+    (err as any).statusCode = 409;
+    throw err;
+  }
 }
 
 export async function createBlockRequest({
@@ -17,9 +166,9 @@ export async function createBlockRequest({
   remarks,
   durationHours = 48,
   requestedBy,
+  createdById,
   blocked_by,
   blockType = "BLOCKED",
-  approvalRoute = "DIRECT",
   userRole,
 }: {
   productId: string;
@@ -29,23 +178,26 @@ export async function createBlockRequest({
   remarks?: string;
   durationHours?: number;
   requestedBy: string;
+  createdById?: string | null;
   blocked_by?: "SAMSHUDIN" | "SALMAN";
   blockType?: "BLOCKED" | "CONFIRMED";
-  approvalRoute?: "DIRECT" | "INCHARGE";
   userRole?: string;
 }) {
-  const result = await db.$transaction(async (tx) => {
-    // 1. Lock inventory record for concurrency safety
-    const inventory = await tx.inventory.findUnique({
-      where: { productId },
-    });
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    throw new Error("Block quantity must be greater than zero.");
+  }
 
+  const result = await db.$transaction(async (tx) => {
+    // Serialise on the inventory row. Everything below reads post-lock values,
+    // so a concurrent transaction cannot reserve the same stock.
+    const inventory = await lockInventoryByProduct(tx, productId);
     if (!inventory) {
       throw new Error("Inventory record not found for this product.");
     }
 
-    // Recommended calculation: AVAILABLE STOCK = PHYSICAL (totalStock) - BLOCKED - ALLOCATED - DAMAGED
-    const calculatedAvailable = inventory.totalStock - inventory.blockedStock - inventory.allocatedStock - inventory.damagedStock;
+    // AVAILABLE = PHYSICAL − BLOCKED − ALLOCATED − DAMAGED
+    const calculatedAvailable =
+      inventory.totalStock - inventory.blockedStock - inventory.allocatedStock - inventory.damagedStock;
 
     if (calculatedAvailable < quantity) {
       throw new Error(
@@ -53,19 +205,19 @@ export async function createBlockRequest({
       );
     }
 
-    // Determine starting status based on Route and Creator Role
-    let status = "PENDING_MANAGER_APPROVAL";
-    if (userRole === "SHOWROOM_STAFF" && approvalRoute === "INCHARGE") {
-      status = "PENDING_INCHARGE_APPROVAL";
-    }
+    // Approval route is derived from the creator's role, never from the
+    // client: staff blocks must clear the In-Charge first, everyone else
+    // goes straight to the Manager queue.
+    const isStaff = userRole === "SHOWROOM_STAFF";
+    const status: BlockStatus = isStaff ? "PENDING_INCHARGE_APPROVAL" : "PENDING_MANAGER_APPROVAL";
+    const approvalRoute = isStaff ? "INCHARGE" : "DIRECT";
 
     const expiresAt = new Date();
     expiresAt.setHours(expiresAt.getHours() + durationHours);
 
-    // 2. Create the StockBlock record
     const block = await tx.stockBlock.create({
       data: {
-        block_number: generateBlockNumber(),
+        block_number: await nextBlockNumber(tx),
         block_type: blockType,
         productId,
         inventoryId: inventory.id,
@@ -74,6 +226,8 @@ export async function createBlockRequest({
         showroomId: showroomId || null,
         quantity,
         requestedBy,
+        createdById: createdById || null,
+        createdRole: userRole || null,
         blocked_by: blocked_by || null,
         status,
         remarks,
@@ -82,21 +236,20 @@ export async function createBlockRequest({
       },
     });
 
-    // 3. Update inventory balances immediately (A stock block is NOT a stock deduction of physical stock)
-    // BLOCK decreases Available and increases Blocked, Physical remains unchanged
-    const newAvailable = inventory.availableStock - quantity;
+    // Reserving stock never touches physical stock — only the split between
+    // available and blocked.
+    const newAvailable = calculatedAvailable - quantity;
     const newBlocked = inventory.blockedStock + quantity;
 
     await tx.inventory.update({
       where: { id: inventory.id },
       data: {
-        availableStock: Math.max(0, newAvailable),
+        availableStock: newAvailable,
         blockedStock: newBlocked,
         stockStatus: newAvailable <= 0 ? "BLOCKED" : inventory.stockStatus,
       },
     });
 
-    // 4. Record Stock Movement
     await tx.inventoryMovement.create({
       data: {
         inventoryId: inventory.id,
@@ -105,751 +258,817 @@ export async function createBlockRequest({
         movementType: "BLOCK_CREATED",
         quantity,
         previousQuantity: inventory.availableStock,
-        newQuantity: Math.max(0, newAvailable),
+        newQuantity: newAvailable,
         referenceType: "BLOCK",
         referenceId: block.id,
-        reason: remarks || "Dealer/Showroom Stock Block Requested",
+        reason: remarks || "Stock block requested",
         performedBy: requestedBy,
       },
     });
 
-    // 5. Create Audit Log
-    await tx.auditLog.create({
-      data: {
-        action: "CREATE_BLOCK",
-        entity: "StockBlock",
-        entityId: block.id,
-        meta: {
-          performedBy: requestedBy,
-          blockNumber: block.block_number,
-          quantity,
-          status,
-        },
-      },
+    await recordBlockAudit(tx, {
+      action: "CREATE_BLOCK",
+      blockId: block.id,
+      userId: createdById,
+      userName: requestedBy,
+      role: userRole,
+      toStatus: status,
+      reason: remarks,
+      meta: { blockNumber: block.block_number, quantity },
     });
 
     return block;
-  });
+  }, STOCK_TX_OPTIONS);
 
   // Post-transaction Cache & Notifications
   await invalidateCache("inventory:*");
   await invalidateCache("dashboard:*");
 
-  if (userRole === "SHOWROOM_STAFF" && approvalRoute === "INCHARGE") {
-    const inchargeUsers = await db.user.findMany({
-      where: { role: "SHOWROOM_INCHARGE", showroomId },
-      select: { id: true },
-    });
-    await sendNotificationsToUsers({
-      userIds: inchargeUsers.map((u) => u.id),
+  if (result.status === "PENDING_INCHARGE_APPROVAL") {
+    // §10 — staff block goes to the In-Charge ONLY. The Manager is deliberately
+    // not told yet; they have nothing to act on until the In-Charge signs off.
+    await notifyBlockParties(result, {
       type: "BLOCK_CREATED",
-      title: "Showroom Block Awaiting Review",
-      message: `Staff ${requestedBy} requested a block of ${quantity} boxes.`,
-      priority: "NORMAL",
-      data: { blockId: result.id },
+      title: "Block Awaiting Your Approval",
+      message: `New block ${result.block_number} is waiting for your approval.`,
+      audiences: ["SHOWROOM_INCHARGE"],
     });
   } else {
-    const targetUsers = await db.user.findMany({
-      where: {
-        OR: [{ role: "SUPER_ADMIN" }, { role: "MANAGER" }],
-      },
-      select: { id: true },
-    });
-    await sendNotificationsToUsers({
-      userIds: targetUsers.map((u) => u.id),
-      type: "BLOCK_CREATED",
-      title: "New Block Hold Request",
-      message: `A block hold of ${quantity} boxes has been submitted for approval.`,
-      priority: "NORMAL",
-      data: { blockId: result.id },
+    // §12 — an In-Charge (or Manager/Admin) raised it, so it enters the final
+    // approval queue immediately. No self-approval notification for the creator.
+    await notifyBlockParties(result, {
+      type: "BLOCK_SENT_FOR_APPROVAL",
+      title: "New Block Awaiting Final Approval",
+      message: `Block ${result.block_number} for ${quantity} boxes is waiting for final approval.`,
+      audiences: ["MANAGERS", "SUPER_ADMINS"],
     });
   }
 
   return result;
 }
 
+/**
+ * Returns reserved quantity to the available pool. Shared by reject, cancel,
+ * release and expiry — all of which free stock without touching physical stock.
+ * Caller must already hold the inventory row lock.
+ */
+async function releaseReservedQuantity(
+  tx: any,
+  inv: { id: string; availableStock: number; blockedStock: number; allocatedStock: number; stockStatus: string; warehouseId: string | null },
+  block: { id: string; productId: string; quantity: number; status: string },
+  { performedBy, reason, movementType = "BLOCK_RELEASED" }: { performedBy: string; reason: string; movementType?: string }
+) {
+  // Pre-shipment holds sit in blockedStock; nothing has moved to allocated yet.
+  const qty = block.quantity;
+  const newAvailable = inv.availableStock + qty;
+  const newBlocked = Math.max(0, inv.blockedStock - qty);
+
+  await tx.inventory.update({
+    where: { id: inv.id },
+    data: {
+      availableStock: newAvailable,
+      blockedStock: newBlocked,
+      stockStatus: newAvailable > 0 ? "AVAILABLE" : inv.stockStatus,
+    },
+  });
+
+  await tx.inventoryMovement.create({
+    data: {
+      inventoryId: inv.id,
+      productId: block.productId,
+      warehouseId: inv.warehouseId,
+      movementType,
+      quantity: qty,
+      previousQuantity: inv.availableStock,
+      newQuantity: newAvailable,
+      referenceType: "BLOCK",
+      referenceId: block.id,
+      reason,
+      performedBy,
+    },
+  });
+
+  return { newAvailable, newBlocked };
+}
+
+/** Loads a block and locks its inventory row in one step. */
+async function loadBlockForMutation(tx: any, blockId: string) {
+  const block = await tx.stockBlock.findUnique({ where: { id: blockId } });
+  if (!block) throw new Error("Stock block request not found.");
+  const inv = await lockInventoryById(tx, block.inventoryId);
+  if (!inv) throw new Error("Inventory record not found for this block.");
+  return { block, inv };
+}
+
+/**
+ * Approves a block at whichever stage it is currently in.
+ *
+ * Staff-created blocks pass through the In-Charge first (→ PENDING_MANAGER_APPROVAL),
+ * then a Manager/Super Admin (→ APPROVED). Authority and legality of the
+ * transition are both enforced here, not by the caller.
+ */
 export async function approveBlock({
   blockId,
   approvedBy,
+  approvedById,
   role,
   approvedQuantity,
 }: {
   blockId: string;
   approvedBy: string;
+  approvedById?: string | null;
   role: string;
   approvedQuantity?: number;
 }) {
   const result = await db.$transaction(async (tx) => {
-    const block = await tx.stockBlock.findUnique({
-      where: { id: blockId },
-      include: { inventory: true },
-    });
+    const { block, inv } = await loadBlockForMutation(tx, blockId);
 
-    if (!block) throw new Error("Stock block request not found.");
+    assertPermission(
+      canApproveBlock(role as Role, block.status as BlockStatus, {
+        createdById: block.createdById,
+        actorId: approvedById,
+      }),
+      `Your role (${role}) cannot approve a block in state ${block.status}.`
+    );
 
-    // Route B: SHOWROOM_INCHARGE approval
+    // ——— Stage 1: In-Charge sign-off ———
     if (block.status === "PENDING_INCHARGE_APPROVAL") {
-      if (role !== "SHOWROOM_INCHARGE" && role !== "SUPER_ADMIN") {
-        throw new Error("Only Showroom In-Charge can approve showroom staff blocks at this stage.");
-      }
+      assertTransition(block.status, "PENDING_MANAGER_APPROVAL");
 
-      // Update status to PENDING_MANAGER_APPROVAL
-      const updatedBlock = await tx.stockBlock.update({
+      const updated = await tx.stockBlock.update({
         where: { id: blockId },
         data: {
           status: "PENDING_MANAGER_APPROVAL",
-          approvedBy,
-          approvedAt: new Date(),
+          inchargeApprovedBy: approvedBy,
+          inchargeApprovedAt: new Date(),
         },
       });
 
-      // Notify Manager ONLY (do NOT notify Super Admin)
-      const managers = await tx.user.findMany({
-        where: { role: "MANAGER", warehouse_id: block.warehouseId },
-        select: { id: true }
-      });
-      for (const u of managers) {
-        await tx.notification.create({
-          data: {
-            userId: u.id,
-            type: "BLOCK_APPROVED",
-            title: "Showroom Approved Block Review",
-            message: `Showroom In-Charge approved block #${block.block_number || block.id.slice(-8)}. Final approval required.`,
-            priority: "NORMAL",
-            data: { blockId: block.id }
-          }
-        });
-      }
-
-      await tx.auditLog.create({
-        data: {
-          action: "INCHARGE_APPROVE_BLOCK",
-          entity: "StockBlock",
-          entityId: block.id,
-          meta: { performedBy: approvedBy, details: "Approved by Showroom In-Charge. Routed to Manager." },
-        },
+      await recordBlockAudit(tx, {
+        action: "APPROVE_BLOCK",
+        blockId,
+        userId: approvedById,
+        userName: approvedBy,
+        role,
+        fromStatus: "PENDING_INCHARGE_APPROVAL",
+        toStatus: "PENDING_MANAGER_APPROVAL",
+        meta: { stage: "INCHARGE" },
       });
 
-      return { updatedBlock, isStageOne: true };
+      return { block: updated, stage: "INCHARGE" as const, finalQty: block.quantity };
     }
 
-    // Route A, B, C: Final MANAGER or SUPER_ADMIN approval
-    if (block.status !== "PENDING_MANAGER_APPROVAL") {
-      throw new Error(`Block request is not in PENDING_MANAGER_APPROVAL state (Current: ${block.status}).`);
-    }
+    // ——— Stage 2: Manager / Super Admin final approval ———
+    assertTransition(block.status, "APPROVED");
 
-    if (role !== "MANAGER" && role !== "SUPER_ADMIN") {
-      throw new Error("Only Manager or Super Admin can perform final block approval.");
-    }
-
-    const inventory = block.inventory;
     const finalQty = approvedQuantity !== undefined ? approvedQuantity : block.quantity;
-
-    if (finalQty < 0) {
-      throw new Error("Approved quantity cannot be negative.");
+    if (finalQty <= 0) throw new Error("Approved quantity must be greater than zero.");
+    if (finalQty > block.quantity) {
+      throw new Error("Approved quantity cannot exceed the requested quantity.");
     }
 
-    let updatedBlock = block;
-
-    // Handle Partial Approval (reducing quantity and releasing the remainder)
+    // Partial approval returns the unapproved remainder to available stock.
     if (finalQty < block.quantity) {
       const difference = block.quantity - finalQty;
-
-      // Update inventory: return difference to available, subtract from blocked
-      const newAvailable = inventory.availableStock + difference;
-      const newBlocked = Math.max(0, inventory.blockedStock - difference);
+      const newAvailable = inv.availableStock + difference;
+      const newBlocked = Math.max(0, inv.blockedStock - difference);
 
       await tx.inventory.update({
-        where: { id: inventory.id },
+        where: { id: inv.id },
         data: {
           availableStock: newAvailable,
           blockedStock: newBlocked,
-          stockStatus: newAvailable > 0 ? "AVAILABLE" : inventory.stockStatus,
+          stockStatus: newAvailable > 0 ? "AVAILABLE" : inv.stockStatus,
         },
       });
 
-      // Record partial release movement
       await tx.inventoryMovement.create({
         data: {
-          inventoryId: inventory.id,
+          inventoryId: inv.id,
           productId: block.productId,
-          warehouseId: block.warehouseId,
+          warehouseId: inv.warehouseId,
           movementType: "BLOCK_RELEASED",
           quantity: difference,
-          previousQuantity: inventory.availableStock,
+          previousQuantity: inv.availableStock,
           newQuantity: newAvailable,
           referenceType: "BLOCK",
           referenceId: block.id,
-          reason: `Partial Block Approval. Released remainder of ${difference} boxes.`,
+          reason: `Partial approval — released ${difference} boxes.`,
           performedBy: approvedBy,
         },
       });
-
-      // Update block record quantity
-      updatedBlock = await tx.stockBlock.update({
-        where: { id: blockId },
-        data: {
-          quantity: finalQty,
-          remarks: `${block.remarks || ""} (Partial Approval: original requested ${block.quantity}, approved ${finalQty})`,
-        },
-        include: { inventory: true },
-      });
     }
 
-    // Determine next status based on Block Type
-    // If block type is CONFIRMED, transition directly to CONFIRMED.
-    // If block type is BLOCKED, transition to APPROVED.
-    const targetStatus = block.block_type === "CONFIRMED" ? "CONFIRMED" : "APPROVED";
-
-    updatedBlock = await tx.stockBlock.update({
+    const updated = await tx.stockBlock.update({
       where: { id: blockId },
       data: {
-        status: targetStatus,
+        status: "APPROVED",
+        quantity: finalQty,
         approvedBy,
         approvedAt: new Date(),
-        // If confirmed, update confirmedAt as well
-        confirmedAt: targetStatus === "CONFIRMED" ? new Date() : null,
-      },
-      include: { inventory: true },
-    });
-
-    // If target is CONFIRMED, shift stock from blocked to allocated
-    if (targetStatus === "CONFIRMED") {
-      const updatedInv = await tx.inventory.findUnique({ where: { id: inventory.id } });
-      if (updatedInv) {
-        await tx.inventory.update({
-          where: { id: updatedInv.id },
-          data: {
-            blockedStock: Math.max(0, updatedInv.blockedStock - finalQty),
-            allocatedStock: updatedInv.allocatedStock + finalQty,
-          },
-        });
-
-        await tx.inventoryMovement.create({
-          data: {
-            inventoryId: updatedInv.id,
-            productId: block.productId,
-            warehouseId: block.warehouseId,
-            movementType: "ALLOCATED",
-            quantity: finalQty,
-            previousQuantity: updatedInv.allocatedStock,
-            newQuantity: updatedInv.allocatedStock + finalQty,
-            referenceType: "BLOCK",
-            referenceId: block.id,
-            reason: "Auto-allocated during Confirmed Block type approval",
-            performedBy: approvedBy,
-          },
-        });
-      }
-    }
-
-    // Notify Dealer and requesting Staff
-    const notifyUsers: string[] = [];
-    if (block.dealerId) {
-      const dealers = await tx.user.findMany({ where: { dealer_id: block.dealerId }, select: { id: true } });
-      dealers.forEach((d) => notifyUsers.push(d.id));
-    }
-    if (block.showroomId) {
-      const staff = await tx.user.findMany({ where: { showroomId: block.showroomId }, select: { id: true } });
-      staff.forEach((s) => notifyUsers.push(s.id));
-    }
-    // Also add explicit requester by name lookup if no IDs match
-    if (notifyUsers.length === 0) {
-      const requester = await tx.user.findFirst({ where: { name: block.requestedBy }, select: { id: true } });
-      if (requester) notifyUsers.push(requester.id);
-    }
-
-    await tx.auditLog.create({
-      data: {
-        action: "APPROVE_BLOCK",
-        entity: "StockBlock",
-        entityId: block.id,
-        meta: {
-          performedBy: approvedBy,
-          approvedQty: finalQty,
-          originalQty: block.quantity,
-          status: targetStatus,
-        },
+        managerApprovedBy: approvedBy,
+        managerApprovedAt: new Date(),
+        remarks:
+          finalQty < block.quantity
+            ? `${block.remarks || ""} (Partial approval: requested ${block.quantity}, approved ${finalQty})`.trim()
+            : block.remarks,
       },
     });
 
-    return { updatedBlock, notifyUsers, finalQty, isStageOne: false };
-  });
+    await recordBlockAudit(tx, {
+      action: "APPROVE_BLOCK",
+      blockId,
+      userId: approvedById,
+      userName: approvedBy,
+      role,
+      fromStatus: block.status,
+      toStatus: "APPROVED",
+      meta: { stage: "MANAGER", approvedQty: finalQty, requestedQty: block.quantity },
+    });
 
-  if (result.isStageOne) {
-    const managers = await db.user.findMany({
-      where: { role: "MANAGER", warehouse_id: result.updatedBlock.warehouseId },
-      select: { id: true }
-    });
-    await sendNotificationsToUsers({
-      userIds: managers.map(u => u.id),
-      type: "BLOCK_APPROVED",
-      title: "Showroom Approved Block Review",
-      message: `Showroom In-Charge approved block #${result.updatedBlock.block_number || result.updatedBlock.id.slice(-8)}. Final approval required.`,
-      priority: "NORMAL",
-      data: { blockId: result.updatedBlock.id }
-    });
-  } else if (result.notifyUsers && result.notifyUsers.length > 0) {
-    await sendNotificationsToUsers({
-      userIds: result.notifyUsers,
-      type: "BLOCK_APPROVED",
-      title: "Stock Block Approved",
-      message: `Your request for ${result.finalQty} boxes has been approved.`,
-      priority: "NORMAL",
-      data: { blockId: blockId }
-    });
-  }
+    return { block: updated, stage: "MANAGER" as const, finalQty };
+  }, STOCK_TX_OPTIONS);
 
   await invalidateCache("inventory:*");
   await invalidateCache("dashboard:*");
+  if (result.stage === "INCHARGE") {
+    // §11 — In-Charge signed off; the Manager and Super Admin now have work.
+    await notifyBlockParties(result.block, {
+      type: "BLOCK_SENT_FOR_APPROVAL",
+      title: "Block Awaiting Final Approval",
+      message: `Block ${result.block.block_number} is waiting for final approval.`,
+      audiences: ["MANAGERS", "SUPER_ADMINS"],
+    });
+  } else {
+    // §13 — final approval; tell the creator, their showroom and Super Admin.
+    await notifyBlockParties(result.block, {
+      type: "BLOCK_APPROVED",
+      title: "Stock Block Approved",
+      message: `Block ${result.block.block_number} has been approved and is ready for shipment.`,
+      audiences: ["CREATOR", "SHOWROOM", "SUPER_ADMINS"],
+    });
+  }
 
-  return result.updatedBlock;
+  return result.block;
 }
 
+/** Rejects a block at its current approval stage and frees the held stock. */
 export async function rejectBlock({
   blockId,
   rejectedBy,
+  rejectedById,
   role,
   reason,
 }: {
   blockId: string;
   rejectedBy: string;
+  rejectedById?: string | null;
   role: string;
   reason?: string;
 }) {
-  return await db.$transaction(async (tx) => {
-    const block = await tx.stockBlock.findUnique({
-      where: { id: blockId },
-      include: { inventory: true },
+  const result = await db.$transaction(async (tx) => {
+    const { block, inv } = await loadBlockForMutation(tx, blockId);
+
+    assertPermission(
+      canRejectBlock(role as Role, block.status as BlockStatus, {
+        createdById: block.createdById,
+        actorId: rejectedById,
+      }),
+      `Your role (${role}) cannot reject a block in state ${block.status}.`
+    );
+    assertTransition(block.status, "REJECTED");
+
+    await releaseReservedQuantity(tx, inv, block, {
+      performedBy: rejectedBy,
+      reason: reason || "Stock block rejected",
     });
 
-    if (!block) throw new Error("Stock block request not found.");
-
-    // Validate authorization
-    if (block.status === "PENDING_INCHARGE_APPROVAL") {
-      if (role !== "SHOWROOM_INCHARGE" && role !== "SUPER_ADMIN" && role !== "MANAGER") {
-        throw new Error("Unauthorized to reject at this showroom stage.");
-      }
-    } else if (block.status === "PENDING_MANAGER_APPROVAL") {
-      if (role !== "MANAGER" && role !== "SUPER_ADMIN") {
-        throw new Error("Unauthorized to reject at this manager stage.");
-      }
-    } else {
-      throw new Error(`Cannot reject block in current status: ${block.status}`);
-    }
-
-    // Release stock holds back to available
-    const inventory = block.inventory;
-    const newAvailable = inventory.availableStock + block.quantity;
-    const newBlocked = Math.max(0, inventory.blockedStock - block.quantity);
-
-    await tx.inventory.update({
-      where: { id: inventory.id },
-      data: {
-        availableStock: newAvailable,
-        blockedStock: newBlocked,
-        stockStatus: newAvailable > 0 ? "AVAILABLE" : inventory.stockStatus,
-      },
-    });
-
-    // Update block status
-    const updatedBlock = await tx.stockBlock.update({
+    const updated = await tx.stockBlock.update({
       where: { id: blockId },
       data: {
         status: "REJECTED",
-        remarks: reason ? `${block.remarks || ""} [Rejection Reason: ${reason}]` : block.remarks,
+        remarks: reason ? `${block.remarks || ""} [Rejected: ${reason}]`.trim() : block.remarks,
       },
     });
 
-    // Notify requesting user of Rejection
-    const rejectUsers: string[] = [];
-    if (block.dealerId) {
-      const dlrs = await tx.user.findMany({ where: { dealer_id: block.dealerId }, select: { id: true } });
-      dlrs.forEach((d) => rejectUsers.push(d.id));
-    }
-    if (block.showroomId) {
-      const stff = await tx.user.findMany({ where: { showroomId: block.showroomId }, select: { id: true } });
-      stff.forEach((s) => rejectUsers.push(s.id));
-    }
-    if (rejectUsers.length === 0) {
-      const req = await tx.user.findFirst({ where: { name: block.requestedBy }, select: { id: true } });
-      if (req) rejectUsers.push(req.id);
-    }
-
-    for (const uid of rejectUsers) {
-      await tx.notification.create({
-        data: {
-          userId: uid,
-          type: "BLOCK_REJECTED",
-          title: "Stock Block Rejected",
-          message: `Your request was rejected. ${reason ? `Reason: ${reason}` : ""}`,
-          priority: "HIGH",
-          data: { blockId: block.id }
-        }
-      });
-    }
-
-    // Log release movement
-    await tx.inventoryMovement.create({
-      data: {
-        inventoryId: inventory.id,
-        productId: block.productId,
-        warehouseId: block.warehouseId,
-        movementType: "BLOCK_RELEASED",
-        quantity: block.quantity,
-        previousQuantity: inventory.availableStock,
-        newQuantity: newAvailable,
-        referenceType: "BLOCK",
-        referenceId: block.id,
-        reason: reason || "Stock Block Request Rejected",
-        performedBy: rejectedBy,
-      },
+    await recordBlockAudit(tx, {
+      action: "REJECT_BLOCK",
+      blockId,
+      userId: rejectedById,
+      userName: rejectedBy,
+      role,
+      fromStatus: block.status,
+      toStatus: "REJECTED",
+      reason,
     });
 
-    await tx.auditLog.create({
-      data: {
-        action: "REJECT_BLOCK",
-        entity: "StockBlock",
-        entityId: block.id,
-        meta: { performedBy: rejectedBy, reason },
-      },
-    });
+    return updated;
+  }, STOCK_TX_OPTIONS);
 
-    return updatedBlock;
+  await invalidateCache("inventory:*");
+  await invalidateCache("dashboard:*");
+  await notifyBlockParties(result, {
+    type: "BLOCK_REJECTED",
+    title: "Stock Block Rejected",
+    message: `Block ${result.block_number} was rejected.${reason ? ` Reason: ${reason}` : ""}`,
+    priority: "HIGH",
+    audiences: ["CREATOR", "SHOWROOM", "SUPER_ADMINS"],
   });
+
+  return result;
 }
 
-export async function confirmBlock({
+/** APPROVED → READY_TO_SHIP. Manager/Super Admin only. */
+export async function markBlockReadyToShip({
   blockId,
-  confirmedBy,
+  performedBy,
+  performedById,
+  role,
 }: {
   blockId: string;
-  confirmedBy: string;
+  performedBy: string;
+  performedById?: string | null;
+  role: string;
 }) {
-  return await db.$transaction(async (tx) => {
-    const block = await tx.stockBlock.findUnique({
+  const result = await db.$transaction(async (tx) => {
+    const block = await tx.stockBlock.findUnique({ where: { id: blockId } });
+    if (!block) throw new Error("Stock block request not found.");
+
+    assertPermission(
+      canMarkReadyToShip(role as Role, block.status as BlockStatus),
+      `Your role (${role}) cannot mark a block ready to ship.`
+    );
+    assertTransition(block.status, "READY_TO_SHIP");
+
+    const updated = await tx.stockBlock.update({
       where: { id: blockId },
-      include: { inventory: true },
+      data: { status: "READY_TO_SHIP", readyToShipAt: new Date() },
     });
 
-    if (!block) throw new Error("Stock block not found.");
-    if (block.status !== "APPROVED") {
-      throw new Error(`Only APPROVED blocks can be confirmed. Current: ${block.status}`);
-    }
-
-    const inventory = block.inventory;
-
-    // Shift stock from Blocked to Allocated/Confirmed
-    const newBlocked = Math.max(0, inventory.blockedStock - block.quantity);
-    const newAllocated = inventory.allocatedStock + block.quantity;
-
-    await tx.inventory.update({
-      where: { id: inventory.id },
-      data: {
-        blockedStock: newBlocked,
-        allocatedStock: newAllocated,
-      },
+    await recordBlockAudit(tx, {
+      action: "READY_TO_SHIP",
+      blockId,
+      userId: performedById,
+      userName: performedBy,
+      role,
+      fromStatus: block.status,
+      toStatus: "READY_TO_SHIP",
     });
 
-    const updatedBlock = await tx.stockBlock.update({
-      where: { id: blockId },
-      data: {
-        status: "CONFIRMED",
-        confirmedAt: new Date(),
-        expiresAt: null, // confirmation removes expiration deadline
-      },
-    });
+    return updated;
+  }, STOCK_TX_OPTIONS);
 
-    // Notify Managers & Super Admins of confirmation
-    const opsUsers = await tx.user.findMany({
-      where: {
-        OR: [
-          { role: "SUPER_ADMIN" },
-          { role: "MANAGER", warehouse_id: block.warehouseId }
-        ]
-      },
-      select: { id: true }
-    });
-    for (const u of opsUsers) {
-      await tx.notification.create({
-        data: {
-          userId: u.id,
-          type: "BOOKING_CONFIRMED",
-          title: "Booking Confirmed by Dealer",
-          message: `Dealer confirmed booking #${block.block_number || block.id.slice(-8)}.`,
-          priority: "NORMAL",
-          data: { blockId: block.id }
-        }
-      });
-    }
-
-    // Record stock allocation movement
-    await tx.inventoryMovement.create({
-      data: {
-        inventoryId: inventory.id,
-        productId: block.productId,
-        warehouseId: block.warehouseId,
-        movementType: "ALLOCATED",
-        quantity: block.quantity,
-        previousQuantity: inventory.allocatedStock,
-        newQuantity: newAllocated,
-        referenceType: "BLOCK",
-        referenceId: block.id,
-        reason: "Stock allocated/confirmed by dealer",
-        performedBy: confirmedBy,
-      },
-    });
-
-    await tx.auditLog.create({
-      data: {
-        action: "CONFIRM_BLOCK",
-        entity: "StockBlock",
-        entityId: block.id,
-        meta: { performedBy: confirmedBy },
-      },
-    });
-
-    return updatedBlock;
-  });
+  await invalidateCache("inventory:*");
+  return result;
 }
 
-export async function deliverBlock({
+/**
+ * Ships all or part of a block.
+ *
+ * Shipping moves stock out of the blocked pool and reduces physical stock —
+ * this is the point where the goods actually leave the warehouse.
+ */
+export async function shipBlock({
   blockId,
-  deliveryQty,
-  deliveredBy,
+  quantity,
+  performedBy,
+  performedById,
+  role,
 }: {
   blockId: string;
-  deliveryQty: number;
-  deliveredBy: string;
+  quantity?: number;
+  performedBy: string;
+  performedById?: string | null;
+  role: string;
 }) {
-  return await db.$transaction(async (tx) => {
-    const block = await tx.stockBlock.findUnique({
-      where: { id: blockId },
-      include: { inventory: true },
-    });
+  const result = await db.$transaction(async (tx) => {
+    const { block, inv } = await loadBlockForMutation(tx, blockId);
 
-    if (!block) throw new Error("Stock block not found.");
-    
-    const allowedFulfillStates = ["CONFIRMED", "PARTIALLY_FULFILLED"];
-    if (!allowedFulfillStates.includes(block.status)) {
-      throw new Error(`Stock can only be dispatched from CONFIRMED or PARTIALLY_FULFILLED blocks. Current status: ${block.status}`);
+    assertPermission(
+      canShipBlock(role as Role, block.status as BlockStatus),
+      `Your role (${role}) cannot ship a block in state ${block.status}.`
+    );
+
+    const outstanding = block.quantity - block.shippedQuantity;
+    const shipQty = quantity ?? outstanding;
+    if (shipQty <= 0) throw new Error("Ship quantity must be greater than zero.");
+    if (shipQty > outstanding) {
+      throw new Error(`Cannot ship ${shipQty}; only ${outstanding} boxes remain on this block.`);
     }
 
-    const inventory = block.inventory;
+    const totalShipped = block.shippedQuantity + shipQty;
+    const nextStatus: BlockStatus = totalShipped >= block.quantity ? "SHIPPED" : "PARTIALLY_SHIPPED";
+    assertTransition(block.status, nextStatus);
 
-    if (deliveryQty <= 0) {
-      throw new Error("Dispatch quantity must be greater than zero.");
-    }
-
-    // Check if deliveryQty exceeds current allocated reserve
-    if (deliveryQty > inventory.allocatedStock) {
-      throw new Error(`Requested dispatch quantity ${deliveryQty} exceeds warehouse allocated stock reserve of ${inventory.allocatedStock}.`);
-    }
-
-    // Deduct physical (totalStock) and allocated stock, increment delivered stock
-    const newTotal = Math.max(0, inventory.totalStock - deliveryQty);
-    const newAllocated = Math.max(0, inventory.allocatedStock - deliveryQty);
-    const newDelivered = inventory.deliveredStock + deliveryQty;
+    // Physical stock leaves the building; the reservation is consumed.
+    const newTotal = Math.max(0, inv.totalStock - shipQty);
+    const newBlocked = Math.max(0, inv.blockedStock - shipQty);
 
     await tx.inventory.update({
-      where: { id: inventory.id },
+      where: { id: inv.id },
       data: {
         totalStock: newTotal,
-        allocatedStock: newAllocated,
-        deliveredStock: newDelivered,
-        stockStatus: newTotal <= 0 ? "OUT_OF_STOCK" : inventory.stockStatus,
+        blockedStock: newBlocked,
+        stockStatus: newTotal <= 0 ? "OUT_OF_STOCK" : inv.stockStatus,
       },
     });
 
-    // Determine new status (e.g. FULFILLED if all or remaining was delivered, else PARTIALLY_FULFILLED)
-    // We can compare against block quantity if we want, or if remaining allocated goes to zero.
-    // For partial dispatch, let's update status:
-    const remainingToDeliver = block.quantity - (block.deliveredAt ? block.quantity : 0); // basic fallback, or we can check newAllocated.
-    const isFullyDelivered = newAllocated === 0;
-    const newStatus = isFullyDelivered ? "DELIVERED" : "PARTIALLY_FULFILLED";
-
-    const updatedBlock = await tx.stockBlock.update({
-      where: { id: blockId },
-      data: {
-        status: newStatus,
-        deliveredAt: new Date(),
-        remarks: `${block.remarks || ""} (Dispatched ${deliveryQty} boxes by ${deliveredBy})`,
-      },
-    });
-
-    // Notify Dealer/Staff of Delivery/Dispatch
-    const delivUsers: string[] = [];
-    if (block.dealerId) {
-      const dlrs = await tx.user.findMany({ where: { dealer_id: block.dealerId }, select: { id: true } });
-      dlrs.forEach((d) => delivUsers.push(d.id));
-    }
-    if (block.showroomId) {
-      const stff = await tx.user.findMany({ where: { showroomId: block.showroomId }, select: { id: true } });
-      stff.forEach((s) => delivUsers.push(s.id));
-    }
-    if (delivUsers.length === 0) {
-      const req = await tx.user.findFirst({ where: { name: block.requestedBy }, select: { id: true } });
-      if (req) delivUsers.push(req.id);
-    }
-
-    for (const uid of delivUsers) {
-      await tx.notification.create({
-        data: {
-          userId: uid,
-          type: "BOOKING_DELIVERED",
-          title: "Your Order has been Dispatched",
-          message: `Warehouse has dispatched ${deliveryQty} boxes from booking #${block.block_number || block.id.slice(-8)}.`,
-          priority: "HIGH",
-          data: { blockId: block.id }
-        }
-      });
-    }
-
-    // Record STOCK_DISPATCHED or STOCK_DELIVERED movement
     await tx.inventoryMovement.create({
       data: {
-        inventoryId: inventory.id,
+        inventoryId: inv.id,
         productId: block.productId,
-        warehouseId: block.warehouseId,
+        warehouseId: inv.warehouseId,
         movementType: "STOCK_DISPATCHED",
-        quantity: deliveryQty,
-        previousQuantity: inventory.totalStock,
+        quantity: shipQty,
+        previousQuantity: inv.totalStock,
         newQuantity: newTotal,
         referenceType: "BLOCK",
         referenceId: block.id,
-        reason: `Dispatched ${deliveryQty} boxes to dealer`,
-        performedBy: deliveredBy,
+        reason: `Shipped ${shipQty} boxes`,
+        performedBy,
       },
     });
 
-    await tx.auditLog.create({
+    const updated = await tx.stockBlock.update({
+      where: { id: blockId },
       data: {
-        action: "DISPATCH_STOCK",
-        entity: "StockBlock",
-        entityId: block.id,
-        meta: {
-          performedBy: deliveredBy,
-          dispatchedQty: deliveryQty,
-          newPhysicalStock: newTotal,
-        },
+        status: nextStatus,
+        shippedQuantity: totalShipped,
+        shippedAt: new Date(),
       },
     });
 
-    return updatedBlock;
+    await recordBlockAudit(tx, {
+      action: "SHIP_BLOCK",
+      blockId,
+      userId: performedById,
+      userName: performedBy,
+      role,
+      fromStatus: block.status,
+      toStatus: nextStatus,
+      meta: { shippedNow: shipQty, shippedTotal: totalShipped, physicalAfter: newTotal },
+    });
+
+    return updated;
+  }, STOCK_TX_OPTIONS);
+
+  await invalidateCache("inventory:*");
+  await invalidateCache("dashboard:*");
+  await notifyBlockParties(result, {
+    type: "BLOCK_SHIPPED",
+    title: "Stock Shipped",
+    message: `Block ${result.block_number} has been shipped.`,
+    priority: "HIGH",
+    audiences: ["CREATOR", "SHOWROOM_INCHARGE", "SUPER_ADMINS"],
   });
+
+  return result;
 }
 
-export async function releaseBlock({
+/** Records delivery of shipped goods. Physical stock already left at ship time. */
+export async function deliverBlock({
   blockId,
-  releasedBy,
+  quantity,
+  performedBy,
+  performedById,
+  role,
+}: {
+  blockId: string;
+  quantity?: number;
+  performedBy: string;
+  performedById?: string | null;
+  role: string;
+}) {
+  const result = await db.$transaction(async (tx) => {
+    const { block, inv } = await loadBlockForMutation(tx, blockId);
+
+    assertPermission(
+      canDeliverBlock(role as Role, block.status as BlockStatus),
+      `Your role (${role}) cannot deliver a block in state ${block.status}.`
+    );
+
+    const outstanding = block.shippedQuantity - block.deliveredQuantity;
+    const deliverQty = quantity ?? outstanding;
+    if (deliverQty <= 0) throw new Error("Delivery quantity must be greater than zero.");
+    if (deliverQty > outstanding) {
+      throw new Error(`Cannot deliver ${deliverQty}; only ${outstanding} shipped boxes are undelivered.`);
+    }
+
+    const totalDelivered = block.deliveredQuantity + deliverQty;
+    const nextStatus: BlockStatus = totalDelivered >= block.quantity ? "DELIVERED" : "PARTIALLY_DELIVERED";
+    assertTransition(block.status, nextStatus);
+
+    // Physical stock was already reduced on shipment; this only records receipt.
+    await tx.inventory.update({
+      where: { id: inv.id },
+      data: { deliveredStock: inv.deliveredStock + deliverQty },
+    });
+
+    await tx.inventoryMovement.create({
+      data: {
+        inventoryId: inv.id,
+        productId: block.productId,
+        warehouseId: inv.warehouseId,
+        movementType: "STOCK_DELIVERED",
+        quantity: deliverQty,
+        previousQuantity: inv.deliveredStock,
+        newQuantity: inv.deliveredStock + deliverQty,
+        referenceType: "BLOCK",
+        referenceId: block.id,
+        reason: `Delivered ${deliverQty} boxes`,
+        performedBy,
+      },
+    });
+
+    const updated = await tx.stockBlock.update({
+      where: { id: blockId },
+      data: {
+        status: nextStatus,
+        deliveredQuantity: totalDelivered,
+        deliveredAt: new Date(),
+      },
+    });
+
+    await recordBlockAudit(tx, {
+      action: "DELIVER_BLOCK",
+      blockId,
+      userId: performedById,
+      userName: performedBy,
+      role,
+      fromStatus: block.status,
+      toStatus: nextStatus,
+      meta: { deliveredNow: deliverQty, deliveredTotal: totalDelivered },
+    });
+
+    return updated;
+  }, STOCK_TX_OPTIONS);
+
+  await invalidateCache("inventory:*");
+  await invalidateCache("dashboard:*");
+  await notifyBlockParties(result, {
+    type: "BLOCK_DELIVERED",
+    title: "Stock Delivered",
+    message: `Block ${result.block_number} has been delivered.`,
+    audiences: ["CREATOR", "SHOWROOM_INCHARGE", "SUPER_ADMINS"],
+  });
+
+  return result;
+}
+
+/** Cancels an active block. Creators may cancel their own; Managers, any. */
+export async function cancelBlock({
+  blockId,
+  performedBy,
+  performedById,
+  role,
   reason,
 }: {
   blockId: string;
-  releasedBy: string;
+  performedBy: string;
+  performedById?: string | null;
+  role: string;
   reason?: string;
 }) {
-  return await db.$transaction(async (tx) => {
-    const block = await tx.stockBlock.findUnique({
-      where: { id: blockId },
-      include: { inventory: true },
+  const result = await db.$transaction(async (tx) => {
+    const { block, inv } = await loadBlockForMutation(tx, blockId);
+
+    assertPermission(
+      canCancelBlock(role as Role, block.status as BlockStatus, {
+        createdById: block.createdById,
+        actorId: performedById,
+      }),
+      `Your role (${role}) cannot cancel this block.`
+    );
+    assertTransition(block.status, "CANCELLED");
+
+    await releaseReservedQuantity(tx, inv, block, {
+      performedBy,
+      reason: reason || "Block cancelled",
     });
 
-    if (!block) throw new Error("Stock block not found.");
-
-    const inventory = block.inventory;
-    let newAvailable = inventory.availableStock;
-    let newBlocked = inventory.blockedStock;
-    let newAllocated = inventory.allocatedStock;
-
-    if (block.status === "PENDING" || block.status === "APPROVED" || block.status === "PENDING_INCHARGE_APPROVAL" || block.status === "PENDING_MANAGER_APPROVAL") {
-      // Stock was in blockedStock
-      newAvailable = inventory.availableStock + block.quantity;
-      newBlocked = Math.max(0, inventory.blockedStock - block.quantity);
-    } else if (block.status === "CONFIRMED" || block.status === "PARTIALLY_FULFILLED") {
-      // Stock was in allocatedStock
-      newAvailable = inventory.availableStock + block.quantity;
-      newAllocated = Math.max(0, inventory.allocatedStock - block.quantity);
-    } else {
-      throw new Error(`Only pending, approved, or confirmed blocks can be released (Current status: ${block.status}).`);
-    }
-
-    // Update inventory
-    await tx.inventory.update({
-      where: { id: inventory.id },
+    const updated = await tx.stockBlock.update({
+      where: { id: blockId },
       data: {
-        availableStock: newAvailable,
-        blockedStock: newBlocked,
-        allocatedStock: newAllocated,
-        stockStatus: newAvailable > 0 ? "AVAILABLE" : inventory.stockStatus,
+        status: "CANCELLED",
+        cancelledAt: new Date(),
+        remarks: reason ? `${block.remarks || ""} [Cancelled: ${reason}]`.trim() : block.remarks,
       },
     });
 
-    // Update block status
-    const updatedBlock = await tx.stockBlock.update({
+    await recordBlockAudit(tx, {
+      action: "CANCEL_BLOCK",
+      blockId,
+      userId: performedById,
+      userName: performedBy,
+      role,
+      fromStatus: block.status,
+      toStatus: "CANCELLED",
+      reason,
+    });
+
+    return updated;
+  }, STOCK_TX_OPTIONS);
+
+  await invalidateCache("inventory:*");
+  await invalidateCache("dashboard:*");
+  await notifyBlockParties(result, {
+    type: "BLOCK_CANCELLED",
+    title: "Stock Block Cancelled",
+    message: `Block ${result.block_number} was cancelled and its stock released.`,
+    audiences: ["CREATOR", "SHOWROOM_INCHARGE", "SUPER_ADMINS"],
+  });
+  return result;
+}
+
+/** Manager-initiated release of an active block's reserved stock. */
+export async function releaseBlock({
+  blockId,
+  releasedBy,
+  releasedById,
+  role = "SUPER_ADMIN",
+  reason,
+  skipPermissionCheck = false,
+}: {
+  blockId: string;
+  releasedBy: string;
+  releasedById?: string | null;
+  role?: string;
+  reason?: string;
+  /** Set by the expiry worker, which acts as the system rather than a user. */
+  skipPermissionCheck?: boolean;
+}) {
+  const result = await db.$transaction(async (tx) => {
+    const { block, inv } = await loadBlockForMutation(tx, blockId);
+
+    if (!skipPermissionCheck) {
+      assertPermission(
+        canReleaseBlock(role as Role, block.status as BlockStatus),
+        `Your role (${role}) cannot release a block in state ${block.status}.`
+      );
+    }
+    assertTransition(block.status, "RELEASED");
+
+    await releaseReservedQuantity(tx, inv, block, {
+      performedBy: releasedBy,
+      reason: reason || "Stock block released",
+    });
+
+    const updated = await tx.stockBlock.update({
       where: { id: blockId },
       data: {
         status: "RELEASED",
         releasedAt: new Date(),
-        remarks: reason ? `${block.remarks || ""} [Released: ${reason}]` : block.remarks,
+        remarks: reason ? `${block.remarks || ""} [Released: ${reason}]`.trim() : block.remarks,
       },
     });
 
-    // Notify Requesting User of Release
-    const relUsers: string[] = [];
-    if (block.dealerId) {
-      const dlrs = await tx.user.findMany({ where: { dealer_id: block.dealerId }, select: { id: true } });
-      dlrs.forEach((d) => relUsers.push(d.id));
-    }
-    if (block.showroomId) {
-      const stff = await tx.user.findMany({ where: { showroomId: block.showroomId }, select: { id: true } });
-      stff.forEach((s) => relUsers.push(s.id));
-    }
-    if (relUsers.length === 0) {
-      const req = await tx.user.findFirst({ where: { name: block.requestedBy }, select: { id: true } });
-      if (req) relUsers.push(req.id);
-    }
-
-    for (const uid of relUsers) {
-      await tx.notification.create({
-        data: {
-          userId: uid,
-          type: "BOOKING_RELEASED",
-          title: "Stock Reservation Released",
-          message: `Your reservation has been released. ${reason ? `Note: ${reason}` : ""}`,
-          priority: "NORMAL",
-          data: { blockId: block.id }
-        }
-      });
-    }
-
-    // Movement Log
-    await tx.inventoryMovement.create({
-      data: {
-        inventoryId: inventory.id,
-        productId: block.productId,
-        warehouseId: block.warehouseId,
-        movementType: "BLOCK_RELEASED",
-        quantity: block.quantity,
-        previousQuantity: inventory.availableStock,
-        newQuantity: newAvailable,
-        referenceType: "BLOCK",
-        referenceId: block.id,
-        reason: reason || "Stock Block Released manually",
-        performedBy: releasedBy,
-      },
+    await recordBlockAudit(tx, {
+      action: "RELEASE_BLOCK",
+      blockId,
+      userId: releasedById,
+      userName: releasedBy,
+      role,
+      fromStatus: block.status,
+      toStatus: "RELEASED",
+      reason,
     });
 
-    await tx.auditLog.create({
-      data: {
-        action: "RELEASE_BLOCK",
-        entity: "StockBlock",
-        entityId: block.id,
-        meta: { performedBy: releasedBy, reason },
-      },
-    });
+    return updated;
+  }, STOCK_TX_OPTIONS);
 
-    return updatedBlock;
+  await invalidateCache("inventory:*");
+  await invalidateCache("dashboard:*");
+  await notifyBlockParties(result, {
+    type: "BLOCK_RELEASED",
+    title: "Stock Reservation Released",
+    message: `Block ${result.block_number} was released and its stock returned to available.`,
+    audiences: ["CREATOR", "SHOWROOM", "SUPER_ADMINS"],
   });
+  return result;
+}
+
+/**
+ * Expires a block whose hold has lapsed, returning its stock.
+ * Used by the scheduled worker; bypasses the interactive-user permission check.
+ */
+export async function expireBlock({ blockId }: { blockId: string }) {
+  return await db.$transaction(async (tx) => {
+    const { block, inv } = await loadBlockForMutation(tx, blockId);
+    assertTransition(block.status, "EXPIRED");
+
+    await releaseReservedQuantity(tx, inv, block, {
+      performedBy: "SYSTEM",
+      reason: "Reservation expired",
+    });
+
+    const updated = await tx.stockBlock.update({
+      where: { id: blockId },
+      data: { status: "EXPIRED", releasedAt: new Date() },
+    });
+
+    await recordBlockAudit(tx, {
+      action: "EXPIRE_BLOCK",
+      blockId,
+      userName: "SYSTEM",
+      role: "SYSTEM",
+      fromStatus: block.status,
+      toStatus: "EXPIRED",
+      reason: "Automatic expiry of lapsed reservation",
+    });
+
+    return updated;
+  }, STOCK_TX_OPTIONS);
+}
+
+/**
+ * Who should hear about a block event.
+ *
+ * Spec §10-15 are specific about this — e.g. a staff-created block notifies
+ * the In-Charge *only*, deliberately not the Manager, because the Manager has
+ * nothing to act on until the In-Charge has signed off.
+ */
+type BlockAudience = "CREATOR" | "SHOWROOM" | "SHOWROOM_INCHARGE" | "MANAGERS" | "SUPER_ADMINS";
+
+type NotifiableBlock = {
+  id: string;
+  block_number: string | null;
+  createdById: string | null;
+  showroomId: string | null;
+  dealerId: string | null;
+  warehouseId: string | null;
+  requestedBy: string;
+};
+
+/** Resolves an audience list to a de-duplicated set of user ids. */
+async function resolveAudience(block: NotifiableBlock, audiences: BlockAudience[]): Promise<string[]> {
+  const ids = new Set<string>();
+
+  for (const audience of audiences) {
+    if (audience === "CREATOR") {
+      if (block.createdById) ids.add(block.createdById);
+      continue;
+    }
+    if (audience === "SHOWROOM") {
+      if (!block.showroomId) continue;
+      const users = await db.user.findMany({ where: { showroomId: block.showroomId }, select: { id: true } });
+      users.forEach((u) => ids.add(u.id));
+      continue;
+    }
+    if (audience === "SHOWROOM_INCHARGE") {
+      if (!block.showroomId) continue;
+      const users = await db.user.findMany({
+        where: { showroomId: block.showroomId, role: "SHOWROOM_INCHARGE" },
+        select: { id: true },
+      });
+      users.forEach((u) => ids.add(u.id));
+      continue;
+    }
+    if (audience === "MANAGERS") {
+      const users = await db.user.findMany({ where: { role: "MANAGER" }, select: { id: true } });
+      users.forEach((u) => ids.add(u.id));
+      continue;
+    }
+    if (audience === "SUPER_ADMINS") {
+      const users = await db.user.findMany({ where: { role: "SUPER_ADMIN" }, select: { id: true } });
+      users.forEach((u) => ids.add(u.id));
+    }
+  }
+
+  return [...ids];
+}
+
+async function notifyBlockParties(
+  block: NotifiableBlock,
+  {
+    type,
+    title,
+    message,
+    priority = "NORMAL",
+    audiences,
+  }: {
+    type: string;
+    title: string;
+    message: string;
+    priority?: "LOW" | "NORMAL" | "HIGH" | "URGENT";
+    audiences: BlockAudience[];
+  }
+) {
+  try {
+    const userIds = await resolveAudience(block, audiences);
+    if (userIds.length === 0) return;
+
+    await sendNotificationsToUsers({
+      userIds,
+      type,
+      title,
+      message,
+      priority,
+      data: { blockId: block.id, blockNumber: block.block_number },
+    });
+  } catch (err) {
+    // Notification failure must never roll back a completed stock movement.
+    console.error("[BLOCK NOTIFY] failed:", err);
+  }
 }
 
 export async function releaseExpiredBlocks() {
@@ -859,40 +1078,28 @@ export async function releaseExpiredBlocks() {
   // 1. Send warning notifications for blocks expiring in the next 2 hours
   const expiringSoon = await db.stockBlock.findMany({
     where: {
-      status: { in: ["APPROVED", "PENDING", "PENDING_INCHARGE_APPROVAL", "PENDING_MANAGER_APPROVAL"] },
+      status: { in: [...ACTIVE_BLOCK_STATUSES] },
       expiresAt: { gte: now, lte: twoHoursFromNow },
     },
   });
 
   for (const block of expiringSoon) {
-    const notifyUsers: string[] = [];
-    if (block.dealerId) {
-      const dlrs = await db.user.findMany({ where: { dealer_id: block.dealerId }, select: { id: true } });
-      dlrs.forEach((d) => notifyUsers.push(d.id));
-    }
-    if (block.showroomId) {
-      const stff = await db.user.findMany({ where: { showroomId: block.showroomId }, select: { id: true } });
-      stff.forEach((s) => notifyUsers.push(s.id));
-    }
-    if (notifyUsers.length === 0) {
-      const req = await db.user.findFirst({ where: { name: block.requestedBy }, select: { id: true } });
-      if (req) notifyUsers.push(req.id);
-    }
-
-    await sendNotificationsToUsers({
-      userIds: notifyUsers,
+    await notifyBlockParties(block, {
       type: "BLOCK_EXPIRING",
       title: "Reservation Expiring Soon",
-      message: `Your reservation for ${block.quantity} boxes expires in less than 2 hours.`,
+      message: `Block ${block.block_number} expires in less than 2 hours.`,
       priority: "HIGH",
-      data: { blockId: block.id },
+      audiences: ["CREATOR", "SHOWROOM", "SUPER_ADMINS"],
     });
   }
 
-  // 2. Release blocks that have passed their expiry date
+  // 2. Expire blocks that have passed their expiry date. `expireBlock` performs
+  // the release and the status change as one guarded transition — the previous
+  // code released then force-wrote EXPIRED, which the state machine now rejects
+  // (RELEASED is terminal).
   const expiredBlocks = await db.stockBlock.findMany({
     where: {
-      status: { in: ["APPROVED", "PENDING", "PENDING_INCHARGE_APPROVAL", "PENDING_MANAGER_APPROVAL"] },
+      status: { in: [...ACTIVE_BLOCK_STATUSES] },
       expiresAt: { lte: now },
     },
   });
@@ -902,33 +1109,14 @@ export async function releaseExpiredBlocks() {
   let releasedCount = 0;
   for (const block of expiredBlocks) {
     try {
-      await releaseBlock({
-        blockId: block.id,
-        releasedBy: "SYSTEM_AUTO_EXPIRY",
-        reason: "Automatic release of expired stock reservation",
-      });
-      await db.stockBlock.update({
-        where: { id: block.id },
-        data: { status: "EXPIRED" },
-      });
+      await expireBlock({ blockId: block.id });
 
-      const notifyUsers: string[] = [];
-      if (block.dealerId) {
-        const dlrs = await db.user.findMany({ where: { dealer_id: block.dealerId }, select: { id: true } });
-        dlrs.forEach((d) => notifyUsers.push(d.id));
-      }
-      if (block.showroomId) {
-        const stff = await db.user.findMany({ where: { showroomId: block.showroomId }, select: { id: true } });
-        stff.forEach((s) => notifyUsers.push(s.id));
-      }
-
-      await sendNotificationsToUsers({
-        userIds: notifyUsers,
-        type: "BOOKING_EXPIRED",
+      await notifyBlockParties(block, {
+        type: "BLOCK_EXPIRED",
         title: "Reservation Expired",
-        message: `Your reservation for ${block.quantity} boxes has expired and the stock has been released.`,
+        message: `Block ${block.block_number} has expired and the stock has been released.`,
         priority: "HIGH",
-        data: { blockId: block.id },
+        audiences: ["CREATOR", "SHOWROOM", "SUPER_ADMINS"],
       });
 
       releasedCount++;

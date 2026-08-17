@@ -28,7 +28,12 @@ export async function createNotification({
       title,
       message,
       priority,
-      data: data ? JSON.stringify(data) : undefined,
+      // `data` is a Json column — store the object, not a stringified copy.
+      // Double-encoding made the payload a JSON *string*, so server-side
+      // readers saw `data.blockId === undefined` and Prisma JSON filters
+      // could not match on it. The UI already tolerates both shapes, so
+      // existing rows keep working.
+      data: data ?? undefined,
     },
   });
 
@@ -193,7 +198,7 @@ async function fanOutAnnouncement(
       title: `Broadcast: ${announcement.title}`,
       message: announcement.message,
       priority: announcement.priority,
-      data: JSON.stringify({ announcementId: announcement.id }),
+      data: { announcementId: announcement.id },
     })),
   });
 

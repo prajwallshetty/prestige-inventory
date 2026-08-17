@@ -23,13 +23,16 @@ datasource db {
 
 // ————— Users & RBAC —————
 
+/// Phase 1 role model — exactly five roles.
+/// WEAVER replaces the former read-only VIEWER role. The old DEALER *role* was
+/// retired (dealer logins migrated to WEAVER); the Dealer *entity* below is
+/// unaffected — blocks still reference the dealer they were raised for.
 enum Role {
   SUPER_ADMIN
   MANAGER
-  VIEWER
+  WEAVER
   SHOWROOM_INCHARGE
   SHOWROOM_STAFF
-  DEALER
 }
 
 enum UserStatus {
@@ -45,7 +48,7 @@ model User {
   email     String     @unique
   name      String
   password  String // bcrypt hash
-  role      Role       @default(VIEWER)
+  role      Role       @default(WEAVER)
   status    UserStatus @default(ACTIVE)
   avatar    String?
   lastLogin DateTime?
@@ -616,6 +619,7 @@ model Showroom {
   googlePosts  GooglePost[]
   users        User[]
   stockBlocks  StockBlock[]
+  dealers      Dealer[]
 
   createdById String?
   updatedById String?
@@ -1145,21 +1149,48 @@ model Warehouse {
   users              User[]
 }
 
+/// Allocates the per-code dealer sequence behind IDs like 2026/PR1/0001.
+/// One row per (year, dealerCode); incremented inside the creating transaction
+/// so concurrent dealer creation can never mint a duplicate.
+model DealerSequence {
+  id         String   @id @default(cuid())
+  year       Int
+  dealerCode String
+  lastNumber Int      @default(0)
+  updatedAt  DateTime @updatedAt
+
+  @@unique([year, dealerCode])
+}
+
 model Dealer {
   id          String   @id @default(cuid())
+  /// Human-readable identifier, e.g. "2026/PR1/0001". Generated server-side.
+  dealerId    String?  @unique
+  /// Short code assigned by Super Admin, e.g. "PR1". Drives the sequence.
+  dealerCode  String?
   name        String
   company     String?
+  /// Contact person's name (pre-existing column; serves as contactPerson).
   contact     String?
   email       String?  @unique
   phone       String?
   address     String?
-  status      String   @default("ACTIVE")
+  status      String   @default("ACTIVE") // ACTIVE | INACTIVE
+  showroomId  String?
+  showroom    Showroom? @relation(fields: [showroomId], references: [id], onDelete: SetNull)
+  /// User.id of the Super Admin who created the record (plain column, matching
+  /// the audit-column convention used elsewhere in this schema).
+  createdById String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   stockBlocks StockBlock[]
   stockBookings StockBooking[]
   users         User[]
+
+  @@index([dealerCode])
+  @@index([status])
+  @@index([showroomId])
 }
 
 model Inventory {
@@ -1197,6 +1228,16 @@ enum BlockedBy {
   SALMAN
 }
 
+/// Allocates human-readable block numbers (BLK-2026-000001).
+/// One row per year; the counter is incremented inside the same transaction
+/// that creates the block, so numbers are gapless and collision-free even
+/// under concurrent creation.
+model BlockNumberSequence {
+  year      Int      @id
+  lastValue Int      @default(0)
+  updatedAt DateTime @updatedAt
+}
+
 model StockBlock {
   id            String    @id @default(cuid())
   block_number  String?   @unique
@@ -1211,17 +1252,37 @@ model StockBlock {
   showroomId    String?
   showroom      Showroom?  @relation(fields: [showroomId], references: [id], onDelete: SetNull)
   quantity      Float
+  /// Quantities actually moved, for PARTIALLY_SHIPPED / PARTIALLY_DELIVERED.
+  shippedQuantity   Float @default(0)
+  deliveredQuantity Float @default(0)
+
   requestedBy   String
+  /// User.id of the creator (plain column, consistent with the audit columns
+  /// elsewhere in this schema). `requestedBy` remains the display name.
+  createdById   String?
+  /// Role held by the creator at creation time — determines the approval route
+  /// and is preserved even if the user's role later changes.
+  createdRole   String?
+
   approvedBy    String?
+  /// Stage-specific sign-off, so the approval timeline can show who did what.
+  inchargeApprovedBy String?
+  inchargeApprovedAt DateTime?
+  managerApprovedBy  String?
+  managerApprovedAt  DateTime?
+
   blocked_by    BlockedBy?
-  status        String    @default("PENDING") // PENDING | APPROVED | REJECTED | CONFIRMED | EXPIRED | CANCELLED | RELEASED
+  status        String    @default("PENDING_MANAGER_APPROVAL") // see BLOCK_STATUSES in src/lib/permissions.ts
   remarks       String?
   approvalRoute String    @default("DIRECT") // DIRECT | INCHARGE
   createdAt     DateTime  @default(now())
   approvedAt    DateTime?
+  readyToShipAt DateTime?
+  shippedAt     DateTime?
   expiresAt     DateTime?
   confirmedAt   DateTime?
   releasedAt    DateTime?
+  cancelledAt   DateTime?
   deliveredAt   DateTime?
 
   @@index([inventoryId])
@@ -1230,6 +1291,7 @@ model StockBlock {
   @@index([warehouseId])
   @@index([status])
   @@index([expiresAt])
+  @@index([createdById])
 }
 
 model InventoryMovement {

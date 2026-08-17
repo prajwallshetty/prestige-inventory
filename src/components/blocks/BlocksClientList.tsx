@@ -7,9 +7,21 @@ import {
   approveBlockAction,
   releaseBlockAction,
   rejectBlockAction,
-  confirmBlockAction,
-  deliverBlockAction
+  deliverBlockAction,
+  shipBlockAction,
+  markReadyToShipAction,
+  cancelBlockAction,
 } from "@/app/actions";
+import {
+  canApproveBlock,
+  canCancelBlock,
+  canDeliverBlock,
+  canMarkReadyToShip,
+  canReleaseBlock,
+  canShipBlock,
+  type Role,
+  type BlockStatus,
+} from "@/lib/permissions";
 import { 
   Check, 
   X, 
@@ -37,15 +49,16 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
   // Dialog State for Actions
   const [activeAction, setActiveAction] = useState<{
     block: any;
-    type: "APPROVE" | "REJECT" | "DELIVER" | "RELEASE" | "OVERRIDE";
+    type: "APPROVE" | "REJECT" | "SHIP" | "DELIVER" | "RELEASE" | "OVERRIDE";
   } | null>(null);
 
   // Action input states
   const [reasonInput, setReasonInput] = useState("");
   const [qtyInput, setQtyInput] = useState(0);
 
-  const role = session?.role || "VIEWER";
-  const isDealer = role === "DEALER";
+  const role = (session?.role || "WEAVER") as Role;
+  // The DEALER role was retired in Phase 1; dealer columns are always shown.
+  const isDealer = false;
 
   const handleActionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -61,7 +74,8 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
     const verb =
       type === "APPROVE" ? "approved"
       : type === "REJECT" ? "rejected"
-      : type === "DELIVER" ? "dispatched"
+      : type === "SHIP" ? "shipped"
+      : type === "DELIVER" ? "delivered"
       : type === "RELEASE" ? "released"
       : "updated";
 
@@ -70,8 +84,10 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
         await approveBlockAction(block.id, qtyInput > 0 && qtyInput < block.quantity ? qtyInput : undefined);
       } else if (type === "REJECT") {
         await rejectBlockAction(block.id, reasonInput);
+      } else if (type === "SHIP") {
+        await shipBlockAction(block.id, qtyInput > 0 ? qtyInput : undefined);
       } else if (type === "DELIVER") {
-        await deliverBlockAction(block.id, qtyInput);
+        await deliverBlockAction(block.id, qtyInput > 0 ? qtyInput : undefined);
       } else if (type === "RELEASE") {
         await releaseBlockAction(block.id, reasonInput);
       } else if (type === "OVERRIDE") {
@@ -89,7 +105,7 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
     }
   };
 
-  const openActionDialog = (block: any, type: "APPROVE" | "REJECT" | "DELIVER" | "RELEASE" | "OVERRIDE") => {
+  const openActionDialog = (block: any, type: "APPROVE" | "REJECT" | "SHIP" | "DELIVER" | "RELEASE" | "OVERRIDE") => {
     setActiveAction({ block, type });
     setReasonInput("");
     setQtyInput(block.quantity);
@@ -97,13 +113,12 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
 
   const handleCancelStaff = async (id: string) => {
     if (loadingMap[id]) return;
-    const confirmMsg = "Are you sure you want to cancel this pending block reservation?";
-    if (!confirm(confirmMsg)) return;
+    if (!confirm("Are you sure you want to cancel this block reservation?")) return;
 
     setLoadingMap((prev) => ({ ...prev, [id]: true }));
     try {
-      await rejectBlockAction(id, "Cancelled by requesting staff member.");
-      toast.success("Reservation cancelled.");
+      await cancelBlockAction(id, "Cancelled by requester.");
+      toast.success("Reservation cancelled. Stock released.");
       startTransition(() => router.refresh());
     } catch (err: any) {
       toast.error(`Cancellation failed: ${err.message}`);
@@ -112,44 +127,90 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
     }
   };
 
-  const handleConfirmDealer = async (id: string) => {
+  const handleReadyToShip = async (id: string) => {
     if (loadingMap[id]) return;
     setLoadingMap((prev) => ({ ...prev, [id]: true }));
     try {
-      await confirmBlockAction(id);
-      toast.success("Booking confirmed.");
+      await markReadyToShipAction(id);
+      toast.success("Block marked ready to ship.");
       startTransition(() => router.refresh());
     } catch (err: any) {
-      toast.error(`Confirmation failed: ${err.message}`);
+      toast.error(`Failed: ${err.message}`);
     } finally {
       setLoadingMap((prev) => ({ ...prev, [id]: false }));
     }
   };
 
-  // Stepper helper for visual timeline
+  /**
+   * Approval timeline (spec §17): who did what, when, at each stage.
+   * Mirrors the real state machine rather than the old CONFIRMED-based flow.
+   */
   const getTimelineSteps = (block: any) => {
-    const isFulfilled = block.status === "DELIVERED" || block.status === "FULFILLED";
-    const isPartial = block.status === "PARTIALLY_FULFILLED";
-    const isConfirmed = block.status === "CONFIRMED" || isPartial || isFulfilled;
-    const isApproved = block.status === "APPROVED" || isConfirmed;
-    const isReleased = block.status === "RELEASED";
-    const isExpired = block.status === "EXPIRED";
+    const fmt = (d: string | null | undefined) =>
+      d ? new Date(d).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : null;
+
     const isRejected = block.status === "REJECTED";
     const isCancelled = block.status === "CANCELLED";
+    const isExpired = block.status === "EXPIRED";
+    const isReleased = block.status === "RELEASED";
+    const terminatedEarly = isRejected || isCancelled || isExpired || isReleased;
 
-    return [
-      { label: "Created", done: true },
-      { 
-        label: isRejected ? "Rejected" : isCancelled ? "Cancelled" : "Approved", 
-        done: isApproved, 
-        err: isRejected || isCancelled,
-        sub: block.approvedBy ? `By ${block.approvedBy}` : null 
+    const steps: Array<{ label: string; done: boolean; err?: boolean; sub?: string | null }> = [
+      {
+        label: "Block Created",
+        done: true,
+        sub: [block.requestedBy, block.createdRole?.replace(/_/g, " "), fmt(block.createdAt)]
+          .filter(Boolean)
+          .join(" · ") || null,
       },
-      { label: isExpired ? "Expired" : "Blocked", done: isApproved && !isReleased && !isExpired, err: isExpired },
-      { label: "Confirmed", done: isConfirmed },
-      { label: isPartial ? "Partially Dispatched" : "Dispatched", done: isPartial || isFulfilled },
-      { label: "Delivered", done: isFulfilled }
     ];
+
+    // Only staff-created blocks pass through the In-Charge stage.
+    if (block.approvalRoute === "INCHARGE") {
+      steps.push({
+        label: "Approved by Showroom In-Charge",
+        done: !!block.inchargeApprovedAt,
+        sub: block.inchargeApprovedBy
+          ? `${block.inchargeApprovedBy} · ${fmt(block.inchargeApprovedAt)}`
+          : null,
+      });
+    }
+
+    steps.push({
+      label: isRejected ? "Rejected" : "Approved by Manager",
+      done: !!block.managerApprovedAt,
+      err: isRejected,
+      sub: block.managerApprovedBy ? `${block.managerApprovedBy} · ${fmt(block.managerApprovedAt)}` : null,
+    });
+
+    steps.push({
+      label: "Ready to Ship",
+      done: !!block.readyToShipAt,
+      sub: fmt(block.readyToShipAt),
+    });
+
+    steps.push({
+      label: block.status === "PARTIALLY_SHIPPED" ? "Partially Shipped" : "Shipped",
+      done: !!block.shippedAt,
+      sub: block.shippedQuantity ? `${block.shippedQuantity} boxes · ${fmt(block.shippedAt)}` : fmt(block.shippedAt),
+    });
+
+    steps.push({
+      label: block.status === "PARTIALLY_DELIVERED" ? "Partially Delivered" : "Delivered",
+      done: block.status === "DELIVERED",
+      sub: block.deliveredQuantity ? `${block.deliveredQuantity} boxes · ${fmt(block.deliveredAt)}` : fmt(block.deliveredAt),
+    });
+
+    if (terminatedEarly) {
+      steps.push({
+        label: isRejected ? "Rejected" : isCancelled ? "Cancelled" : isExpired ? "Expired" : "Released",
+        done: true,
+        err: true,
+        sub: fmt(block.cancelledAt || block.releasedAt),
+      });
+    }
+
+    return steps;
   };
 
   return (
@@ -254,8 +315,10 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
                           <Info className="h-3.5 w-3.5" />
                         </button>
 
-                        {/* Route B: Showroom Incharge Approve */}
-                        {isPendingIncharge && (role === "SHOWROOM_INCHARGE" || role === "SUPER_ADMIN") && (
+                        {/* Approve / Reject — the same permission helpers the
+                            server enforces, so the UI can never offer an action
+                            the backend would refuse. */}
+                        {canApproveBlock(role, block.status, { createdById: block.createdById, actorId: session?.userId }) && (
                           <>
                             <button
                               onClick={() => openActionDialog(block, "APPROVE")}
@@ -263,7 +326,7 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
                               aria-busy={loadingMap[block.id]}
                               className="rounded-lg bg-emerald-600 px-2 py-1 text-[10px] font-black text-white hover:bg-emerald-500 transition-all touch-target"
                             >
-                              Approve Hold
+                              {block.status === "PENDING_INCHARGE_APPROVAL" ? "Approve Hold" : "Approve"}
                             </button>
                             <button
                               onClick={() => openActionDialog(block, "REJECT")}
@@ -276,70 +339,60 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
                           </>
                         )}
 
-                        {/* Manager / Super Admin Approve */}
-                        {isPendingManager && (role === "MANAGER" || role === "SUPER_ADMIN") && (
-                          <>
-                            <button
-                              onClick={() => openActionDialog(block, "APPROVE")}
-                              disabled={loadingMap[block.id]}
-                              aria-busy={loadingMap[block.id]}
-                              className="rounded-lg bg-emerald-600 px-2 py-1 text-[10px] font-black text-white hover:bg-emerald-500 transition-all touch-target"
-                            >
-                              Approve
-                            </button>
-                            <button
-                              onClick={() => openActionDialog(block, "REJECT")}
-                              disabled={loadingMap[block.id]}
-                              aria-busy={loadingMap[block.id]}
-                              className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-black text-rose-700 hover:bg-rose-600 hover:text-white transition-all touch-target"
-                            >
-                              Reject
-                            </button>
-                          </>
-                        )}
-
-                        {/* Dealer Confirmation */}
-                        {block.status === "APPROVED" && role === "DEALER" && (
+                        {/* APPROVED → READY_TO_SHIP */}
+                        {canMarkReadyToShip(role, block.status) && (
                           <button
-                            onClick={() => handleConfirmDealer(block.id)}
+                            onClick={() => handleReadyToShip(block.id)}
                             disabled={loadingMap[block.id]}
-                              aria-busy={loadingMap[block.id]}
-                            className="rounded-lg bg-[#F2C202] px-2.5 py-1 text-[10px] font-black text-white hover:bg-[#D8AD02] transition-all touch-target shadow-xs"
+                            aria-busy={loadingMap[block.id]}
+                            className="rounded-lg bg-indigo-600 px-2.5 py-1 text-[10px] font-black text-white hover:bg-indigo-500 transition-all touch-target"
                           >
-                            Confirm Booking
+                            Mark Ready to Ship
                           </button>
                         )}
 
-                        {/* Staff Cancellation */}
-                        {isPending && role === "SHOWROOM_STAFF" && (
+                        {/* READY_TO_SHIP → SHIPPED */}
+                        {canShipBlock(role, block.status) && (
                           <button
-                            onClick={() => handleCancelStaff(block.id)}
+                            onClick={() => openActionDialog(block, "SHIP")}
                             disabled={loadingMap[block.id]}
-                              aria-busy={loadingMap[block.id]}
-                            className="rounded-lg border border-[#EAEAEA] bg-white px-2 py-1 text-[10px] font-bold text-[#6B6B6B] hover:bg-[#F7F7F5] transition-all touch-target"
+                            aria-busy={loadingMap[block.id]}
+                            className="rounded-lg bg-blue-600 px-2.5 py-1 text-[10px] font-black text-white hover:bg-blue-500 transition-all touch-target flex items-center gap-1"
                           >
-                            Cancel Request
+                            <Truck className="h-3 w-3" /> Ship
                           </button>
                         )}
 
-                        {/* Dispatch/Deliver Stock */}
-                        {(block.status === "CONFIRMED" || block.status === "PARTIALLY_FULFILLED") && (role === "MANAGER" || role === "SUPER_ADMIN") && (
+                        {/* SHIPPED → DELIVERED */}
+                        {canDeliverBlock(role, block.status) && (
                           <button
                             onClick={() => openActionDialog(block, "DELIVER")}
                             disabled={loadingMap[block.id]}
-                              aria-busy={loadingMap[block.id]}
-                            className="rounded-lg bg-blue-600 px-2.5 py-1 text-[10px] font-black text-white hover:bg-blue-500 transition-all touch-target flex items-center gap-1"
+                            aria-busy={loadingMap[block.id]}
+                            className="rounded-lg bg-teal-600 px-2.5 py-1 text-[10px] font-black text-white hover:bg-teal-500 transition-all touch-target"
                           >
-                            <Truck className="h-3 w-3" /> Dispatch Stock
+                            Mark Delivered
+                          </button>
+                        )}
+
+                        {/* Cancel own block (creator) or any active block (manager) */}
+                        {canCancelBlock(role, block.status, { createdById: block.createdById, actorId: session?.userId }) && (
+                          <button
+                            onClick={() => handleCancelStaff(block.id)}
+                            disabled={loadingMap[block.id]}
+                            aria-busy={loadingMap[block.id]}
+                            className="rounded-lg border border-[#EAEAEA] bg-white px-2 py-1 text-[10px] font-bold text-[#6B6B6B] hover:bg-[#F7F7F5] transition-all touch-target"
+                          >
+                            Cancel
                           </button>
                         )}
 
                         {/* Release active hold */}
-                        {(block.status === "APPROVED" || block.status === "CONFIRMED") && (role === "MANAGER" || role === "SUPER_ADMIN") && (
+                        {canReleaseBlock(role, block.status) && (
                           <button
                             onClick={() => openActionDialog(block, "RELEASE")}
                             disabled={loadingMap[block.id]}
-                              aria-busy={loadingMap[block.id]}
+                            aria-busy={loadingMap[block.id]}
                             className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-bold text-slate-700 hover:bg-slate-200 transition-all touch-target"
                           >
                             Release Hold
@@ -451,7 +504,7 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
                   </button>
 
                   {/* Showroom Incharge approve */}
-                  {isPendingIncharge && (role === "SHOWROOM_INCHARGE" || role === "SUPER_ADMIN") && (
+                  {isPendingIncharge && canApproveBlock(role, block.status, { createdById: block.createdById, actorId: session?.userId }) && (
                     <>
                       <button
                         onClick={() => openActionDialog(block, "APPROVE")}
@@ -469,7 +522,7 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
                   )}
 
                   {/* Manager approve */}
-                  {isPendingManager && (role === "MANAGER" || role === "SUPER_ADMIN") && (
+                  {isPendingManager && canApproveBlock(role, block.status, { createdById: block.createdById, actorId: session?.userId }) && (
                     <>
                       <button
                         onClick={() => openActionDialog(block, "APPROVE")}
@@ -486,33 +539,43 @@ export function BlocksClientList({ blocks, session }: BlocksClientListProps) {
                     </>
                   )}
 
-                  {/* Dealer confirmation */}
-                  {block.status === "APPROVED" && role === "DEALER" && (
+                  {/* Ready to ship */}
+                  {canMarkReadyToShip(role, block.status) && (
                     <button
-                      onClick={() => handleConfirmDealer(block.id)}
-                      className="w-full rounded-lg bg-[#F2C202] py-2 text-xs font-black text-white hover:bg-[#D8AD02] transition-all touch-target shadow-xs"
+                      onClick={() => handleReadyToShip(block.id)}
+                      className="w-full rounded-lg bg-indigo-600 py-2 text-xs font-black text-white hover:bg-indigo-500 transition-all touch-target"
                     >
-                      Confirm Booking
+                      Mark Ready to Ship
                     </button>
                   )}
 
-                  {/* Staff cancel */}
-                  {isPending && role === "SHOWROOM_STAFF" && (
+                  {/* Ship */}
+                  {canShipBlock(role, block.status) && (
+                    <button
+                      onClick={() => openActionDialog(block, "SHIP")}
+                      className="w-full rounded-lg bg-blue-600 py-2 text-xs font-black text-white hover:bg-blue-500 transition-all touch-target flex items-center justify-center gap-1"
+                    >
+                      <Truck className="h-4 w-4" /> Ship
+                    </button>
+                  )}
+
+                  {/* Deliver */}
+                  {canDeliverBlock(role, block.status) && (
+                    <button
+                      onClick={() => openActionDialog(block, "DELIVER")}
+                      className="w-full rounded-lg bg-teal-600 py-2 text-xs font-black text-white hover:bg-teal-500 transition-all touch-target"
+                    >
+                      Mark Delivered
+                    </button>
+                  )}
+
+                  {/* Cancel */}
+                  {canCancelBlock(role, block.status, { createdById: block.createdById, actorId: session?.userId }) && (
                     <button
                       onClick={() => handleCancelStaff(block.id)}
                       className="w-full rounded-lg border border-[#EAEAEA] bg-white py-2 text-xs font-bold text-[#6B6B6B] hover:bg-[#F7F7F5] transition-all touch-target"
                     >
-                      Cancel Request
-                    </button>
-                  )}
-
-                  {/* Dispatch */}
-                  {(block.status === "CONFIRMED" || block.status === "PARTIALLY_FULFILLED") && (role === "MANAGER" || role === "SUPER_ADMIN") && (
-                    <button
-                      onClick={() => openActionDialog(block, "DELIVER")}
-                      className="w-full rounded-lg bg-blue-600 py-2 text-xs font-black text-white hover:bg-blue-500 transition-all touch-target flex items-center justify-center gap-1"
-                    >
-                      <Truck className="h-4 w-4" /> Dispatch Stock
+                      Cancel
                     </button>
                   )}
                 </div>
@@ -666,10 +729,11 @@ function BlockStatusBadge({ status }: { status: string }) {
     PENDING_INCHARGE_APPROVAL: "bg-orange-100 text-orange-800 border-orange-200",
     PENDING_MANAGER_APPROVAL: "bg-amber-100 text-amber-800 border-amber-200",
     APPROVED: "bg-emerald-100 text-emerald-800 border-emerald-200",
-    CONFIRMED: "bg-blue-100 text-blue-800 border-blue-200",
-    PARTIALLY_FULFILLED: "bg-indigo-100 text-indigo-800 border-indigo-200",
+    READY_TO_SHIP: "bg-indigo-100 text-indigo-800 border-indigo-200",
+    SHIPPED: "bg-blue-100 text-blue-800 border-blue-200",
+    PARTIALLY_SHIPPED: "bg-sky-100 text-sky-800 border-sky-200",
     DELIVERED: "bg-purple-100 text-purple-800 border-purple-200",
-    FULFILLED: "bg-purple-100 text-purple-800 border-purple-200",
+    PARTIALLY_DELIVERED: "bg-violet-100 text-violet-800 border-violet-200",
     EXPIRED: "bg-rose-100 text-rose-800 border-rose-200",
     RELEASED: "bg-[#F7F7F5] text-[#6B6B6B] border-[#EAEAEA]",
     REJECTED: "bg-rose-100 text-rose-800 border-rose-200",
@@ -685,7 +749,7 @@ function BlockStatusBadge({ status }: { status: string }) {
 }
 
 function TimeRemainingBadge({ expiresAt, status }: { expiresAt?: string; status: string }) {
-  const activeStates = ["APPROVED", "PENDING", "PENDING_INCHARGE_APPROVAL", "PENDING_MANAGER_APPROVAL"];
+  const activeStates = ["PENDING_INCHARGE_APPROVAL", "PENDING_MANAGER_APPROVAL", "APPROVED", "READY_TO_SHIP"];
   if (!activeStates.includes(status)) {
     return <span className="text-[10px] text-[#6B6B6B]">—</span>;
   }

@@ -64,30 +64,30 @@ async function main() {
   });
   console.log("Seeded Manager:", managerUser.email);
 
-  // 3. Dealer
+  // 3. Former dealer login — retired to WEAVER (read-only) in Phase 1
   const dealerUser = await db.user.upsert({
     where: { email: "dealer@prestigetiles.com" },
-    update: { role: "DEALER", dealer_id: dealer.id },
+    update: { role: "WEAVER", dealer_id: dealer.id },
     create: {
       email: "dealer@prestigetiles.com",
       name: "Ramesh Kumar (ABC)",
       password: hashedPassword,
-      role: "DEALER",
+      role: "WEAVER",
       status: "ACTIVE",
       dealer_id: dealer.id,
     },
   });
   console.log("Seeded Dealer:", dealerUser.email);
 
-  // 4. Viewer
+  // 4. Weaver (read-only; replaces the old VIEWER role)
   const viewerUser = await db.user.upsert({
     where: { email: "viewer@prestigetiles.com" },
-    update: { role: "VIEWER" },
+    update: { role: "WEAVER" },
     create: {
       email: "viewer@prestigetiles.com",
       name: "Sanjay Sen",
       password: hashedPassword,
-      role: "VIEWER",
+      role: "WEAVER",
       status: "ACTIVE",
     },
   });

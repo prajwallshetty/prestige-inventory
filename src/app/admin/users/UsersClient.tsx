@@ -35,7 +35,7 @@ export function UsersClient({ users, dealers, warehouses, showrooms }: Props) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState("DEALER");
+  const [role, setRole] = useState("WEAVER");
   const [dealerId, setDealerId] = useState("");
   const [warehouseId, setWarehouseId] = useState("");
   const [showroomId, setShowroomId] = useState("");
@@ -58,7 +58,7 @@ export function UsersClient({ users, dealers, warehouses, showrooms }: Props) {
     setName("");
     setEmail("");
     setPassword("");
-    setRole("DEALER");
+    setRole("WEAVER");
     setDealerId(dealers[0]?.id || "");
     setWarehouseId(warehouses[0]?.id || "");
     setShowroomId(showrooms[0]?.id || "");
@@ -91,7 +91,7 @@ export function UsersClient({ users, dealers, warehouses, showrooms }: Props) {
       email,
       password: password || undefined,
       role,
-      dealer_id: role === "DEALER" ? dealerId : undefined,
+      dealer_id: undefined, // DEALER role retired in Phase 1
       warehouse_id: role === "MANAGER" ? warehouseId : undefined,
       showroom_id: (role === "SHOWROOM_STAFF" || role === "SHOWROOM_INCHARGE") ? showroomId : undefined,
       status,
@@ -182,7 +182,7 @@ export function UsersClient({ users, dealers, warehouses, showrooms }: Props) {
                     </span>
                   </td>
                   <td className="px-4 py-3.5">
-                    {u.role === "DEALER" && (
+                    {false && (
                       <span className="text-[#8A7300] font-bold">{u.dealerName || "Dealer Scope"}</span>
                     )}
                     {u.role === "MANAGER" && (
@@ -191,7 +191,7 @@ export function UsersClient({ users, dealers, warehouses, showrooms }: Props) {
                     {(u.role === "SHOWROOM_STAFF" || u.role === "SHOWROOM_INCHARGE") && (
                       <span className="text-purple-600 font-bold">{u.showroomName || "Showroom Origin"}</span>
                     )}
-                    {u.role !== "DEALER" && u.role !== "MANAGER" && u.role !== "SHOWROOM_STAFF" && u.role !== "SHOWROOM_INCHARGE" && (
+                    {u.role !== "MANAGER" && u.role !== "SHOWROOM_STAFF" && u.role !== "SHOWROOM_INCHARGE" && (
                       <span className="text-[#6B6B6B]/40">—</span>
                     )}
                   </td>
@@ -324,8 +324,7 @@ export function UsersClient({ users, dealers, warehouses, showrooms }: Props) {
                     <option value="MANAGER">Manager</option>
                     <option value="SHOWROOM_INCHARGE">Showroom In-Charge</option>
                     <option value="SHOWROOM_STAFF">Showroom Staff</option>
-                    <option value="DEALER">Dealer Partner</option>
-                    <option value="VIEWER">Read-Only Viewer</option>
+                    <option value="WEAVER">Weaver (Read-Only)</option>
                   </select>
                 </div>
 
@@ -344,7 +343,7 @@ export function UsersClient({ users, dealers, warehouses, showrooms }: Props) {
               </div>
 
               {/* DEALER SPECIFIC MAPPING */}
-              {role === "DEALER" && dealers.length > 0 && (
+              {false && dealers.length > 0 && (
                 <div className="space-y-1">
                   <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">Assign Dealer Partner</label>
                   <select

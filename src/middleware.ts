@@ -43,7 +43,7 @@ export function middleware(request: NextRequest) {
   const isAuth = !!session && (!session.exp || session.exp * 1000 > Date.now());
 
   // Determine actual role, respecting simulated preview roles for super admins
-  const actualRole = session?.role || "VIEWER";
+  const actualRole = session?.role || "WEAVER";
   const previewRole = session?.previewRole;
   const isSuperAdmin = actualRole === "SUPER_ADMIN";
   const role = (isSuperAdmin && previewRole) ? previewRole : actualRole;
@@ -71,9 +71,6 @@ export function middleware(request: NextRequest) {
     if (actualRole === "MANAGER") {
       return NextResponse.redirect(new URL("/warehouse/dashboard", request.url));
     }
-    if (actualRole === "DEALER") {
-      return NextResponse.redirect(new URL("/dealer/dashboard", request.url));
-    }
     if (actualRole === "SHOWROOM_STAFF") {
       return NextResponse.redirect(new URL("/showroom-staff/dashboard", request.url));
     }
@@ -98,9 +95,11 @@ export function middleware(request: NextRequest) {
     }
   }
 
-  // 3. Dealer paths (/dealer/*) -> Only DEALER role
-  if (pathname.startsWith("/dealer")) {
-    if (actualRole !== "DEALER") {
+  // 3. Dealer portal (/dealer/*) — the DEALER login role was retired in
+  // Phase 1, so these routes are reachable by Super Admin only (kept for
+  // reference rather than deleted).
+  if (pathname.startsWith("/dealer") && !pathname.startsWith("/dealers")) {
+    if (actualRole !== "SUPER_ADMIN") {
       return new NextResponse("Unauthorized Access (403)", { status: 403 });
     }
   }
@@ -119,15 +118,12 @@ export function middleware(request: NextRequest) {
     }
   }
 
-  // 6. Viewer paths (/viewer/*) -> VIEWER, MANAGER, SHOWROOM_STAFF, SHOWROOM_INCHARGE, or SUPER_ADMIN
+  // 6. Read-only pages (/viewer/*) — every signed-in role may read, including
+  // WEAVER, which replaced the former VIEWER role. Mutations are still blocked
+  // by the permission layer regardless of which page they are attempted from.
   if (pathname.startsWith("/viewer")) {
-    if (
-      actualRole !== "VIEWER" &&
-      actualRole !== "MANAGER" &&
-      actualRole !== "SHOWROOM_STAFF" &&
-      actualRole !== "SHOWROOM_INCHARGE" &&
-      actualRole !== "SUPER_ADMIN"
-    ) {
+    const allowed = ["WEAVER", "MANAGER", "SHOWROOM_STAFF", "SHOWROOM_INCHARGE", "SUPER_ADMIN"];
+    if (!allowed.includes(actualRole)) {
       return new NextResponse("Unauthorized Access (403)", { status: 403 });
     }
   }

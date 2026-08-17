@@ -5,7 +5,7 @@ import { PWARegister } from "@/components/pwa/PWARegister";
 import { CommandSearch } from "@/components/search/CommandSearch";
 import { RouteProgress } from "@/components/layout/RouteProgress";
 
-import { Toaster } from "sonner";
+import { Toaster } from "@/components/ui/Toaster";
 
 export const metadata: Metadata = {
   title: "Prestige Tiles — Inventory Control System",
