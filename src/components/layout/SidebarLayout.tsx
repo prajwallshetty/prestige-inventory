@@ -232,7 +232,7 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
     
     // Role-specific routing configuration
     if (role === "DEALER") {
-      const stockBooking = { name: "Book Stock", href: `${pathPrefix}/bookings/new`, icon: Store };
+      const stockBooking = { name: "Book Stock", href: `${pathPrefix}/blocks/new`, icon: Store };
       const myBookings = { name: "My Bookings", href: `${pathPrefix}/bookings`, icon: FileSpreadsheet };
       const reports = { name: "Reports & Export", href: `${pathPrefix}/reports`, icon: FileSpreadsheet };
       const settings = { name: "Settings", href: `${pathPrefix}/settings`, icon: Settings };
@@ -282,7 +282,7 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
     }
 
     if (role === "SHOWROOM_STAFF") {
-      const stockBooking = { name: "Book Stock", href: `${pathPrefix}/bookings/new`, icon: Store };
+      const stockBooking = { name: "Book Stock", href: `${pathPrefix}/blocks/new`, icon: Store };
       const myBookings = { name: "My Bookings", href: `${pathPrefix}/bookings`, icon: FileSpreadsheet };
       const myBlocks = { name: "My Blocks", href: `${pathPrefix}/blocks`, icon: Lock };
 
@@ -693,7 +693,7 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
         <nav className="fixed bottom-0 left-0 right-0 z-40 flex h-16 items-center justify-around border-t border-[#EAEAEA] bg-white/95 backdrop-blur-md px-2 lg:hidden mobile-bottom-nav">
           <BottomTabLink href={`${pathPrefix}/dashboard`} icon={LayoutDashboard} label="Home" active={pathname === `${pathPrefix}/dashboard`} />
           <BottomTabLink href={`${pathPrefix}/inventory`} icon={Boxes} label="Products" active={pathname === `${pathPrefix}/inventory`} />
-          <BottomTabLink href={`${pathPrefix}/bookings/new`} icon={Store} label="Book" active={pathname === `${pathPrefix}/bookings/new`} />
+          <BottomTabLink href={`${pathPrefix}/blocks/new`} icon={Store} label="Book" active={pathname === `${pathPrefix}/blocks/new`} />
           <BottomTabLink href={`${pathPrefix}/bookings`} icon={FileSpreadsheet} label="Bookings" active={pathname === `${pathPrefix}/bookings`} />
           <BottomTabLink href={`${pathPrefix}/settings`} icon={Settings} label="Settings" active={pathname === `${pathPrefix}/settings`} />
         </nav>

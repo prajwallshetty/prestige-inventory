@@ -842,3 +842,74 @@ export async function getDealerDetailAction(id: string) {
   const { getDealerDetail } = await import("@/services/DealerService");
   return getDealerDetail(id);
 }
+
+// ————— Block creation support (booking flow) —————
+
+/** Server-side product search for the block form's picker (spec §7, §38). */
+export async function searchBlockableProductsAction(query: string) {
+  const session = await getEffectiveSession();
+  if (!session) throw new Error("Unauthorized: Please sign in.");
+  const { searchBlockableProducts } = await import("@/services/InventoryService");
+  return searchBlockableProducts({ query, limit: 10 });
+}
+
+/** Live blockable quantity for one product, straight from the database. */
+export async function getAvailableToBlockAction(productId: string) {
+  const session = await getEffectiveSession();
+  if (!session) throw new Error("Unauthorized: Please sign in.");
+  const { getAvailableToBlock } = await import("@/services/InventoryService");
+  return getAvailableToBlock(productId);
+}
+
+/**
+ * Creates a block from the booking form.
+ *
+ * Returns the created block so the UI can navigate to its detail page.
+ * Scope (showroom) is taken from the session, never from the client (spec §36).
+ */
+export async function createBlockFromFormAction(input: {
+  productId: string;
+  quantity: number;
+  dealerId?: string;
+  remarks?: string;
+  durationHours?: number;
+}) {
+  const session = await getEffectiveSession();
+  if (!session) throw new Error("Unauthorized: Please sign in.");
+  assertPermission(canCreateBlock(session.role as Role), "Your role cannot create stock blocks.");
+
+  if (!input.productId) throw new Error("Please select a product.");
+  if (!Number.isFinite(input.quantity) || input.quantity <= 0) {
+    throw new Error("Block quantity must be greater than zero.");
+  }
+
+  // Showroom users are pinned to their own showroom; managers/admins may act
+  // without one. A client-supplied showroomId is deliberately ignored.
+  const showroomId =
+    session.role === "SHOWROOM_STAFF" || session.role === "SHOWROOM_INCHARGE"
+      ? session.showroomId || undefined
+      : undefined;
+
+  const block = await createBlockRequest({
+    productId: input.productId,
+    quantity: input.quantity,
+    dealerId: input.dealerId || undefined,
+    showroomId,
+    remarks: input.remarks,
+    durationHours: input.durationHours ?? 48,
+    requestedBy: session.name,
+    createdById: session.userId,
+    userRole: session.role,
+  });
+
+  revalidatePath("/blocks");
+  revalidatePath("/inventory");
+  revalidatePath("/dashboard");
+
+  return {
+    id: block.id,
+    blockNumber: block.block_number,
+    status: block.status,
+    quantity: block.quantity,
+  };
+}

@@ -198,3 +198,97 @@ export async function getInventoryList({
     totalPages: Math.ceil(total / limit),
   };
 }
+
+// ————— Blockable stock + product search (booking flow) —————
+
+/**
+ * THE single server-side definition of how much stock may still be blocked.
+ *
+ * available = physical − currently blocked − allocated − damaged
+ *
+ * `blockedStock` is a running counter maintained by StockBlockService: it is
+ * incremented on reservation and decremented on reject/cancel/release/expire,
+ * so expired, cancelled, released, rejected and delivered blocks are already
+ * excluded (spec §8). Both the booking form and the server-side validation
+ * call this, so the number shown can never disagree with the number enforced.
+ */
+export function computeAvailableToBlock(inv: {
+  totalStock: number;
+  blockedStock: number;
+  allocatedStock: number;
+  damagedStock: number;
+}): number {
+  return Math.max(0, inv.totalStock - inv.blockedStock - inv.allocatedStock - inv.damagedStock);
+}
+
+export async function getAvailableToBlock(productId: string): Promise<number> {
+  const inv = await db.inventory.findUnique({
+    where: { productId },
+    select: { totalStock: true, blockedStock: true, allocatedStock: true, damagedStock: true },
+  });
+  if (!inv) return 0;
+  return computeAvailableToBlock(inv);
+}
+
+/**
+ * Server-side product search for the block creation selector.
+ *
+ * Returns a small, capped result set with only the fields the picker renders —
+ * the catalogue is ~1,100 rows and growing, so it must never be shipped to the
+ * browser wholesale (spec §7, §38).
+ */
+export async function searchBlockableProducts({
+  query,
+  limit = 10,
+}: {
+  query: string;
+  limit?: number;
+}) {
+  const q = (query || "").trim();
+  if (q.length < 2) return [];
+
+  // Multi-term: every token must match somewhere, so "acron beige" narrows
+  // rather than widening.
+  const terms = q.split(/\s+/).slice(0, 4);
+  const and = terms.map((t) => ({
+    OR: [
+      { name: { contains: t, mode: "insensitive" as const } },
+      { sku: { contains: t, mode: "insensitive" as const } },
+      { productCode: { contains: t, mode: "insensitive" as const } },
+      { importKey: { contains: t, mode: "insensitive" as const } },
+      { size: { contains: t, mode: "insensitive" as const } },
+      { collection: { contains: t, mode: "insensitive" as const } },
+      { brand: { is: { name: { contains: t, mode: "insensitive" as const } } } },
+    ],
+  }));
+
+  const products = await db.product.findMany({
+    where: { deletedAt: null, status: "ACTIVE", AND: and },
+    select: {
+      id: true,
+      name: true,
+      sku: true,
+      productCode: true,
+      importKey: true,
+      size: true,
+      thumbnail_key: true,
+      image_key: true,
+      brand: { select: { name: true } },
+      inventory: {
+        select: { totalStock: true, blockedStock: true, allocatedStock: true, damagedStock: true },
+      },
+    },
+    take: Math.min(limit, 25),
+    orderBy: { name: "asc" },
+  });
+
+  return products.map((p) => ({
+    id: p.id,
+    name: p.name,
+    productNumber: p.sku || p.productCode || p.importKey || "—",
+    size: p.size,
+    brand: p.brand?.name ?? null,
+    thumbnailKey: p.thumbnail_key || p.image_key || null,
+    availableToBlock: p.inventory ? computeAvailableToBlock(p.inventory) : 0,
+  }));
+}
