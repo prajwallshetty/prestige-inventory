@@ -1,9 +1,11 @@
-const CACHE_NAME = "prestige-tiles-v1";
+const CACHE_NAME = "prestige-tiles-v2";
 const OFFLINE_URL = "/offline";
 
 const ASSETS_TO_CACHE = [
   OFFLINE_URL,
-  "/manifest.json",
+  // The app links /manifest.webmanifest; the old /manifest.json entry cached a
+  // file nothing requests.
+  "/manifest.webmanifest",
 ];
 
 self.addEventListener("install", (event) => {
@@ -48,8 +50,15 @@ self.addEventListener("fetch", (event) => {
   // Handle page navigations
   if (req.mode === "navigate") {
     event.respondWith(
-      fetch(req).catch(() => {
-        return caches.match(OFFLINE_URL) || new Response("Offline mode", { status: 503 });
+      fetch(req).catch(async () => {
+        const cached = await caches.match(OFFLINE_URL);
+        return (
+          cached ||
+          new Response(
+            "<h1>You are offline</h1><p>Reconnect to continue working.</p>",
+            { status: 503, headers: { "Content-Type": "text/html; charset=utf-8" } }
+          )
+        );
       })
     );
     return;
@@ -73,7 +82,7 @@ self.addEventListener("fetch", (event) => {
           });
         }
         return networkResponse;
-      });
+      }).catch(() => Response.error());
     })
   );
 });

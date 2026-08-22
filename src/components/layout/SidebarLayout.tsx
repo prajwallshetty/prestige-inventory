@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   LayoutDashboard,
   Boxes,
@@ -35,7 +35,7 @@ import { setSimulatedSessionAction, signOutAction } from "@/app/actions";
 import { toast } from "sonner";
 import { NotificationCenter } from "@/components/notifications/NotificationCenter";
 
-export type UserRole = "SUPER_ADMIN" | "MANAGER" | "VIEWER" | "SHOWROOM_INCHARGE" | "SHOWROOM_STAFF" | "DEALER";
+export type UserRole = "SUPER_ADMIN" | "MANAGER" | "WEAVER" | "SHOWROOM_INCHARGE" | "SHOWROOM_STAFF";
 
 interface Props {
   children: React.ReactNode;
@@ -44,18 +44,24 @@ interface Props {
   dealers: any[];
   warehouses: any[];
   showrooms: any[];
+  /** Blocks currently waiting on *this* user's decision. Drives the nav badge. */
+  pendingApprovalCount?: number;
 }
 
-export function SidebarLayout({ children, session, dealers, warehouses, showrooms }: Props) {
+export function SidebarLayout({ children, session, dealers, warehouses, showrooms, pendingApprovalCount = 0 }: Props) {
   const router = useRouter();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  // Queue links differ only by query string, so the active state has to
+  // consider it — otherwise every /blocks link highlights at once.
+  const currentQuery = searchParams.toString();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
   // Preview-simulator selections. Seeded from the server session; the change
   // handlers reload the page, so these only need to hold the pending choice.
   const activeRole: UserRole =
-    session?.role === "SUPER_ADMIN" && session?.previewRole ? session.previewRole : session?.role || "VIEWER";
+    session?.role === "SUPER_ADMIN" && session?.previewRole ? session.previewRole : session?.role || "WEAVER";
   const [role, setRole] = useState<UserRole>(activeRole);
   const [dealerId, setDealerId] = useState(session?.dealerId || "");
   const [warehouseId, setWarehouseId] = useState(session?.warehouseId || "");
@@ -148,7 +154,7 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
       return;
     }
     setRole(newRole);
-    const dId = newRole === "DEALER" ? (dealerId || dealers[0]?.id || "") : "";
+    const dId = "";
     const wId = newRole === "MANAGER" ? (warehouseId || warehouses[0]?.id || "") : "";
     const sId = (newRole === "SHOWROOM_STAFF" || newRole === "SHOWROOM_INCHARGE") ? (showroomId || showrooms[0]?.id || "") : "";
     
@@ -218,10 +224,9 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
   };
 
   // Determine path prefix based on ACTUAL authenticated role
-  const actualRole = session?.role || "VIEWER";
+  const actualRole = session?.role || "WEAVER";
   const pathPrefix = actualRole === "SUPER_ADMIN" ? "/admin" 
     : actualRole === "MANAGER" ? "/warehouse" 
-    : actualRole === "DEALER" ? "/dealer" 
     : actualRole === "SHOWROOM_STAFF" ? "/showroom-staff"
     : actualRole === "SHOWROOM_INCHARGE" ? "/showroom-incharge"
     : "/viewer";
@@ -231,7 +236,7 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
     const allStock = { name: "All Stock", href: `${pathPrefix}/inventory`, icon: Boxes };
     
     // Role-specific routing configuration
-    if (role === "DEALER") {
+    if (false) {
       const stockBooking = { name: "Book Stock", href: `${pathPrefix}/blocks/new`, icon: Store };
       const myBookings = { name: "My Bookings", href: `${pathPrefix}/bookings`, icon: FileSpreadsheet };
       const reports = { name: "Reports & Export", href: `${pathPrefix}/reports`, icon: FileSpreadsheet };
@@ -257,6 +262,8 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
     const broadcasts = { name: "Broadcasts", href: `${pathPrefix}/announcements`, icon: Megaphone };
 
     if (role === "MANAGER") {
+      const pendingApprovals = { name: "Pending Approvals", href: `${pathPrefix}/blocks?status=PENDING_MANAGER_APPROVAL`, icon: Lock, badge: pendingApprovalCount };
+      const readyToShip = { name: "Ready to Ship", href: `${pathPrefix}/blocks?status=READY_TO_SHIP`, icon: Truck };
       const lowStock = { name: "Low Stock Alert", href: `${pathPrefix}/inventory?status=LOW_STOCK`, icon: AlertTriangle };
       const outOfStock = { name: "Out of Stock", href: `${pathPrefix}/inventory?status=OUT_OF_STOCK`, icon: PackageCheck };
       const dealersMgmt = { name: "Dealers List", href: `${pathPrefix}/dealers`, icon: Users };
@@ -272,7 +279,7 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
         },
         {
           category: "RESERVATIONS & LOGISTICS",
-          items: [bookingsQueue, shipments, dealerBlocks],
+          items: [pendingApprovals, readyToShip, dealerBlocks, bookingsQueue, shipments],
         },
         {
           category: "REPORTING & MANAGEMENT",
@@ -285,11 +292,12 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
       const stockBooking = { name: "Book Stock", href: `${pathPrefix}/blocks/new`, icon: Store };
       const myBookings = { name: "My Bookings", href: `${pathPrefix}/bookings`, icon: FileSpreadsheet };
       const myBlocks = { name: "My Blocks", href: `${pathPrefix}/blocks`, icon: Lock };
+      const pendingMine = { name: "Awaiting Approval", href: `${pathPrefix}/blocks?status=PENDING`, icon: CheckCircle };
 
       return [
         {
           category: "SHOWROOM STAFF",
-          items: [dashboard, stockBooking, myBookings, myBlocks, allStock],
+          items: [dashboard, stockBooking, myBlocks, pendingMine, allStock],
         },
         {
           category: "ANALYTICS & CONTROL",
@@ -299,13 +307,14 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
     }
 
     if (role === "SHOWROOM_INCHARGE") {
-      const pendingApprovals = { name: "Pending Approvals", href: `${pathPrefix}/blocks?status=PENDING`, icon: Lock };
-      const approvedBlocks = { name: "Approved Blocks", href: `${pathPrefix}/blocks?status=APPROVED`, icon: CheckCircle };
+      const pendingApprovals = { name: "Pending Approvals", href: `${pathPrefix}/blocks?status=PENDING_INCHARGE_APPROVAL`, icon: Lock, badge: pendingApprovalCount };
+      const allBlocks = { name: "Showroom Blocks", href: `${pathPrefix}/blocks`, icon: CheckCircle };
+      const newBlock = { name: "Create Block", href: `${pathPrefix}/blocks/new`, icon: Store };
 
       return [
         {
           category: "SHOWROOM IN-CHARGE",
-          items: [dashboard, pendingApprovals, approvedBlocks, allStock],
+          items: [dashboard, pendingApprovals, allBlocks, newBlock, allStock],
         },
         {
           category: "ANALYTICS & CONTROL",
@@ -314,7 +323,7 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
       ];
     }
 
-    if (role === "VIEWER") {
+    if (role === "WEAVER") {
       return [
         {
           category: "OVERVIEW",
@@ -358,7 +367,11 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
       },
       {
         category: "STOCK RESERVATION",
-        items: [bookingsQueue, dealerBlocks],
+        items: [
+          { name: "Pending Approvals", href: `${pathPrefix}/blocks?status=PENDING`, icon: Lock, badge: pendingApprovalCount },
+          dealerBlocks,
+          bookingsQueue,
+        ],
       },
       {
         category: "LOGISTICS & TRANSIT",
@@ -439,8 +452,10 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
                 </p>
               )}
               <div className="space-y-0.5">
-                {group.items.map((item) => {
-                  const isActive = pathname === item.href.split("?")[0];
+                {group.items.map((item: any) => {
+                  const [itemPath, itemQuery] = item.href.split("?");
+                  const isActive =
+                    pathname === itemPath && (itemQuery ? currentQuery === itemQuery : !currentQuery);
                   const isPending = !isActive && pendingHref === item.href;
                   return (
                     <Link
@@ -468,7 +483,12 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
                       ) : (
                         <item.icon className="h-4 w-4 shrink-0" />
                       )}
-                      {(!collapsed || mobileOpen) && <span>{item.name}</span>}
+                      {(!collapsed || mobileOpen) && <span className="flex-1">{item.name}</span>}
+                      {(!collapsed || mobileOpen) && !!item.badge && item.badge > 0 && (
+                        <span className="ml-auto rounded-full bg-[#F2C202] px-1.5 py-0.5 text-[9px] font-black text-white">
+                          {item.badge > 99 ? "99+" : item.badge}
+                        </span>
+                      )}
                     </Link>
                   );
                 })}
@@ -498,12 +518,11 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
                     <option value="MANAGER">Manager</option>
                     <option value="SHOWROOM_INCHARGE">Showroom In-Charge</option>
                     <option value="SHOWROOM_STAFF">Showroom Staff</option>
-                    <option value="DEALER">Dealer Partner</option>
-                    <option value="VIEWER">Read-Only Viewer</option>
+                    <option value="WEAVER">Weaver (Read-Only)</option>
                   </select>
                 </div>
 
-                {role === "DEALER" && dealers.length > 0 && (
+                {false && dealers.length > 0 && (
                   <div className="space-y-1">
                     <p className="text-[9px] text-[#6B6B6B] font-bold uppercase">Dealer Scope</p>
                     <select
@@ -689,7 +708,7 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
       </div>
 
       {/* MOBILE BOTTOM NAVIGATION BAR FOR DEALER */}
-      {role === "DEALER" && (
+      {false && (
         <nav className="fixed bottom-0 left-0 right-0 z-40 flex h-16 items-center justify-around border-t border-[#EAEAEA] bg-white/95 backdrop-blur-md px-2 lg:hidden mobile-bottom-nav">
           <BottomTabLink href={`${pathPrefix}/dashboard`} icon={LayoutDashboard} label="Home" active={pathname === `${pathPrefix}/dashboard`} />
           <BottomTabLink href={`${pathPrefix}/inventory`} icon={Boxes} label="Products" active={pathname === `${pathPrefix}/inventory`} />

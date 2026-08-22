@@ -35,7 +35,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="bg-[#F7F7F5] text-[#111111] antialiased font-sans">
-        <Toaster position="top-right" richColors />
+        <Toaster position="top-right" richColors theme="light" />
         {/* useSearchParams needs a Suspense boundary to avoid opting the whole
             tree into client-side rendering. */}
         <Suspense fallback={null}>

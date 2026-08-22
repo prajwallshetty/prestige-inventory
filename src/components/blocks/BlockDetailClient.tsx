@@ -3,6 +3,7 @@
 import React, { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { isOffline, OFFLINE_MESSAGE } from "@/lib/offline";
 import { Check, Loader2, Truck, X, AlertCircle } from "lucide-react";
 import {
   approveBlockAction,
@@ -37,7 +38,7 @@ interface AuditEntry {
 }
 
 interface Props {
-  session: { userId: string; name: string; role: string };
+  session: { userId: string; name: string; role: string; showroomId: string | null };
   block: any;
   audit: AuditEntry[];
 }
@@ -57,25 +58,53 @@ export function BlockDetailClient({ session, block, audit }: Props) {
 
   const role = session.role as Role;
   const status = block.status as BlockStatus;
-  const actorCtx = { createdById: block.createdById, actorId: session.userId };
+  // Scope is part of authority: an In-Charge may only act on their own
+  // showroom's blocks, and the same context object is what the server checks.
+  const actorCtx = {
+    createdById: block.createdById,
+    actorId: session.userId,
+    blockShowroomId: block.showroomId ?? null,
+    actorShowroomId: session.showroomId,
+  };
 
-  const run = async (action: Action, fn: () => Promise<unknown>, successMsg: string) => {
+  const run = async (
+    action: Action,
+    fn: () => Promise<{ ok: boolean; error?: string }>,
+    successMsg: string
+  ) => {
     if (inFlight.current) return;
+
+    // §39 — refuse mutations while offline rather than letting them hang.
+    if (isOffline()) {
+      setError(OFFLINE_MESSAGE);
+      toast.error(OFFLINE_MESSAGE);
+      return;
+    }
+
     inFlight.current = true;
     setBusy(action);
     setError(null);
     try {
-      await fn();
+      const result = await fn();
+      if (!result.ok) {
+        setError(result.error || "The action could not be completed.");
+        toast.error(result.error || "The action could not be completed.");
+        // Someone else moved this block on — show its real state.
+        startTransition(() => router.refresh());
+        return;
+      }
+
       toast.success(successMsg);
       // Refresh in place so the timeline and status update without a manual
-      // reload (spec §14).
+      // reload (spec §10).
       startTransition(() => router.refresh());
       setRejectOpen(false);
       setShipOpen(false);
       setReason("");
-    } catch (err: any) {
-      setError(err?.message || "The action could not be completed.");
-      toast.error(err?.message || "Action failed.");
+    } catch {
+      const message = "Connection failed. Please try again.";
+      setError(message);
+      toast.error(message);
     } finally {
       setBusy(null);
       inFlight.current = false;

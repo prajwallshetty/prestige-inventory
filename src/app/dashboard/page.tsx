@@ -1,5 +1,7 @@
+import { redirect } from "next/navigation";
 import { getInventorySummary } from "@/services/InventoryService";
 import { getSessionContext } from "@/lib/session";
+import { PENDING_BLOCK_STATUSES } from "@/lib/permissions";
 import { db } from "@/lib/db";
 import { DashboardClient } from "@/app/dashboard/DashboardClient";
 
@@ -9,7 +11,11 @@ export default async function DashboardPage() {
   // Session is cookie-only (no DB round trip), so it can gate the dealer
   // queries without costing latency.
   const session = await getSessionContext();
-  const isDealer = session.role === "DEALER" && !!session.dealerId;
+  if (!session.authenticated) redirect("/login");
+
+  // The DEALER login role was retired; dealer-scoped dashboard queries no
+  // longer apply to any signed-in role.
+  const isDealer = false;
 
   // Every independent read goes out in ONE parallel batch. The database is
   // geographically remote (~1.5s per round trip), so awaiting these in
@@ -28,18 +34,33 @@ export default async function DashboardPage() {
     db.inventoryMovement.findMany({
       take: 8,
       orderBy: { createdAt: "desc" },
-      include: {
+      select: {
+        id: true,
+        quantity: true,
+        movementType: true,
+        reason: true,
+        performedBy: true,
+        createdAt: true,
         inventory: {
-          include: {
+          select: {
+            productId: true,
             product: { select: { name: true, sku: true, size: true } },
           },
         },
       },
     }),
     db.stockBlock.findMany({
-      where: { status: "PENDING" },
+      where: { status: { in: [...PENDING_BLOCK_STATUSES] } },
+      orderBy: { createdAt: "desc" },
       take: 5,
-      include: {
+      select: {
+        id: true,
+        block_number: true,
+        quantity: true,
+        status: true,
+        requestedBy: true,
+        remarks: true,
+        createdAt: true,
         dealer: { select: { name: true, company: true } },
       },
     }),
@@ -92,6 +113,8 @@ export default async function DashboardPage() {
 
   const serializedPendingBlocks = pendingBlocks.map((b) => ({
     id: b.id,
+    blockNumber: b.block_number,
+    status: b.status,
     quantity: b.quantity,
     requestedBy: b.requestedBy,
     remarks: b.remarks,

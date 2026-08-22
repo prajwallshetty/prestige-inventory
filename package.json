@@ -8,7 +8,12 @@
     "start": "next start --port 3001",
     "db:generate": "prisma generate",
     "seed:prestige": "tsx scripts/import-prestige-products.ts",
-    "migrate:db": "tsx scripts/migrate-database.ts"
+    "migrate:db": "tsx scripts/migrate-database.ts",
+    "test:e2e": "tsx scripts/test-e2e-workflow.ts",
+    "test:rbac": "tsx scripts/test-http-rbac.ts",
+    "db:indexes": "tsx scripts/apply-indexes.ts",
+    "db:repair": "tsx scripts/repair-data.ts",
+    "db:reconcile": "tsx scripts/reconcile-stock.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

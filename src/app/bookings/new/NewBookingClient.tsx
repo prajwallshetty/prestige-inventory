@@ -56,6 +56,7 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
   const [priority, setPriority] = useState<"NORMAL" | "HIGH" | "URGENT">("NORMAL");
   const [notes, setNotes] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const filteredProducts = products.filter((p) => {
@@ -137,7 +138,8 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
       const payload = {
         dealerId: session.dealerId || "abc-dealer-id-placeholder",
         warehouseId: selectedWarehouseId,
-        requestedBy: session.role === "DEALER" ? `Dealer Representative` : `Sales Manager (${session.role})`,
+        // The server records the acting user from the session; this is display only.
+        requestedBy: session.name || session.role,
         priority,
         notes,
         isWaitlist: hasWaitlistedItems,
@@ -148,16 +150,22 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
         })),
       };
 
-      const booking = await createBookingAction(payload);
+      const result = await createBookingAction(payload);
+      if (!result.ok) {
+        setErrorMessage(result.error);
+        return;
+      }
+
+      const booking = result.data;
       setSuccessMessage(`Booking ${booking.bookingNumber} created successfully! Redirecting...`);
       setCart([]);
-      
+
       // Snappy transition
       setTimeout(() => {
         router.push(`/bookings/${booking.id}`);
       }, 100);
-    } catch (err: any) {
-      alert(`Error submitting booking: ${err.message}`);
+    } catch {
+      setErrorMessage("Connection failed. Please check your network and try again.");
     } finally {
       setIsSubmitting(false);
     }
@@ -264,6 +272,15 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
           <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-xs font-semibold text-emerald-950">
             <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
             <span>{successMessage}</span>
+          </div>
+        )}
+
+        {errorMessage && (
+          <div
+            role="alert"
+            className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-4 text-xs font-semibold text-rose-900"
+          >
+            <span>{errorMessage}</span>
           </div>
         )}
 

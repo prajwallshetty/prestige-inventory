@@ -1,6 +1,9 @@
 "use server";
 
 import { db } from "@/lib/db";
+import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
+
 import { adjustStock } from "@/services/StockAdjustmentService";
 import {
   createBlockRequest,
@@ -12,18 +15,7 @@ import {
   markBlockReadyToShip,
   cancelBlock,
 } from "@/services/StockBlockService";
-import {
-  assertPermission,
-  canCreateBlock,
-  canManageDealers,
-  canSendAnnouncements,
-  isRole,
-  ROLES,
-  type Role,
-} from "@/lib/permissions";
 import { createShipment, receiveShipmentStock } from "@/services/ShipmentService";
-import { revalidatePath } from "next/cache";
-import { cookies } from "next/headers";
 import {
   createBooking,
   reviewBooking,
@@ -35,481 +27,786 @@ import {
   fulfillBookingStock,
 } from "@/services/BookingService";
 
+import {
+  AppError,
+  assertPermission,
+  canAdjustStock,
+  canCancelBooking,
+  canCreateBlock,
+  canCreateBooking,
+  canManageDealers,
+  canReviewBooking,
+  canViewAuditLogs,
+  isRole,
+  ROLES,
+  type Role,
+} from "@/lib/permissions";
+import {
+  comparePassword,
+  createSession,
+  destroySession,
+  getSession,
+  getEffectiveSession,
+  hashPassword,
+  requireUser,
+  updateSessionPreview,
+} from "@/lib/auth";
+import {
+  ActionResult,
+  fail,
+  ok,
+  revalidateBlockViews,
+  revalidateBookingViews,
+  runAction,
+} from "@/lib/action-result";
 
-export async function adjustStockAction(formData: FormData) {
-  const productId = formData.get("productId") as string;
-  const quantity = parseFloat(formData.get("quantity") as string);
-  const reason = formData.get("reason") as string;
+// ————————————————————————————————————————————————
+// Stock adjustment
+// ————————————————————————————————————————————————
 
-  if (!productId || isNaN(quantity)) {
-    throw new Error("Invalid adjustment input.");
-  }
+export async function adjustStockAction(formData: FormData): Promise<ActionResult<undefined>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    // Physical stock corrections are administrative — the previous version had
+    // no session check at all and attributed every change to "Inventory Manager".
+    assertPermission(canAdjustStock(user.role), "Only a Super Admin can adjust physical stock.");
 
-  await adjustStock({
-    productId,
-    adjustmentQuantity: quantity,
-    reason: reason || "Manual Inventory Adjustment",
-    performedBy: "Inventory Manager",
+    const productId = formData.get("productId") as string;
+    const quantity = parseFloat(formData.get("quantity") as string);
+    const reason = (formData.get("reason") as string) || "";
+
+    if (!productId) throw new AppError("Select a product to adjust.", 400, "VALIDATION");
+    if (!Number.isFinite(quantity) || quantity === 0) {
+      throw new AppError("Enter a non-zero adjustment quantity.", 400, "VALIDATION");
+    }
+    if (!reason.trim()) {
+      throw new AppError("A reason is required for every stock adjustment.", 400, "VALIDATION");
+    }
+
+    await adjustStock({
+      productId,
+      adjustmentQuantity: quantity,
+      reason: reason.trim(),
+      performedBy: user.name,
+      performedById: user.userId,
+      role: user.role,
+    });
+
+    revalidateBlockViews();
+    return undefined;
   });
-
-  revalidatePath("/inventory");
-  revalidatePath("/dashboard");
 }
 
-export async function createBlockAction(formData: FormData) {
-  const session = await getEffectiveSession();
-  if (!session) {
-    throw new Error("Unauthorized: Please sign in.");
+// ————————————————————————————————————————————————
+// Block lifecycle
+// ————————————————————————————————————————————————
+
+/** Showroom users are pinned to their own showroom; the client cannot choose. */
+function scopedShowroomId(user: { role: Role; showroomId: string | null }, requested?: string | null) {
+  if (user.role === "SHOWROOM_STAFF" || user.role === "SHOWROOM_INCHARGE") {
+    return user.showroomId || undefined;
   }
-
-  assertPermission(canCreateBlock(session.role as Role), "Your role cannot create stock blocks.");
-
-  const productId = formData.get("productId") as string;
-  const quantity = parseFloat(formData.get("quantity") as string);
-  const remarks = formData.get("remarks") as string;
-  const durationHours = parseInt((formData.get("durationHours") as string) || "48");
-  const blocked_by = formData.get("blocked_by") as "SAMSHUDIN" | "SALMAN";
-  const blockType = (formData.get("blockType") as "BLOCKED" | "CONFIRMED") || "BLOCKED";
-
-  const dealerId = (formData.get("dealerId") as string) || undefined;
-  const showroomId = (session.role === "SHOWROOM_STAFF" || session.role === "SHOWROOM_INCHARGE")
-    ? session.showroomId
-    : (formData.get("showroomId") as string) || undefined;
-
-  // Note: the approval route is decided server-side from the creator's role —
-  // it is deliberately not accepted from the form.
-  await createBlockRequest({
-    productId,
-    quantity,
-    dealerId: dealerId || undefined,
-    showroomId: showroomId || undefined,
-    remarks,
-    durationHours,
-    requestedBy: session.name,
-    createdById: session.userId,
-    blocked_by: blocked_by || undefined,
-    blockType,
-    userRole: session.role,
-  });
-
-  revalidatePath("/blocks");
-  revalidatePath("/inventory");
-  revalidatePath("/dashboard");
+  return requested || undefined;
 }
 
-export async function approveBlockAction(blockId: string, approvedQuantity?: number) {
-  const session = await getEffectiveSession();
-  if (!session) {
-    throw new Error("Unauthorized to approve block requests.");
-  }
+export async function createBlockAction(formData: FormData): Promise<ActionResult<{ id: string; blockNumber: string | null }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    assertPermission(canCreateBlock(user.role), "Your role cannot create stock blocks.");
 
-  // Authority is enforced inside the service against the block's live status.
-  await approveBlock({
-    blockId,
-    approvedBy: session.name,
-    approvedById: session.userId,
-    role: session.role,
-    approvedQuantity,
+    const productId = formData.get("productId") as string;
+    const quantity = parseFloat(formData.get("quantity") as string);
+    const remarks = (formData.get("remarks") as string) || undefined;
+    const durationHours = parseInt((formData.get("durationHours") as string) || "48");
+    const blocked_by = (formData.get("blocked_by") as "SAMSHUDIN" | "SALMAN") || undefined;
+    const blockType = ((formData.get("blockType") as string) || "BLOCKED") as "BLOCKED" | "CONFIRMED";
+    const dealerId = (formData.get("dealerId") as string) || undefined;
+
+    const block = await createBlockRequest({
+      productId,
+      quantity,
+      dealerId,
+      showroomId: scopedShowroomId(user, formData.get("showroomId") as string),
+      remarks,
+      durationHours,
+      requestedBy: user.name,
+      createdById: user.userId,
+      blocked_by,
+      blockType,
+      userRole: user.role,
+    });
+
+    revalidateBlockViews(block.id);
+    return { id: block.id, blockNumber: block.block_number };
   });
-
-  revalidatePath("/blocks");
-  revalidatePath("/inventory");
-  revalidatePath("/dashboard");
 }
 
-export async function rejectBlockAction(blockId: string, reason?: string) {
-  const session = await getEffectiveSession();
-  if (!session) {
-    throw new Error("Unauthorized.");
-  }
+/**
+ * Creates a block from the booking form.
+ *
+ * Scope (showroom) is taken from the session, never from the client (spec §36).
+ */
+export async function createBlockFromFormAction(input: {
+  productId: string;
+  quantity: number;
+  dealerId?: string;
+  remarks?: string;
+  durationHours?: number;
+}): Promise<ActionResult<{ id: string; blockNumber: string | null; status: string; quantity: number }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    assertPermission(canCreateBlock(user.role), "Your role cannot create stock blocks.");
 
-  await rejectBlock({
-    blockId,
-    rejectedBy: session.name,
-    rejectedById: session.userId,
-    role: session.role,
-    reason,
+    const block = await createBlockRequest({
+      productId: input.productId,
+      quantity: input.quantity,
+      dealerId: input.dealerId || undefined,
+      showroomId: scopedShowroomId(user),
+      remarks: input.remarks,
+      durationHours: input.durationHours ?? 48,
+      requestedBy: user.name,
+      createdById: user.userId,
+      userRole: user.role,
+    });
+
+    revalidateBlockViews(block.id);
+    return {
+      id: block.id,
+      blockNumber: block.block_number,
+      status: block.status,
+      quantity: block.quantity,
+    };
   });
-
-  revalidatePath("/blocks");
-  revalidatePath("/inventory");
-  revalidatePath("/dashboard");
 }
 
-/** APPROVED → READY_TO_SHIP (Manager / Super Admin). */
-export async function markReadyToShipAction(blockId: string) {
-  const session = await getEffectiveSession();
-  if (!session) throw new Error("Unauthorized.");
+export async function approveBlockAction(
+  blockId: string,
+  approvedQuantity?: number
+): Promise<ActionResult<{ status: string }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    // Authority, scope and transition legality are all enforced in the service
+    // against the block's live, row-locked status.
+    const block = await approveBlock({
+      blockId,
+      approvedBy: user.name,
+      approvedById: user.userId,
+      role: user.role,
+      actorShowroomId: user.showroomId,
+      approvedQuantity,
+    });
 
-  await markBlockReadyToShip({
-    blockId,
-    performedBy: session.name,
-    performedById: session.userId,
-    role: session.role,
+    revalidateBlockViews(blockId);
+    return { status: block.status };
   });
+}
 
-  revalidatePath("/blocks");
-  revalidatePath("/inventory");
-  revalidatePath("/dashboard");
+export async function rejectBlockAction(
+  blockId: string,
+  reason?: string
+): Promise<ActionResult<{ status: string }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const block = await rejectBlock({
+      blockId,
+      rejectedBy: user.name,
+      rejectedById: user.userId,
+      role: user.role,
+      actorShowroomId: user.showroomId,
+      reason,
+    });
+
+    revalidateBlockViews(blockId);
+    return { status: block.status };
+  });
+}
+
+/** Legacy APPROVED → READY_TO_SHIP (Manager / Super Admin). */
+export async function markReadyToShipAction(blockId: string): Promise<ActionResult<{ status: string }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const block = await markBlockReadyToShip({
+      blockId,
+      performedBy: user.name,
+      performedById: user.userId,
+      role: user.role,
+    });
+
+    revalidateBlockViews(blockId);
+    return { status: block.status };
+  });
 }
 
 /** READY_TO_SHIP → SHIPPED / PARTIALLY_SHIPPED (Manager / Super Admin). */
-export async function shipBlockAction(blockId: string, quantity?: number) {
-  const session = await getEffectiveSession();
-  if (!session) throw new Error("Unauthorized.");
+export async function shipBlockAction(
+  blockId: string,
+  quantity?: number
+): Promise<ActionResult<{ status: string }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const block = await shipBlock({
+      blockId,
+      quantity,
+      performedBy: user.name,
+      performedById: user.userId,
+      role: user.role,
+    });
 
-  await shipBlock({
-    blockId,
-    quantity,
-    performedBy: session.name,
-    performedById: session.userId,
-    role: session.role,
+    revalidateBlockViews(blockId);
+    return { status: block.status };
   });
-
-  revalidatePath("/blocks");
-  revalidatePath("/inventory");
-  revalidatePath("/dashboard");
 }
 
-export async function deliverBlockAction(blockId: string, deliveryQty?: number) {
-  const session = await getEffectiveSession();
-  if (!session) {
-    throw new Error("Unauthorized.");
-  }
+export async function deliverBlockAction(
+  blockId: string,
+  deliveryQty?: number
+): Promise<ActionResult<{ status: string }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const block = await deliverBlock({
+      blockId,
+      quantity: deliveryQty,
+      performedBy: user.name,
+      performedById: user.userId,
+      role: user.role,
+    });
 
-  await deliverBlock({
-    blockId,
-    quantity: deliveryQty,
-    performedBy: session.name,
-    performedById: session.userId,
-    role: session.role,
+    revalidateBlockViews(blockId);
+    return { status: block.status };
   });
-
-  revalidatePath("/blocks");
-  revalidatePath("/inventory");
-  revalidatePath("/dashboard");
 }
 
 /** Cancels an active block — creators may cancel their own, Managers any. */
-export async function cancelBlockAction(blockId: string, reason?: string) {
-  const session = await getEffectiveSession();
-  if (!session) throw new Error("Unauthorized.");
+export async function cancelBlockAction(
+  blockId: string,
+  reason?: string
+): Promise<ActionResult<{ status: string }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const block = await cancelBlock({
+      blockId,
+      performedBy: user.name,
+      performedById: user.userId,
+      role: user.role,
+      actorShowroomId: user.showroomId,
+      reason,
+    });
 
-  await cancelBlock({
-    blockId,
-    performedBy: session.name,
-    performedById: session.userId,
-    role: session.role,
-    reason,
+    revalidateBlockViews(blockId);
+    return { status: block.status };
   });
-
-  revalidatePath("/blocks");
-  revalidatePath("/inventory");
-  revalidatePath("/dashboard");
 }
 
-export async function releaseBlockAction(blockId: string, reason?: string) {
-  const session = await getEffectiveSession();
-  if (!session) {
-    throw new Error("Unauthorized: Please sign in.");
-  }
+export async function releaseBlockAction(
+  blockId: string,
+  reason?: string
+): Promise<ActionResult<{ status: string }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    // The role is passed through so the service can authorise. It previously
+    // defaulted to SUPER_ADMIN, letting any signed-in user release any hold.
+    const block = await releaseBlock({
+      blockId,
+      releasedBy: user.name,
+      releasedById: user.userId,
+      role: user.role,
+      reason: reason || "Manual reservation release",
+    });
 
-  await releaseBlock({
-    blockId,
-    releasedBy: session.name,
-    reason: reason || "Manual reservation release",
+    revalidateBlockViews(blockId);
+    return { status: block.status };
   });
-
-  revalidatePath("/blocks");
-  revalidatePath("/inventory");
-  revalidatePath("/dashboard");
 }
 
+// ————————————————————————————————————————————————
+// Block creation support
+// ————————————————————————————————————————————————
 
+/** Server-side product search for the block form's picker (spec §7, §19). */
+export async function searchBlockableProductsAction(query: string) {
+  const session = await getEffectiveSession();
+  if (!session) return [];
+  const { searchBlockableProducts } = await import("@/services/InventoryService");
+  return searchBlockableProducts({ query, limit: 10 });
+}
 
-export async function createBookingAction(input: any) {
-  const session = await getSession();
-  if (!session) {
-    throw new Error("Unauthorized: Please sign in.");
-  }
+/** Live blockable quantity for one product, straight from the database. */
+export async function getAvailableToBlockAction(productId: string): Promise<number> {
+  const session = await getEffectiveSession();
+  if (!session) return 0;
+  const { getAvailableToBlock } = await import("@/services/InventoryService");
+  return getAvailableToBlock(productId);
+}
 
-  const finalInput = {
-    ...input,
-    // Dealer is always chosen explicitly now that the DEALER login role is gone.
-    dealerId: input.dealerId,
-    requestedBy: session.name,
-  };
+export async function getDealersAndWarehousesAction() {
+  const session = await getEffectiveSession();
+  if (!session) return { dealers: [], warehouses: [], showrooms: [], session: null };
 
-  const result = await createBooking(finalInput);
-  revalidatePath("/bookings");
-  revalidatePath("/inventory");
-  revalidatePath("/dashboard");
-  return result;
+  const [dealers, warehouses, showrooms] = await Promise.all([
+    db.dealer.findMany({
+      where: { status: "ACTIVE" },
+      select: { id: true, dealerId: true, name: true },
+      orderBy: { name: "asc" },
+    }),
+    db.warehouse.findMany({ select: { id: true, name: true, code: true }, orderBy: { name: "asc" } }),
+    db.showroom.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } }),
+  ]);
+
+  return { dealers, warehouses, showrooms, session };
+}
+
+// ————————————————————————————————————————————————
+// Bookings
+// ————————————————————————————————————————————————
+
+export async function createBookingAction(input: any): Promise<ActionResult<any>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    assertPermission(canCreateBooking(user.role), "Your role cannot create bookings.");
+
+    const result = await createBooking({
+      ...input,
+      dealerId: input.dealerId,
+      // The actor is taken from the session; it used to arrive from the client.
+      requestedBy: user.name,
+    });
+
+    revalidateBookingViews();
+    return result;
+  });
 }
 
 export async function reviewBookingAction(
   bookingId: string,
   status: "APPROVED" | "REJECTED" | "ON_HOLD",
-  approvedBy: string,
+  _legacyApprovedBy?: string,
   itemApprovals?: any[],
   notes?: string
-) {
-  const result = await reviewBooking({ bookingId, status, approvedBy, itemApprovals, notes });
-  revalidatePath("/bookings");
-  revalidatePath(`/bookings/${bookingId}`);
-  revalidatePath("/inventory");
-  revalidatePath("/dashboard");
-  return result;
+): Promise<ActionResult<any>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    assertPermission(canReviewBooking(user.role), "Only a Manager or Super Admin can review bookings.");
+
+    const result = await reviewBooking({
+      bookingId,
+      status,
+      approvedBy: user.name,
+      itemApprovals,
+      notes,
+    });
+
+    revalidateBookingViews(bookingId);
+    return result;
+  });
 }
 
-export async function confirmBookingAction(bookingId: string, confirmedBy: string) {
-  const result = await confirmBooking({ bookingId, confirmedBy });
-  revalidatePath("/bookings");
-  revalidatePath(`/bookings/${bookingId}`);
-  revalidatePath("/inventory");
-  revalidatePath("/dashboard");
-  return result;
+export async function confirmBookingAction(bookingId: string): Promise<ActionResult<any>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    assertPermission(canReviewBooking(user.role), "Only a Manager or Super Admin can confirm bookings.");
+
+    const result = await confirmBooking({ bookingId, confirmedBy: user.name });
+    revalidateBookingViews(bookingId);
+    return result;
+  });
 }
 
 export async function requestBookingExtensionAction(
   bookingId: string,
   extensionHours: number,
-  reason: string,
-  requestedBy: string
-) {
-  const result = await requestBookingExtension({ bookingId, extensionHours, reason, requestedBy });
-  revalidatePath("/bookings");
-  revalidatePath(`/bookings/${bookingId}`);
-  return result;
+  reason: string
+): Promise<ActionResult<any>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    assertPermission(canCreateBooking(user.role), "Your role cannot request an extension.");
+
+    const result = await requestBookingExtension({
+      bookingId,
+      extensionHours,
+      reason,
+      requestedBy: user.name,
+    });
+    revalidateBookingViews(bookingId);
+    return result;
+  });
 }
 
 export async function reviewExtensionAction(
   bookingId: string,
-  action: "APPROVE" | "REJECT",
-  performedBy: string
-) {
-  const result = await reviewExtension({ bookingId, action, performedBy });
-  revalidatePath("/bookings");
-  revalidatePath(`/bookings/${bookingId}`);
-  return result;
+  action: "APPROVE" | "REJECT"
+): Promise<ActionResult<any>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    assertPermission(canReviewBooking(user.role), "Only a Manager or Super Admin can review extensions.");
+
+    const result = await reviewExtension({ bookingId, action, performedBy: user.name });
+    revalidateBookingViews(bookingId);
+    return result;
+  });
 }
 
-export async function cancelBookingAction(bookingId: string, cancelledBy: string, reason: string) {
-  const result = await cancelBooking({ bookingId, cancelledBy, reason });
-  revalidatePath("/bookings");
-  revalidatePath(`/bookings/${bookingId}`);
-  revalidatePath("/inventory");
-  revalidatePath("/dashboard");
-  return result;
+export async function cancelBookingAction(
+  bookingId: string,
+  _legacyCancelledBy: string | undefined,
+  reason: string
+): Promise<ActionResult<any>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    assertPermission(canCancelBooking(user.role), "Your role cannot cancel bookings.");
+
+    const result = await cancelBooking({ bookingId, cancelledBy: user.name, reason });
+    revalidateBookingViews(bookingId);
+    return result;
+  });
 }
 
-export async function allocateBookingStockAction(bookingId: string, allocatedBy: string) {
-  const result = await allocateBookingStock({ bookingId, allocatedBy });
-  revalidatePath("/bookings");
-  revalidatePath(`/bookings/${bookingId}`);
-  revalidatePath("/inventory");
-  revalidatePath("/dashboard");
-  return result;
+export async function allocateBookingStockAction(bookingId: string): Promise<ActionResult<any>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    assertPermission(canReviewBooking(user.role), "Only a Manager or Super Admin can allocate stock.");
+
+    const result = await allocateBookingStock({ bookingId, allocatedBy: user.name });
+    revalidateBookingViews(bookingId);
+    return result;
+  });
 }
 
-export async function fulfillBookingStockAction(bookingId: string, fulfilledBy: string) {
-  const result = await fulfillBookingStock({ bookingId, fulfilledBy });
-  revalidatePath("/bookings");
-  revalidatePath(`/bookings/${bookingId}`);
-  revalidatePath("/inventory");
-  revalidatePath("/dashboard");
-  return result;
+export async function fulfillBookingStockAction(bookingId: string): Promise<ActionResult<any>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    assertPermission(canReviewBooking(user.role), "Only a Manager or Super Admin can fulfil bookings.");
+
+    const result = await fulfillBookingStock({ bookingId, fulfilledBy: user.name });
+    revalidateBookingViews(bookingId);
+    return result;
+  });
 }
 
-export async function getDealersAndWarehousesAction() {
-  const [dealers, warehouses, showrooms, session] = await Promise.all([
-    db.dealer.findMany({ select: { id: true, name: true } }),
-    db.warehouse.findMany({ select: { id: true, name: true, code: true } }),
-    db.showroom.findMany({ select: { id: true, name: true } }),
-    getEffectiveSession(),
-  ]);
-  return { dealers, warehouses, showrooms, session };
-}
+export async function bulkApproveBookingsAction(
+  bookingIds: string[]
+): Promise<ActionResult<{ approved: number; failed: number; insufficientStock: number }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    assertPermission(canReviewBooking(user.role), "Only a Manager or Super Admin can approve bookings.");
 
-export async function bulkApproveBookingsAction(bookingIds: string[], approvedBy: string) {
-  let approved = 0;
-  let failed = 0;
-  let insufficientStock = 0;
+    let approved = 0;
+    let failed = 0;
+    let insufficientStock = 0;
 
-  for (const id of bookingIds) {
-    try {
-      await reviewBooking({
-        bookingId: id,
-        status: "APPROVED",
-        approvedBy,
-      });
-      approved++;
-    } catch (err: any) {
-      if (err.message.includes("Insufficient stock")) {
-        insufficientStock++;
-      } else {
-        failed++;
+    for (const id of bookingIds.slice(0, 100)) {
+      try {
+        await reviewBooking({ bookingId: id, status: "APPROVED", approvedBy: user.name });
+        approved++;
+      } catch (err: any) {
+        if (/insufficient stock/i.test(err?.message ?? "")) insufficientStock++;
+        else failed++;
       }
     }
-  }
 
-  revalidatePath("/bookings");
-  revalidatePath("/inventory");
-  revalidatePath("/dashboard");
+    revalidateBookingViews();
+    return { approved, failed, insufficientStock };
+  });
+}
 
-  return { approved, failed, insufficientStock };
+// ————————————————————————————————————————————————
+// Reports (read-only, but not public)
+// ————————————————————————————————————————————————
+
+async function requireReportAccess() {
+  const session = await getEffectiveSession();
+  if (!session) throw new AppError("Please sign in to continue.", 401, "UNAUTHENTICATED");
+  return session;
 }
 
 export async function getInventoryReportDataAction() {
-  return await db.inventory.findMany({
-    include: {
+  await requireReportAccess();
+  return db.inventory.findMany({
+    select: {
+      id: true,
+      totalStock: true,
+      availableStock: true,
+      blockedStock: true,
+      transitStock: true,
+      damagedStock: true,
+      stockStatus: true,
       product: { select: { name: true, sku: true, size: true, brand: { select: { name: true } } } },
       warehouse: { select: { name: true, code: true } },
     },
+    take: 5000,
   });
 }
 
 export async function getBlocksReportDataAction() {
-  return await db.stockBlock.findMany({
-    include: {
-      dealer: { select: { name: true } },
-      inventory: { include: { product: { select: { name: true, sku: true } } } },
+  await requireReportAccess();
+  return db.stockBlock.findMany({
+    select: {
+      id: true,
+      block_number: true,
+      status: true,
+      quantity: true,
+      shippedQuantity: true,
+      deliveredQuantity: true,
+      requestedBy: true,
+      createdAt: true,
+      expiresAt: true,
+      dealer: { select: { name: true, dealerId: true } },
+      showroom: { select: { name: true } },
+      inventory: { select: { product: { select: { name: true, sku: true } } } },
     },
+    orderBy: { createdAt: "desc" },
+    take: 5000,
   });
 }
 
 export async function getBookingsReportDataAction() {
-  return await db.stockBooking.findMany({
+  await requireReportAccess();
+  return db.stockBooking.findMany({
     include: {
       dealer: { select: { name: true } },
       warehouse: { select: { name: true } },
       items: { include: { product: { select: { name: true, sku: true } } } },
     },
+    orderBy: { createdAt: "desc" },
+    take: 2000,
   });
 }
 
 export async function getMovementsReportDataAction() {
-  return await db.inventoryMovement.findMany({
-    include: {
-      inventory: { include: { product: { select: { name: true, sku: true } } } },
+  await requireReportAccess();
+  return db.inventoryMovement.findMany({
+    select: {
+      id: true,
+      movementType: true,
+      quantity: true,
+      previousQuantity: true,
+      newQuantity: true,
+      reason: true,
+      performedBy: true,
+      createdAt: true,
+      inventory: { select: { product: { select: { name: true, sku: true } } } },
       warehouse: { select: { name: true } },
     },
+    orderBy: { createdAt: "desc" },
+    take: 5000,
   });
 }
 
-export async function globalSearchAction(query: string) {
-  if (!query || query.trim().length < 2) {
-    return { products: [], dealers: [], bookings: [], warehouses: [] };
-  }
+// ————————————————————————————————————————————————
+// Global search (spec §18–§20)
+// ————————————————————————————————————————————————
 
-  const q = query.trim();
-  const [products, dealers, bookings, warehouses] = await Promise.all([
+export interface GlobalSearchResults {
+  products: Array<{
+    id: string;
+    name: string;
+    productNumber: string;
+    size: string | null;
+    brand: string | null;
+    thumbnailKey: string | null;
+    availableStock: number;
+  }>;
+  blocks: Array<{
+    id: string;
+    blockNumber: string | null;
+    status: string;
+    quantity: number;
+    dealer: string | null;
+    product: string | null;
+  }>;
+  dealers: Array<{ id: string; name: string; dealerId: string | null; company: string | null }>;
+  showrooms: Array<{ id: string; name: string; city: string | null }>;
+}
+
+const EMPTY_SEARCH: GlobalSearchResults = { products: [], blocks: [], dealers: [], showrooms: [] };
+
+/**
+ * One query per entity, each capped and selecting only rendered columns.
+ * Scoped to the caller: a showroom user never sees another showroom's blocks.
+ */
+export async function globalSearchAction(query: string): Promise<GlobalSearchResults> {
+  const session = await getEffectiveSession();
+  if (!session) return EMPTY_SEARCH;
+
+  const q = (query || "").trim();
+  if (q.length < 2) return EMPTY_SEARCH;
+
+  const like = { contains: q, mode: "insensitive" as const };
+  const role = session.role as Role;
+  const showroomScoped = role === "SHOWROOM_STAFF" || role === "SHOWROOM_INCHARGE";
+  const blockScope = showroomScoped ? { showroomId: session.showroomId ?? "__none__" } : {};
+
+  const [products, blocks, dealers, showrooms] = await Promise.all([
     db.product.findMany({
       where: {
-        OR: [
-          { name: { contains: q, mode: "insensitive" } },
-          { productCode: { contains: q, mode: "insensitive" } },
-        ],
         deletedAt: null,
+        OR: [
+          { name: like },
+          { sku: like },
+          { productCode: like },
+          { importKey: like },
+          { size: like },
+          { collection: like },
+          { finish: like },
+          { surface: like },
+          { brand: { is: { name: like } } },
+          { category: { is: { name: like } } },
+        ],
+      },
+      take: 6,
+      select: {
+        id: true,
+        name: true,
+        sku: true,
+        productCode: true,
+        importKey: true,
+        size: true,
+        thumbnail_key: true,
+        image_key: true,
+        brand: { select: { name: true } },
+        inventory: {
+          select: { totalStock: true, blockedStock: true, allocatedStock: true, damagedStock: true },
+        },
+      },
+      orderBy: { name: "asc" },
+    }),
+    db.stockBlock.findMany({
+      where: {
+        AND: [
+          blockScope,
+          {
+            OR: [
+              { block_number: like },
+              { requestedBy: like },
+              { dealer: { is: { name: like } } },
+              { dealer: { is: { dealerId: like } } },
+              { inventory: { is: { product: { is: { name: like } } } } },
+            ],
+          },
+        ],
       },
       take: 5,
-      select: { id: true, name: true, productCode: true },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        block_number: true,
+        status: true,
+        quantity: true,
+        dealer: { select: { name: true } },
+        inventory: { select: { product: { select: { name: true } } } },
+      },
     }),
     db.dealer.findMany({
-      where: {
-        OR: [
-          { name: { contains: q, mode: "insensitive" } },
-          { company: { contains: q, mode: "insensitive" } },
-        ],
-      },
+      where: { OR: [{ name: like }, { company: like }, { dealerId: like }, { phone: like }] },
       take: 5,
-      select: { id: true, name: true, company: true },
+      select: { id: true, name: true, dealerId: true, company: true },
+      orderBy: { name: "asc" },
     }),
-    db.stockBooking.findMany({
-      where: {
-        bookingNumber: { contains: q, mode: "insensitive" },
-      },
-      take: 5,
-      select: { id: true, bookingNumber: true, status: true },
-    }),
-    db.warehouse.findMany({
-      where: {
-        OR: [
-          { name: { contains: q, mode: "insensitive" } },
-          { code: { contains: q, mode: "insensitive" } },
-        ],
-      },
-      take: 5,
-      select: { id: true, name: true, code: true },
+    db.showroom.findMany({
+      where: { deletedAt: null, OR: [{ name: like }, { city: like }] },
+      take: 4,
+      select: { id: true, name: true, city: true },
+      orderBy: { name: "asc" },
     }),
   ]);
 
-  return { products, dealers, bookings, warehouses };
+  return {
+    products: products.map((p) => ({
+      id: p.id,
+      name: p.name,
+      productNumber: p.sku || p.productCode || p.importKey || "—",
+      size: p.size,
+      brand: p.brand?.name ?? null,
+      thumbnailKey: p.thumbnail_key || p.image_key || null,
+      availableStock: p.inventory
+        ? Math.max(
+            0,
+            p.inventory.totalStock -
+              p.inventory.blockedStock -
+              p.inventory.allocatedStock -
+              p.inventory.damagedStock
+          )
+        : 0,
+    })),
+    blocks: blocks.map((b) => ({
+      id: b.id,
+      blockNumber: b.block_number,
+      status: b.status,
+      quantity: b.quantity,
+      dealer: b.dealer?.name ?? null,
+      product: b.inventory?.product?.name ?? null,
+    })),
+    dealers,
+    showrooms,
+  };
 }
 
-import { comparePassword, createSession, destroySession, getSession, updateSessionPreview, hashPassword, getEffectiveSession } from "@/lib/auth";
+// ————————————————————————————————————————————————
+// Authentication
+// ————————————————————————————————————————————————
 
-export async function signInAction(formData: FormData) {
-  const email = formData.get("email") as string;
-  const password = formData.get("password") as string;
+export async function signInAction(formData: FormData): Promise<ActionResult<{ redirectTo: string }>> {
+  return runAction(async () => {
+    const email = (formData.get("email") as string)?.toLowerCase().trim();
+    const password = formData.get("password") as string;
 
-  if (!email || !password) {
-    throw new Error("Email and password are required.");
-  }
+    if (!email || !password) {
+      throw new AppError("Email and password are required.", 400, "VALIDATION");
+    }
 
-  const user = await db.user.findUnique({
-    where: { email: email.toLowerCase().trim() },
+    const user = await db.user.findUnique({ where: { email } });
+
+    // The same message for both cases, so the form cannot be used to discover
+    // which addresses are registered.
+    if (!user) throw new AppError("Email or password is incorrect.", 401, "BAD_CREDENTIALS");
+
+    if (user.status === "DEACTIVATED" || user.status === "INACTIVE") {
+      throw new AppError("Your account is currently inactive.", 403, "ACCOUNT_INACTIVE");
+    }
+    if (user.status === "SUSPENDED") {
+      throw new AppError("Your account is currently suspended.", 403, "ACCOUNT_SUSPENDED");
+    }
+
+    const matches = await comparePassword(password, user.password);
+    if (!matches) throw new AppError("Email or password is incorrect.", 401, "BAD_CREDENTIALS");
+
+    if (!isRole(user.role)) {
+      throw new AppError("Your account has an invalid role. Contact an administrator.", 403, "BAD_ROLE");
+    }
+
+    await createSession({
+      userId: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      dealerId: user.dealer_id || undefined,
+      warehouseId: user.warehouse_id || undefined,
+      // Without this, every showroom user signed in with no showroom scope:
+      // their blocks were created unscoped and their own queues came back empty.
+      showroomId: user.showroomId || undefined,
+    });
+
+    await db.user.update({ where: { id: user.id }, data: { lastLogin: new Date() } });
+
+    await db.auditLog.create({
+      data: {
+        action: "LOGIN",
+        entity: "User",
+        entityId: user.id,
+        userId: user.id,
+        roleAtTime: user.role,
+        meta: { performedBy: user.name, details: "User signed in successfully." },
+      },
+    });
+
+    const redirectTo =
+      user.role === "SUPER_ADMIN" ? "/admin/dashboard"
+      : user.role === "MANAGER" ? "/warehouse/dashboard"
+      : user.role === "SHOWROOM_STAFF" ? "/showroom-staff/dashboard"
+      : user.role === "SHOWROOM_INCHARGE" ? "/showroom-incharge/dashboard"
+      : "/viewer/dashboard";
+
+    return { redirectTo };
   });
-
-  if (!user) {
-    throw new Error("Email or password is incorrect.");
-  }
-
-  if (user.status === "DEACTIVATED" || user.status === "INACTIVE") {
-    throw new Error("Your account is currently inactive.");
-  }
-
-  if (user.status === "SUSPENDED") {
-    throw new Error("Your account is currently suspended.");
-  }
-
-  const matches = await comparePassword(password, user.password);
-  if (!matches) {
-    throw new Error("Email or password is incorrect.");
-  }
-
-  // Create JWT session
-  await createSession({
-    userId: user.id,
-    email: user.email,
-    name: user.name,
-    role: user.role,
-    dealerId: user.dealer_id || undefined,
-    warehouseId: user.warehouse_id || undefined,
-  });
-
-  // Update last login
-  await db.user.update({
-    where: { id: user.id },
-    data: { lastLogin: new Date() },
-  });
-
-  // Log to Audit Log
-  await db.auditLog.create({
-    data: {
-      action: "LOGIN",
-      entity: "User",
-      entityId: user.id,
-      meta: { performedBy: user.name, details: "User signed in successfully." },
-    },
-  });
-
-  // Return destination URL
-  if (user.role === "SUPER_ADMIN") return "/admin/dashboard";
-  if (user.role === "MANAGER") return "/warehouse/dashboard";
-  if (user.role === "SHOWROOM_STAFF") return "/showroom-staff/dashboard";
-  if (user.role === "SHOWROOM_INCHARGE") return "/showroom-incharge/dashboard";
-  return "/viewer/dashboard"; // WEAVER (read-only) lands on the viewer dashboard
 }
 
 export async function signOutAction() {
@@ -520,6 +817,8 @@ export async function signOutAction() {
         action: "LOGOUT",
         entity: "User",
         entityId: session.userId,
+        userId: session.userId,
+        roleAtTime: session.role,
         meta: { performedBy: session.name, details: "User logged out." },
       },
     });
@@ -528,202 +827,223 @@ export async function signOutAction() {
   await destroySession();
 }
 
-export async function setSimulatedSessionAction(role: any, dealerId?: string, warehouseId?: string, showroomId?: string) {
-  const session = await getSession();
-  // Safe Preview Mode: Only Super Admin can change their preview/simulated role
-  if (!session || session.role !== "SUPER_ADMIN") {
-    throw new Error("Unauthorized: Role switching is Super Admin only.");
-  }
+export async function setSimulatedSessionAction(
+  role: any,
+  dealerId?: string,
+  warehouseId?: string,
+  showroomId?: string
+): Promise<ActionResult<undefined>> {
+  return runAction(async () => {
+    const session = await getSession();
+    if (!session || session.role !== "SUPER_ADMIN") {
+      throw new AppError("Role switching is Super Admin only.", 403, "FORBIDDEN");
+    }
+    if (role !== "SUPER_ADMIN" && !isRole(role)) {
+      throw new AppError("Unknown role.", 400, "VALIDATION");
+    }
 
-  await updateSessionPreview(role === "SUPER_ADMIN" ? undefined : role);
-  
-  const cookieStore = await cookies();
-  if (dealerId) {
-    cookieStore.set("prestige_dealer_id", dealerId, { path: "/" });
-  } else {
-    cookieStore.delete("prestige_dealer_id");
-  }
-  if (warehouseId) {
-    cookieStore.set("prestige_warehouse_id", warehouseId, { path: "/" });
-  } else {
-    cookieStore.delete("prestige_warehouse_id");
-  }
-  if (showroomId) {
-    cookieStore.set("prestige_showroom_id", showroomId, { path: "/" });
-  } else {
-    cookieStore.delete("prestige_showroom_id");
-  }
+    await updateSessionPreview(role === "SUPER_ADMIN" ? undefined : role);
 
-  revalidatePath("/", "layout");
+    const cookieStore = await cookies();
+    for (const [name, value] of [
+      ["prestige_dealer_id", dealerId],
+      ["prestige_warehouse_id", warehouseId],
+      ["prestige_showroom_id", showroomId],
+    ] as const) {
+      if (value) cookieStore.set(name, value, { path: "/" });
+      else cookieStore.delete(name);
+    }
+
+    revalidatePath("/", "layout");
+    return undefined;
+  });
 }
 
-export async function createUserAction(payload: any) {
-  const session = await getSession();
-  if (!session || session.role !== "SUPER_ADMIN") {
-    throw new Error("Unauthorized: User management is restricted to Super Admin.");
+// ————————————————————————————————————————————————
+// User management (Super Admin only)
+// ————————————————————————————————————————————————
+
+async function requireSuperAdmin(what: string) {
+  const user = await requireUser();
+  if (user.actualRole !== "SUPER_ADMIN") {
+    throw new AppError(`Unauthorized: ${what} is restricted to Super Admin.`, 403, "FORBIDDEN");
   }
+  return user;
+}
 
-  const { name, email, password, role, dealer_id, warehouse_id, showroom_id, status } = payload;
-
-  if (!name || !email || !password || !role) {
-    throw new Error("Missing required fields.");
-  }
-
-  // Only the five Phase 1 roles may ever be assigned (spec §25).
+function validateRoleAssignment(role: string, warehouse_id?: string, showroom_id?: string) {
   if (!isRole(role)) {
-    throw new Error(`Invalid role "${role}". Allowed roles: ${ROLES.join(", ")}.`);
+    throw new AppError(`Invalid role "${role}". Allowed roles: ${ROLES.join(", ")}.`, 400, "VALIDATION");
   }
   if (role === "MANAGER" && !warehouse_id) {
-    throw new Error("Role MANAGER requires assigning a warehouse.");
+    throw new AppError("A Manager must be assigned a warehouse.", 400, "VALIDATION");
   }
   if ((role === "SHOWROOM_STAFF" || role === "SHOWROOM_INCHARGE") && !showroom_id) {
-    throw new Error("Role showroom staff/in-charge requires assigning a showroom.");
+    throw new AppError(
+      "Showroom staff and in-charges must be assigned a showroom, or their blocks and approval queues will be empty.",
+      400,
+      "VALIDATION"
+    );
   }
+}
 
-  const existingUser = await db.user.findUnique({
-    where: { email: email.toLowerCase().trim() },
+export async function createUserAction(payload: any): Promise<ActionResult<{ id: string }>> {
+  return runAction(async () => {
+    const admin = await requireSuperAdmin("user management");
+    const { name, email, password, role, warehouse_id, showroom_id, status } = payload;
+
+    if (!name || !email || !password || !role) {
+      throw new AppError("Name, email, password and role are all required.", 400, "VALIDATION");
+    }
+    if (String(password).length < 8) {
+      throw new AppError("Password must be at least 8 characters.", 400, "VALIDATION");
+    }
+    validateRoleAssignment(role, warehouse_id, showroom_id);
+
+    const normalisedEmail = String(email).toLowerCase().trim();
+    if (await db.user.findUnique({ where: { email: normalisedEmail } })) {
+      throw new AppError("That email address is already registered.", 409, "DUPLICATE");
+    }
+
+    const newUser = await db.user.create({
+      data: {
+        name,
+        email: normalisedEmail,
+        password: await hashPassword(password),
+        role,
+        dealer_id: null, // the DEALER login role was retired in Phase 1
+        warehouse_id: role === "MANAGER" ? warehouse_id : null,
+        showroomId: role === "SHOWROOM_STAFF" || role === "SHOWROOM_INCHARGE" ? showroom_id : null,
+        status: status || "ACTIVE",
+      },
+    });
+
+    await db.auditLog.create({
+      data: {
+        action: "USER_CREATE",
+        entity: "User",
+        entityId: newUser.id,
+        userId: admin.userId,
+        roleAtTime: admin.actualRole,
+        meta: { performedBy: admin.name, details: `Created user ${newUser.name} with role ${newUser.role}.` },
+      },
+    });
+
+    revalidatePath("/admin/users");
+    return { id: newUser.id };
   });
+}
 
-  if (existingUser) {
-    throw new Error("Email address already registered.");
-  }
+export async function updateUserAction(userId: string, payload: any): Promise<ActionResult<{ id: string }>> {
+  return runAction(async () => {
+    const admin = await requireSuperAdmin("user management");
+    const { name, email, password, role, warehouse_id, showroom_id, status } = payload;
 
-  const hashedPassword = await hashPassword(password);
+    validateRoleAssignment(role, warehouse_id, showroom_id);
+    if (password && String(password).length < 8) {
+      throw new AppError("Password must be at least 8 characters.", 400, "VALIDATION");
+    }
 
-  const newUser = await db.user.create({
-    data: {
+    const updateData: any = {
       name,
-      email: email.toLowerCase().trim(),
-      password: hashedPassword,
+      email: email?.toLowerCase().trim(),
       role,
-      dealer_id: null, // DEALER role retired in Phase 1
+      dealer_id: null,
       warehouse_id: role === "MANAGER" ? warehouse_id : null,
-      showroomId: (role === "SHOWROOM_STAFF" || role === "SHOWROOM_INCHARGE") ? showroom_id : null,
-      status: status || "ACTIVE",
-    },
-  });
+      showroomId: role === "SHOWROOM_STAFF" || role === "SHOWROOM_INCHARGE" ? showroom_id : null,
+      status,
+    };
+    if (password) updateData.password = await hashPassword(password);
 
-  await db.auditLog.create({
-    data: {
-      action: "USER_CREATE",
-      entity: "User",
-      entityId: newUser.id,
-      meta: { performedBy: session.name, details: `Created user ${newUser.name} with role ${newUser.role}.` },
-    },
-  });
+    const updatedUser = await db.user.update({ where: { id: userId }, data: updateData });
 
-  revalidatePath("/admin/users");
-  return newUser;
+    await db.auditLog.create({
+      data: {
+        action: "USER_UPDATE",
+        entity: "User",
+        entityId: updatedUser.id,
+        userId: admin.userId,
+        roleAtTime: admin.actualRole,
+        meta: { performedBy: admin.name, details: `Updated ${updatedUser.name}.` },
+      },
+    });
+
+    revalidatePath("/admin/users");
+    return { id: updatedUser.id };
+  });
 }
 
-export async function updateUserAction(userId: string, payload: any) {
-  const session = await getSession();
-  if (!session || session.role !== "SUPER_ADMIN") {
-    throw new Error("Unauthorized: User management is restricted to Super Admin.");
-  }
+export async function deactivateUserAction(
+  userId: string,
+  status: "DEACTIVATED" | "SUSPENDED" | "ACTIVE"
+): Promise<ActionResult<{ id: string }>> {
+  return runAction(async () => {
+    const admin = await requireSuperAdmin("user management");
+    if (userId === admin.userId && status !== "ACTIVE") {
+      throw new AppError("You cannot deactivate your own account.", 400, "VALIDATION");
+    }
 
-  const { name, email, password, role, dealer_id, warehouse_id, showroom_id, status } = payload;
+    const updatedUser = await db.user.update({ where: { id: userId }, data: { status } });
 
-  // Only the five Phase 1 roles may ever be assigned (spec §25).
-  if (!isRole(role)) {
-    throw new Error(`Invalid role "${role}". Allowed roles: ${ROLES.join(", ")}.`);
-  }
-  if (role === "MANAGER" && !warehouse_id) {
-    throw new Error("Role MANAGER requires assigning a warehouse.");
-  }
-  if ((role === "SHOWROOM_STAFF" || role === "SHOWROOM_INCHARGE") && !showroom_id) {
-    throw new Error("Role showroom staff/in-charge requires assigning a showroom.");
-  }
+    await db.auditLog.create({
+      data: {
+        action: `USER_STATUS_${status}`,
+        entity: "User",
+        entityId: updatedUser.id,
+        userId: admin.userId,
+        roleAtTime: admin.actualRole,
+        meta: { performedBy: admin.name, details: `Set ${updatedUser.name} to ${status}.` },
+      },
+    });
 
-  const updateData: any = {
-    name,
-    email: email?.toLowerCase().trim(),
-    role,
-    dealer_id: null, // DEALER role retired in Phase 1
-    warehouse_id: role === "MANAGER" ? warehouse_id : null,
-    showroomId: (role === "SHOWROOM_STAFF" || role === "SHOWROOM_INCHARGE") ? showroom_id : null,
-    status,
-  };
-
-  if (password) {
-    updateData.password = await hashPassword(password);
-  }
-
-  const updatedUser = await db.user.update({
-    where: { id: userId },
-    data: updateData,
+    revalidatePath("/admin/users");
+    return { id: updatedUser.id };
   });
-
-  await db.auditLog.create({
-    data: {
-      action: "USER_UPDATE",
-      entity: "User",
-      entityId: updatedUser.id,
-      meta: { performedBy: session.name, details: `Updated user ${updatedUser.name} config.` },
-    },
-  });
-
-  revalidatePath("/admin/users");
-  return updatedUser;
 }
 
-export async function deactivateUserAction(userId: string, status: "DEACTIVATED" | "SUSPENDED" | "ACTIVE") {
-  const session = await getSession();
-  if (!session || session.role !== "SUPER_ADMIN") {
-    throw new Error("Unauthorized: User management is restricted to Super Admin.");
-  }
-
-  const updatedUser = await db.user.update({
-    where: { id: userId },
-    data: { status },
-  });
-
-  await db.auditLog.create({
-    data: {
-      action: `USER_STATUS_${status}`,
-      entity: "User",
-      entityId: updatedUser.id,
-      meta: { performedBy: session.name, details: `Updated user ${updatedUser.name} status to ${status}.` },
-    },
-  });
-
-  revalidatePath("/admin/users");
-  return updatedUser;
-}
+// ————————————————————————————————————————————————
+// Notifications
+// ————————————————————————————————————————————————
 
 export async function getNotificationsAction(limit = 20) {
   const { getNotifications } = await import("@/services/NotificationService");
   const session = await getEffectiveSession();
   if (!session) return [];
-  return await getNotifications(session.userId, limit);
+  return getNotifications(session.userId, limit);
 }
 
 export async function getUnreadCountAction() {
   const { getUnreadCount } = await import("@/services/NotificationService");
   const session = await getEffectiveSession();
   if (!session) return 0;
-  return await getUnreadCount(session.userId);
+  return getUnreadCount(session.userId);
 }
 
-export async function markNotificationAsReadAction(id: string) {
-  const { markNotificationAsRead } = await import("@/services/NotificationService");
-  const session = await getEffectiveSession();
-  if (!session) throw new Error("Unauthorized.");
-  return await markNotificationAsRead(session.userId, id);
+export async function markNotificationAsReadAction(id: string): Promise<ActionResult<undefined>> {
+  return runAction(async () => {
+    const { markNotificationAsRead } = await import("@/services/NotificationService");
+    const user = await requireUser();
+    await markNotificationAsRead(user.userId, id);
+    return undefined;
+  });
 }
 
-export async function markAllNotificationsAsReadAction() {
-  const { markAllNotificationsAsRead } = await import("@/services/NotificationService");
-  const session = await getEffectiveSession();
-  if (!session) throw new Error("Unauthorized.");
-  await markAllNotificationsAsRead(session.userId);
+export async function markAllNotificationsAsReadAction(): Promise<ActionResult<undefined>> {
+  return runAction(async () => {
+    const { markAllNotificationsAsRead } = await import("@/services/NotificationService");
+    const user = await requireUser();
+    await markAllNotificationsAsRead(user.userId);
+    return undefined;
+  });
 }
 
-export async function deleteNotificationAction(id: string) {
-  const { deleteNotification } = await import("@/services/NotificationService");
-  const session = await getEffectiveSession();
-  if (!session) throw new Error("Unauthorized.");
-  await deleteNotification(session.userId, id);
+export async function deleteNotificationAction(id: string): Promise<ActionResult<undefined>> {
+  return runAction(async () => {
+    const { deleteNotification } = await import("@/services/NotificationService");
+    const user = await requireUser();
+    await deleteNotification(user.userId, id);
+    return undefined;
+  });
 }
 
 export async function broadcastAnnouncementAction(payload: {
@@ -732,56 +1052,57 @@ export async function broadcastAnnouncementAction(payload: {
   priority: "LOW" | "NORMAL" | "HIGH" | "URGENT";
   audienceType: string;
   audienceFilter?: string | null;
-  /** ISO strings from the composer; empty/absent means send now / never expire. */
   scheduledAt?: string | null;
   expiresAt?: string | null;
-}) {
-  const { createAnnouncement } = await import("@/services/NotificationService");
-  const session = await getEffectiveSession();
-  if (!session || (session.role !== "SUPER_ADMIN" && session.role !== "MANAGER")) {
-    throw new Error("Unauthorized: Only Super Admin and Managers can broadcast announcements.");
-  }
+}): Promise<ActionResult<any>> {
+  return runAction(async () => {
+    const { createAnnouncement } = await import("@/services/NotificationService");
+    const user = await requireUser();
+    if (user.role !== "SUPER_ADMIN" && user.role !== "MANAGER") {
+      throw new AppError("Only Super Admin and Managers can broadcast announcements.", 403, "FORBIDDEN");
+    }
 
-  const { scheduledAt, expiresAt, ...rest } = payload;
-  const scheduled = scheduledAt ? new Date(scheduledAt) : null;
-  const expires = expiresAt ? new Date(expiresAt) : null;
+    if (!payload.title?.trim() || !payload.message?.trim()) {
+      throw new AppError("A title and message are required.", 400, "VALIDATION");
+    }
 
-  if (scheduled && Number.isNaN(scheduled.getTime())) throw new Error("Invalid schedule date.");
-  if (expires && Number.isNaN(expires.getTime())) throw new Error("Invalid expiry date.");
-  if (scheduled && expires && expires <= scheduled) {
-    throw new Error("Expiry must be after the scheduled send time.");
-  }
+    const { scheduledAt, expiresAt, ...rest } = payload;
+    const scheduled = scheduledAt ? new Date(scheduledAt) : null;
+    const expires = expiresAt ? new Date(expiresAt) : null;
 
-  const result = await createAnnouncement({
-    createdById: session.userId,
-    ...rest,
-    scheduledAt: scheduled,
-    expiresAt: expires,
+    if (scheduled && Number.isNaN(scheduled.getTime())) {
+      throw new AppError("Invalid schedule date.", 400, "VALIDATION");
+    }
+    if (expires && Number.isNaN(expires.getTime())) {
+      throw new AppError("Invalid expiry date.", 400, "VALIDATION");
+    }
+    if (scheduled && expires && expires <= scheduled) {
+      throw new AppError("Expiry must be after the scheduled send time.", 400, "VALIDATION");
+    }
+
+    const result = await createAnnouncement({
+      createdById: user.userId,
+      ...rest,
+      scheduledAt: scheduled,
+      expiresAt: expires,
+    });
+
+    revalidatePath("/admin/announcements");
+    revalidatePath("/warehouse/announcements");
+    return result;
   });
-  revalidatePath("/admin/announcements");
-  revalidatePath("/warehouse/announcements");
-  return result;
 }
 
 export async function getAnnouncementsHistoryAction(limit = 20) {
   const { getAnnouncementsHistory } = await import("@/services/NotificationService");
   const session = await getEffectiveSession();
-  if (!session || (session.role !== "SUPER_ADMIN" && session.role !== "MANAGER")) {
-    return [];
-  }
-  return await getAnnouncementsHistory(limit);
+  if (!session || (session.role !== "SUPER_ADMIN" && session.role !== "MANAGER")) return [];
+  return getAnnouncementsHistory(limit);
 }
 
-
-// ————— Dealer management (Phase 2) — Super Admin only —————
-
-/** Guard shared by every dealer mutation. */
-async function requireSuperAdmin(what: string) {
-  const session = await getEffectiveSession();
-  if (!session) throw new Error("Unauthorized: Please sign in.");
-  assertPermission(canManageDealers(session.role as Role), `Unauthorized: ${what} is restricted to Super Admin.`);
-  return session;
-}
+// ————————————————————————————————————————————————
+// Dealer management — Super Admin only
+// ————————————————————————————————————————————————
 
 export async function createDealerAction(payload: {
   name: string;
@@ -793,123 +1114,70 @@ export async function createDealerAction(payload: {
   company?: string;
   showroomId?: string;
   status?: "ACTIVE" | "INACTIVE";
-}) {
-  const session = await requireSuperAdmin("dealer management");
-  const { createDealer } = await import("@/services/DealerService");
+}): Promise<ActionResult<{ id: string; dealerId: string | null }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    assertPermission(canManageDealers(user.role), "Dealer management is restricted to Super Admin.");
+    const { createDealer } = await import("@/services/DealerService");
 
-  const dealer = await createDealer({
-    ...payload,
-    createdById: session.userId,
-    createdByName: session.name,
+    const dealer = await createDealer({
+      ...payload,
+      createdById: user.userId,
+      createdByName: user.name,
+    });
+
+    revalidatePath("/admin/dealers");
+    revalidatePath("/dealers");
+    return { id: dealer.id, dealerId: dealer.dealerId };
   });
-
-  revalidatePath("/admin/dealers");
-  revalidatePath("/dealers");
-  return { id: dealer.id, dealerId: dealer.dealerId };
 }
 
-export async function updateDealerAction(id: string, payload: {
-  name?: string;
-  contact?: string;
-  phone?: string;
-  email?: string;
-  address?: string;
-  company?: string;
-  showroomId?: string;
-  status?: "ACTIVE" | "INACTIVE";
-}) {
-  const session = await requireSuperAdmin("dealer management");
-  const { updateDealer } = await import("@/services/DealerService");
+export async function updateDealerAction(
+  id: string,
+  payload: {
+    name?: string;
+    contact?: string;
+    phone?: string;
+    email?: string;
+    address?: string;
+    company?: string;
+    showroomId?: string;
+    status?: "ACTIVE" | "INACTIVE";
+  }
+): Promise<ActionResult<undefined>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    assertPermission(canManageDealers(user.role), "Dealer management is restricted to Super Admin.");
+    const { updateDealer } = await import("@/services/DealerService");
 
-  await updateDealer({ ...payload, id, updatedById: session.userId, updatedByName: session.name });
+    await updateDealer({ ...payload, id, updatedById: user.userId, updatedByName: user.name });
 
-  revalidatePath("/admin/dealers");
-  revalidatePath("/dealers");
+    revalidatePath("/admin/dealers");
+    revalidatePath("/dealers");
+    return undefined;
+  });
 }
 
-export async function setDealerStatusAction(id: string, status: "ACTIVE" | "INACTIVE") {
-  const session = await requireSuperAdmin("dealer management");
-  const { setDealerStatus } = await import("@/services/DealerService");
+export async function setDealerStatusAction(
+  id: string,
+  status: "ACTIVE" | "INACTIVE"
+): Promise<ActionResult<undefined>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    assertPermission(canManageDealers(user.role), "Dealer management is restricted to Super Admin.");
+    const { setDealerStatus } = await import("@/services/DealerService");
 
-  await setDealerStatus({ id, status, performedById: session.userId, performedByName: session.name });
+    await setDealerStatus({ id, status, performedById: user.userId, performedByName: user.name });
 
-  revalidatePath("/admin/dealers");
-  revalidatePath("/dealers");
+    revalidatePath("/admin/dealers");
+    revalidatePath("/dealers");
+    return undefined;
+  });
 }
 
 export async function getDealerDetailAction(id: string) {
-  await requireSuperAdmin("dealer management");
+  const session = await getEffectiveSession();
+  if (!session || session.role !== "SUPER_ADMIN") return null;
   const { getDealerDetail } = await import("@/services/DealerService");
   return getDealerDetail(id);
-}
-
-// ————— Block creation support (booking flow) —————
-
-/** Server-side product search for the block form's picker (spec §7, §38). */
-export async function searchBlockableProductsAction(query: string) {
-  const session = await getEffectiveSession();
-  if (!session) throw new Error("Unauthorized: Please sign in.");
-  const { searchBlockableProducts } = await import("@/services/InventoryService");
-  return searchBlockableProducts({ query, limit: 10 });
-}
-
-/** Live blockable quantity for one product, straight from the database. */
-export async function getAvailableToBlockAction(productId: string) {
-  const session = await getEffectiveSession();
-  if (!session) throw new Error("Unauthorized: Please sign in.");
-  const { getAvailableToBlock } = await import("@/services/InventoryService");
-  return getAvailableToBlock(productId);
-}
-
-/**
- * Creates a block from the booking form.
- *
- * Returns the created block so the UI can navigate to its detail page.
- * Scope (showroom) is taken from the session, never from the client (spec §36).
- */
-export async function createBlockFromFormAction(input: {
-  productId: string;
-  quantity: number;
-  dealerId?: string;
-  remarks?: string;
-  durationHours?: number;
-}) {
-  const session = await getEffectiveSession();
-  if (!session) throw new Error("Unauthorized: Please sign in.");
-  assertPermission(canCreateBlock(session.role as Role), "Your role cannot create stock blocks.");
-
-  if (!input.productId) throw new Error("Please select a product.");
-  if (!Number.isFinite(input.quantity) || input.quantity <= 0) {
-    throw new Error("Block quantity must be greater than zero.");
-  }
-
-  // Showroom users are pinned to their own showroom; managers/admins may act
-  // without one. A client-supplied showroomId is deliberately ignored.
-  const showroomId =
-    session.role === "SHOWROOM_STAFF" || session.role === "SHOWROOM_INCHARGE"
-      ? session.showroomId || undefined
-      : undefined;
-
-  const block = await createBlockRequest({
-    productId: input.productId,
-    quantity: input.quantity,
-    dealerId: input.dealerId || undefined,
-    showroomId,
-    remarks: input.remarks,
-    durationHours: input.durationHours ?? 48,
-    requestedBy: session.name,
-    createdById: session.userId,
-    userRole: session.role,
-  });
-
-  revalidatePath("/blocks");
-  revalidatePath("/inventory");
-  revalidatePath("/dashboard");
-
-  return {
-    id: block.id,
-    blockNumber: block.block_number,
-    status: block.status,
-    quantity: block.quantity,
-  };
 }

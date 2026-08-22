@@ -50,7 +50,7 @@ export function DashboardClient({
   dealerSummary,
   session 
 }: Props) {
-  const isDealer = session.role === "DEALER";
+  const isDealer = false; // the DEALER login role was retired in Phase 1
 
   const getOperationalAlerts = () => {
     const alerts = [];
@@ -58,7 +58,7 @@ export function DashboardClient({
       alerts.push({
         id: "alert-blocks",
         type: "PENDING",
-        label: `${summary.pendingBlocks} dealer bookings waiting for approval`,
+        label: `${summary.pendingBlocks} block request(s) waiting for approval`,
         actionText: "Review",
         actionUrl: "/bookings",
       });
@@ -76,7 +76,7 @@ export function DashboardClient({
       alerts.push({
         id: "alert-pending-block",
         type: "URGENT",
-        label: `${pendingBlocks.length} dealer block requests awaiting review`,
+        label: `${pendingBlocks.length} block request(s) awaiting review`,
         actionText: "Review Blocks",
         actionUrl: "/blocks",
       });
@@ -365,19 +365,30 @@ export function DashboardClient({
             ) : (
               pendingBlocks.map((block) => (
                 <div key={block.id} className="rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] p-3 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs font-bold text-[#111111]">{block.dealer?.name || "Dealer Request"}</p>
-                    <span className="rounded bg-amber-100 border border-amber-200 px-2 py-0.5 text-[9px] font-bold text-amber-800">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="min-w-0 truncate text-xs font-bold text-[#111111]">{block.dealer?.name || "Internal Hold"}</p>
+                    <span className="shrink-0 rounded bg-amber-100 border border-amber-200 px-2 py-0.5 text-[9px] font-bold text-amber-800">
                       {block.quantity} Boxes
                     </span>
                   </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {block.blockNumber && (
+                      <span className="rounded bg-white border border-[#EAEAEA] px-1.5 py-0.5 font-mono text-[9px] text-[#6B6B6B]">
+                        {block.blockNumber}
+                      </span>
+                    )}
+                    {/* Which desk it is sitting on — In-Charge or Manager. */}
+                    <span className="rounded bg-white border border-[#EAEAEA] px-1.5 py-0.5 text-[9px] font-bold text-[#6B6B6B]">
+                      {block.status === "PENDING_INCHARGE_APPROVAL" ? "Awaiting In-Charge" : "Awaiting Manager"}
+                    </span>
+                  </div>
                   <p className="text-[10px] text-[#6B6B6B]">
-                    Requested by: <strong>{block.blocked_by ? (block.blocked_by === "SAMSHUDIN" ? "Samshudin" : "Salman") : block.requestedBy}</strong>
+                    Requested by: <strong>{block.requestedBy}</strong>
                   </p>
                   {block.remarks && <p className="text-[10px] text-[#6B6B6B] italic">"{block.remarks}"</p>}
                   <Link
-                    href="/blocks"
-                    className="block w-full rounded bg-white text-center text-[10px] font-black text-[#111111] py-1.5 hover:bg-[#F7F7F5] border border-[#EAEAEA]"
+                    href={`/blocks/${block.id}`}
+                    className="flex min-h-[36px] w-full items-center justify-center rounded bg-white text-center text-[10px] font-black text-[#111111] hover:bg-[#F7F7F5] border border-[#EAEAEA]"
                   >
                     Review Hold Request
                   </Link>

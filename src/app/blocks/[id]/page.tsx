@@ -45,7 +45,7 @@ export default async function BlockDetailPage({
   // Scope comes from the session, never from the URL (spec §36).
   const role = session.role as Role;
   const scoped = role === "SHOWROOM_STAFF" || role === "SHOWROOM_INCHARGE";
-  if (scoped && block.showroomId && block.showroomId !== session.showroomId) {
+  if (scoped && block.showroomId !== (session.showroomId ?? null)) {
     return (
       <div className="mx-auto max-w-lg rounded-2xl border border-rose-200 bg-rose-50 p-6 text-center">
         <h1 className="text-sm font-black uppercase text-rose-800">Not permitted</h1>
@@ -77,10 +77,16 @@ export default async function BlockDetailPage({
       </Link>
 
       <BlockDetailClient
-        session={{ userId: session.userId, name: session.name, role: session.role }}
+        session={{
+          userId: session.userId,
+          name: session.name,
+          role: session.role,
+          showroomId: session.showroomId ?? null,
+        }}
         block={{
           id: block.id,
           blockNumber: block.block_number,
+          showroomId: block.showroomId,
           status: block.status,
           quantity: block.quantity,
           shippedQuantity: block.shippedQuantity,

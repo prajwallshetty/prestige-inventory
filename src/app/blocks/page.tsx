@@ -1,9 +1,12 @@
-import { db } from "@/lib/db";
-import { BlocksClientList } from "@/components/blocks/BlocksClientList";
+import { redirect } from "next/navigation";
 import { getSessionContext } from "@/lib/session";
-import Link from "next/link";
+import { getBlockList } from "@/services/BlockQueryService";
+import { BlocksClientList } from "@/components/blocks/BlocksClientList";
+import { db } from "@/lib/db";
 
 export const revalidate = 0;
+
+const first = (v: string | string[] | undefined) => (typeof v === "string" ? v : undefined);
 
 export default async function BlocksPage({
   searchParams,
@@ -11,93 +14,57 @@ export default async function BlocksPage({
   searchParams?: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
   const session = await getSessionContext();
+  if (!session.authenticated) redirect("/login");
+
   const params = (await searchParams) || {};
-  const statusFilter = typeof params.status === "string" ? params.status : "";
 
-  const whereCondition: any = {};
-  if (statusFilter === "EXPIRING") {
-    const next24h = new Date();
-    next24h.setHours(next24h.getHours() + 24);
-    whereCondition.status = "APPROVED";
-    whereCondition.expiresAt = { lte: next24h };
-  } else if (statusFilter) {
-    whereCondition.status = statusFilter;
-  }
+  const filters = {
+    status: first(params.status) || "",
+    search: first(params.search) || "",
+    dealerId: first(params.dealerId) || "",
+    showroomId: first(params.showroomId) || "",
+    from: first(params.from) || "",
+    to: first(params.to) || "",
+    sort: first(params.sort) || "newest",
+    page: Math.max(1, parseInt(first(params.page) || "1", 10) || 1),
+    limit: Math.min(100, Math.max(10, parseInt(first(params.limit) || "20", 10) || 20)),
+  };
 
-  // Enforce server-side security scoping based on Role
-  if (session.role === "DEALER") {
-    whereCondition.dealerId = session.dealerId || "non-existent-id";
-  } else if (session.role === "SHOWROOM_STAFF" || session.role === "SHOWROOM_INCHARGE") {
-    whereCondition.showroomId = session.showroomId || "non-existent-id";
-  } else if (session.role === "MANAGER") {
-    if (session.warehouseId) {
-      whereCondition.warehouseId = session.warehouseId;
-    }
-  }
-
-  const blocks = await db.stockBlock.findMany({
-    where: whereCondition,
-    include: {
-      dealer: { select: { id: true, name: true, company: true } },
-      showroom: { select: { id: true, name: true } },
-      inventory: {
-        include: {
-          product: { select: { id: true, name: true, sku: true, productCode: true, brand: { select: { name: true } }, size: true, lifestyleImage: true } },
-        },
-      },
-    },
-    orderBy: { createdAt: "desc" },
-  });
+  // Everything — filtering, searching, sorting, paging and scoping — is done
+  // in the database. The page previously fetched every block in the system.
+  const [result, dealers, showrooms] = await Promise.all([
+    getBlockList(filters, {
+      role: session.role,
+      userId: session.userId,
+      showroomId: session.showroomId,
+      warehouseId: session.warehouseId,
+    }),
+    db.dealer.findMany({
+      where: { status: "ACTIVE" },
+      select: { id: true, name: true, dealerId: true },
+      orderBy: { name: "asc" },
+    }),
+    session.role === "SUPER_ADMIN" || session.role === "MANAGER"
+      ? db.showroom.findMany({
+          where: { deletedAt: null },
+          select: { id: true, name: true },
+          orderBy: { name: "asc" },
+        })
+      : Promise.resolve([]),
+  ]);
 
   return (
-    <>
-      <div className="space-y-6">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-white">Dealer Stock Reservations & Blocks</h1>
-            <p className="text-xs text-slate-400">
-              Manage stock hold requests, approve dealer reservations, and monitor automated expiration timers.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2 rounded-lg bg-slate-900 p-1 border border-slate-800 text-xs">
-            <Link
-              href="/blocks"
-              className={`rounded-md px-3 py-1.5 font-medium transition-all ${
-                !statusFilter ? "bg-blue-600 text-white" : "text-slate-400 hover:text-white"
-              }`}
-            >
-              All Blocks
-            </Link>
-            <Link
-              href="/blocks?status=PENDING"
-              className={`rounded-md px-3 py-1.5 font-medium transition-all ${
-                statusFilter === "PENDING" ? "bg-blue-600 text-white" : "text-slate-400 hover:text-white"
-              }`}
-            >
-              Pending
-            </Link>
-            <Link
-              href="/blocks?status=APPROVED"
-              className={`rounded-md px-3 py-1.5 font-medium transition-all ${
-                statusFilter === "APPROVED" ? "bg-blue-600 text-white" : "text-slate-400 hover:text-white"
-              }`}
-            >
-              Active
-            </Link>
-            <Link
-              href="/blocks?status=EXPIRING"
-              className={`rounded-md px-3 py-1.5 font-medium transition-all ${
-                statusFilter === "EXPIRING" ? "bg-amber-600 text-white" : "text-slate-400 hover:text-white"
-              }`}
-            >
-              Expiring Soon
-            </Link>
-          </div>
-        </div>
-
-        <BlocksClientList blocks={blocks} session={session} />
-      </div>
-    </>
+    <BlocksClientList
+      result={result}
+      filters={filters}
+      dealers={dealers}
+      showrooms={showrooms}
+      session={{
+        role: session.role,
+        userId: session.userId ?? null,
+        showroomId: session.showroomId ?? null,
+        name: session.name ?? "",
+      }}
+    />
   );
 }

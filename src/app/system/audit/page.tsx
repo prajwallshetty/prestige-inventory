@@ -1,8 +1,15 @@
+import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
+import { getSessionContext } from "@/lib/session";
+import { canViewAuditLogs, type Role } from "@/lib/permissions";
 
 export const revalidate = 0;
 
 export default async function AuditLogPage() {
+  const session = await getSessionContext();
+  if (!session.authenticated) redirect("/login");
+  if (!canViewAuditLogs(session.role as Role)) redirect("/dashboard");
+
   const auditMovements = await db.inventoryMovement.findMany({
     take: 50,
     orderBy: { createdAt: "desc" },
@@ -25,8 +32,9 @@ export default async function AuditLogPage() {
           </p>
         </div>
 
-        <div className="overflow-hidden rounded-xl border border-[#EAEAEA] bg-white shadow-xs">
-          <table className="w-full text-left text-xs">
+        {/* Scrolls within its own container so the page body never does (§26). */}
+        <div className="overflow-x-auto rounded-xl border border-[#EAEAEA] bg-white shadow-xs">
+          <table className="w-full min-w-[720px] text-left text-xs">
             <thead className="border-b border-[#EAEAEA] bg-[#F7F7F5] text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
               <tr>
                 <th className="px-4 py-3.5">Timestamp</th>

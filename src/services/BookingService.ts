@@ -1,5 +1,48 @@
-import { db } from "../lib/db";
+import { db, STOCK_TX_OPTIONS } from "../lib/db";
 import { Decimal } from "@prisma/client/runtime/library";
+
+/**
+ * Locks an inventory row for the rest of the transaction and returns its
+ * post-lock values.
+ *
+ * Every stock write below used to read `item.product.inventory` — a snapshot
+ * loaded before the transaction — and then write absolute values back. A block
+ * mutation committing in between was silently overwritten (a classic lost
+ * update). Mirrors the locking StockBlockService uses so the two modules
+ * serialise against each other on the same row.
+ */
+async function lockInventory(tx: any, inventoryId: string) {
+  const rows = (await tx.$queryRawUnsafe(
+    `SELECT id, "totalStock", "availableStock", "blockedStock", "allocatedStock",
+            "reservedStock", "damagedStock", "transitStock"
+       FROM "Inventory" WHERE id = $1 FOR UPDATE`,
+    inventoryId
+  )) as Array<{
+    id: string;
+    totalStock: number;
+    availableStock: number;
+    blockedStock: number;
+    allocatedStock: number;
+    reservedStock: number;
+    damagedStock: number;
+    transitStock: number;
+  }>;
+  return rows[0] ?? null;
+}
+
+/** available = physical − blocked − allocated − damaged − reserved (spec §6). */
+function availableFrom(inv: {
+  totalStock: number;
+  blockedStock: number;
+  allocatedStock: number;
+  damagedStock: number;
+  reservedStock: number;
+}): number {
+  return Math.max(
+    0,
+    inv.totalStock - inv.blockedStock - inv.allocatedStock - inv.damagedStock - inv.reservedStock
+  );
+}
 
 export interface CreateBookingInput {
   dealerId: string;
@@ -84,7 +127,7 @@ export async function createBooking(input: CreateBookingInput) {
     });
 
     return booking;
-  });
+  }, STOCK_TX_OPTIONS);
 }
 
 export async function reviewBooking({
@@ -282,7 +325,7 @@ export async function reviewBooking({
     });
 
     return updatedBooking;
-  });
+  }, STOCK_TX_OPTIONS);
 }
 
 export async function confirmBooking({
@@ -325,7 +368,7 @@ export async function confirmBooking({
     });
 
     return updated;
-  });
+  }, STOCK_TX_OPTIONS);
 }
 
 export async function requestBookingExtension({
@@ -404,7 +447,7 @@ export async function reviewExtension({
     });
 
     return updated;
-  });
+  }, STOCK_TX_OPTIONS);
 }
 
 export async function cancelBooking({
@@ -443,18 +486,22 @@ export async function cancelBooking({
         const reservedQty = item.reservedQuantity;
         if (reservedQty <= 0) continue;
 
-        const inv = item.product.inventory;
+        const snapshot = item.product.inventory;
+        const inv = snapshot ? await lockInventory(tx, snapshot.id) : null;
         if (inv) {
+          // Approval reserves into reservedStock, so cancellation must release
+          // from reservedStock. Decrementing blockedStock instead handed back
+          // stock held by an unrelated *block* and left this booking's
+          // reservation stranded for good.
           const prevAvailable = inv.availableStock;
-          const newAvailable = prevAvailable + reservedQty;
-          const prevBlocked = inv.blockedStock;
-          const newBlocked = Math.max(0, prevBlocked - reservedQty);
+          const newReserved = Math.max(0, inv.reservedStock - reservedQty);
+          const newAvailable = availableFrom({ ...inv, reservedStock: newReserved });
 
           await tx.inventory.update({
             where: { id: inv.id },
             data: {
+              reservedStock: newReserved,
               availableStock: newAvailable,
-              blockedStock: newBlocked,
             },
           });
 
@@ -509,7 +556,7 @@ export async function cancelBooking({
     });
 
     return updated;
-  });
+  }, STOCK_TX_OPTIONS);
 }
 
 export async function releaseExpiredBookings() {
@@ -538,18 +585,20 @@ export async function releaseExpiredBookings() {
           const reservedQty = item.reservedQuantity;
           if (reservedQty <= 0) continue;
 
-          const inv = item.product.inventory;
+          const snapshot = item.product.inventory;
+          const inv = snapshot ? await lockInventory(tx, snapshot.id) : null;
           if (inv) {
+            // Release the reservation this booking actually holds (see the
+            // cancellation path above for why blockedStock was wrong).
             const prevAvailable = inv.availableStock;
-            const newAvailable = prevAvailable + reservedQty;
-            const prevBlocked = inv.blockedStock;
-            const newBlocked = Math.max(0, prevBlocked - reservedQty);
+            const newReserved = Math.max(0, inv.reservedStock - reservedQty);
+            const newAvailable = availableFrom({ ...inv, reservedStock: newReserved });
 
             await tx.inventory.update({
               where: { id: inv.id },
               data: {
+                reservedStock: newReserved,
                 availableStock: newAvailable,
-                blockedStock: newBlocked,
               },
             });
 
@@ -599,7 +648,7 @@ export async function releaseExpiredBookings() {
             },
           },
         });
-      });
+      }, STOCK_TX_OPTIONS);
       releasedCount++;
     } catch (err) {
       console.error(`[EXPIRATION WORKER] Failed auto-expiring booking ${booking.bookingNumber}:`, err);
@@ -637,18 +686,25 @@ export async function allocateBookingStock({
       const reservedQty = item.reservedQuantity;
       if (reservedQty <= 0) continue;
 
-      const inv = item.product.inventory;
+      const snapshot = item.product.inventory;
+      const inv = snapshot ? await lockInventory(tx, snapshot.id) : null;
       if (inv) {
-        const prevBlocked = inv.blockedStock;
-        const newBlocked = Math.max(0, prevBlocked - reservedQty);
-        const prevAllocated = inv.allocatedStock;
-        const newAllocated = prevAllocated + reservedQty;
+        // Allocation converts this booking's own reservation into an
+        // allocation. It previously drained blockedStock, which belongs to the
+        // block flow. Available is unchanged — both counters subtract from it.
+        const newReserved = Math.max(0, inv.reservedStock - reservedQty);
+        const newAllocated = inv.allocatedStock + reservedQty;
 
         await tx.inventory.update({
           where: { id: inv.id },
           data: {
-            blockedStock: newBlocked,
+            reservedStock: newReserved,
             allocatedStock: newAllocated,
+            availableStock: availableFrom({
+              ...inv,
+              reservedStock: newReserved,
+              allocatedStock: newAllocated,
+            }),
           },
         });
 
@@ -660,7 +716,7 @@ export async function allocateBookingStock({
             warehouseId: booking.warehouseId,
             movementType: "ALLOCATED",
             quantity: reservedQty,
-            previousQuantity: prevAllocated,
+            previousQuantity: inv.allocatedStock,
             newQuantity: newAllocated,
             referenceType: "BOOKING",
             referenceId: booking.id,
@@ -697,7 +753,7 @@ export async function allocateBookingStock({
     });
 
     return updated;
-  });
+  }, STOCK_TX_OPTIONS);
 }
 
 export async function fulfillBookingStock({
@@ -728,7 +784,8 @@ export async function fulfillBookingStock({
       const allocatedQty = item.allocatedQuantity;
       if (allocatedQty <= 0) continue;
 
-      const inv = item.product.inventory;
+      const snapshot = item.product.inventory;
+      const inv = snapshot ? await lockInventory(tx, snapshot.id) : null;
       if (inv) {
         const prevAllocated = inv.allocatedStock;
         const newAllocated = Math.max(0, prevAllocated - allocatedQty);
@@ -740,6 +797,11 @@ export async function fulfillBookingStock({
           data: {
             allocatedStock: newAllocated,
             totalStock: newTotal,
+            availableStock: availableFrom({
+              ...inv,
+              allocatedStock: newAllocated,
+              totalStock: newTotal,
+            }),
           },
         });
 
@@ -788,7 +850,7 @@ export async function fulfillBookingStock({
     });
 
     return updated;
-  });
+  }, STOCK_TX_OPTIONS);
 }
 
 // Queries for dashboards

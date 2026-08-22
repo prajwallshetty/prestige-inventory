@@ -1,8 +1,10 @@
+import { redirect } from "next/navigation";
 import { getSessionContext } from "@/lib/session";
 import { NotificationPreferencesForm } from "@/components/notifications/NotificationPreferencesForm";
 
 export default async function SettingsPage() {
   const session = await getSessionContext();
+  if (!session.authenticated) redirect("/login");
 
   return (
     <>

@@ -11,6 +11,7 @@ import {
   ChevronDown
 } from "lucide-react";
 import { SessionContext } from "@/lib/session";
+import { toast } from "sonner";
 import { bulkApproveBookingsAction } from "@/app/actions";
 
 interface BookingItem {
@@ -123,12 +124,16 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
     setIsBulkApproving(true);
     setBulkResult(null);
     try {
-      const res = await bulkApproveBookingsAction(selectedIds, session.role === "SUPER_ADMIN" ? "Super Admin" : "Manager");
-      setBulkResult(res);
+      const res = await bulkApproveBookingsAction(selectedIds);
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      setBulkResult(res.data);
       setSelectedIds([]);
       router.refresh();
-    } catch (err: any) {
-      alert(`Bulk approval error: ${err.message}`);
+    } catch {
+      toast.error("Connection failed. Please try again.");
     } finally {
       setIsBulkApproving(false);
     }
@@ -139,12 +144,10 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
       {/* HEADER BAR */}
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-[#111111]">
-          {session.role === "DEALER" ? "My Stock Bookings" : "Stock Reservation Queue"}
+          {"Stock Reservation Queue"}
         </h1>
         <p className="text-xs text-[#6B6B6B]">
-          {session.role === "DEALER"
-            ? "Submit and track tile allocations, view expiration timers, and download dealer invoices."
-            : "Approve pending stock reservations, extend block hold leases, and manage dealer allocations."}
+          Approve pending stock reservations, extend block hold leases, and manage dealer allocations.
         </p>
       </div>
 
@@ -221,7 +224,7 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
             {/* Dealer Filter (Manager Only) */}
-            {session.role !== "DEALER" && (
+            {true && (
               <div className="flex items-center gap-1.5 rounded-lg border border-[#EAEAEA] px-2.5 py-1.5 bg-white text-xs">
                 <span className="text-[#6B6B6B] font-bold">Dealer:</span>
                 <select
@@ -305,7 +308,7 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
       {/* QUEUES TABLE CONTAINER */}
       <div className="overflow-hidden rounded-xl border border-[#EAEAEA] bg-white shadow-xs">
         {/* Bulk Action Header */}
-        {selectedIds.length > 0 && session.role !== "DEALER" && (
+        {selectedIds.length > 0 && (
           <div className="bg-amber-50 border-b border-[#EAEAEA] px-4 py-3 flex items-center justify-between gap-4">
             <span className="text-xs font-bold text-amber-800">
               {selectedIds.length} reservations selected for batch action
@@ -325,7 +328,7 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
         <table className="hidden md:table w-full text-left text-xs border-collapse">
           <thead className="border-b border-[#EAEAEA] bg-[#F7F7F5] text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
             <tr>
-              {session.role !== "DEALER" && (
+              {true && (
                 <th className="px-4 py-4 w-10 text-center">
                   <input
                     type="checkbox"
@@ -364,7 +367,7 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
                 const isPending = b.status === "PENDING_APPROVAL";
                 return (
                   <tr key={b.id} className="hover:bg-[#F7F7F5]/50 transition-colors">
-                    {session.role !== "DEALER" && (
+                    {true && (
                       <td className="px-4 py-3 text-center">
                         <input
                           type="checkbox"
@@ -430,7 +433,7 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
                 >
                   <div className="flex justify-between items-start gap-4">
                     <div className="flex items-center gap-2">
-                      {session.role !== "DEALER" && isPending && (
+                      {isPending && (
                         <input
                           type="checkbox"
                           checked={selectedIds.includes(b.id)}

@@ -1,6 +1,6 @@
 import { getBookingById } from "@/services/BookingService";
 import { getSessionContext } from "@/lib/session";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { BookingDetailClient } from "@/app/bookings/[id]/BookingDetailClient";
 import { db } from "@/lib/db";
 
@@ -11,19 +11,17 @@ export default async function BookingDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  const session = await getSessionContext();
+  if (!session.authenticated) redirect("/login");
+
   const { id } = await params;
   const booking = await getBookingById(id);
-  const session = await getSessionContext();
 
   if (!booking) {
     notFound();
   }
 
   // Security Scopes Enforcement
-  if (session.role === "DEALER" && booking.dealerId !== session.dealerId) {
-    notFound();
-  }
-
   if (session.role === "MANAGER" && booking.warehouseId !== session.warehouseId) {
     notFound();
   }

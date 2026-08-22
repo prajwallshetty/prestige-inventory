@@ -88,7 +88,7 @@ export function DealersClient({ dealers, showrooms, canManage }: Props) {
     setSaving(true);
     try {
       if (editing) {
-        await updateDealerAction(editing.id, {
+        const updated = await updateDealerAction(editing.id, {
           name: form.name,
           contact: form.contact,
           phone: form.phone,
@@ -98,6 +98,10 @@ export function DealersClient({ dealers, showrooms, canManage }: Props) {
           showroomId: form.showroomId || undefined,
           status: form.status,
         });
+        if (!updated.ok) {
+          toast.error(updated.error);
+          return;
+        }
         toast.success("Dealer updated.");
       } else {
         const created = await createDealerAction({
@@ -111,7 +115,11 @@ export function DealersClient({ dealers, showrooms, canManage }: Props) {
           showroomId: form.showroomId || undefined,
           status: form.status,
         });
-        toast.success(`Dealer created successfully — ${created.dealerId}`);
+        if (!created.ok) {
+          toast.error(created.error);
+          return;
+        }
+        toast.success(`Dealer created successfully — ${created.data.dealerId}`);
       }
       setOpen(false);
       startTransition(() => router.refresh());
@@ -128,7 +136,11 @@ export function DealersClient({ dealers, showrooms, canManage }: Props) {
     if (next === "INACTIVE" && !confirm(`Deactivate ${d.name}? Existing blocks are preserved.`)) return;
     setBusyId(d.id);
     try {
-      await setDealerStatusAction(d.id, next);
+      const res = await setDealerStatusAction(d.id, next);
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
       toast.success(next === "ACTIVE" ? "Dealer reactivated." : "Dealer deactivated.");
       startTransition(() => router.refresh());
     } catch (err: any) {

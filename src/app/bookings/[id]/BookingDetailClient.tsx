@@ -16,6 +16,7 @@ import {
   Play
 } from "lucide-react";
 import Link from "next/link";
+import { toast } from "sonner";
 import { SessionContext } from "@/lib/session";
 import { 
   reviewBookingAction, 
@@ -134,15 +135,29 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
     setApprovedQuantities({ ...approvedQuantities, [itemId]: val });
   };
 
-  const executeAction = async (actionName: string, promise: Promise<any>) => {
+  /**
+   * Runs a booking mutation and reports the outcome.
+   *
+   * Server actions return `{ ok, error }` rather than throwing, because a
+   * thrown message is replaced by an opaque digest in production builds.
+   */
+  const executeAction = async (
+    actionName: string,
+    promise: Promise<{ ok: boolean; error?: string } | any>
+  ) => {
     setLoadingAction(actionName);
     try {
-      await promise;
+      const result = await promise;
+      if (result && typeof result === "object" && "ok" in result && !result.ok) {
+        toast.error(result.error || "That action could not be completed.");
+        return;
+      }
+      toast.success("Booking updated.");
       router.refresh();
       setShowExtensionForm(false);
       setShowCancelForm(false);
-    } catch (err: any) {
-      alert(`Action failed: ${err.message}`);
+    } catch {
+      toast.error("Connection failed. Please try again.");
     } finally {
       setLoadingAction(null);
     }
@@ -156,12 +171,12 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
 
     executeAction(
       `review-${status}`,
-      reviewBookingAction(booking.id, status, `Manager`, itemApprovals, reviewNote)
+      reviewBookingAction(booking.id, status, undefined, itemApprovals, reviewNote)
     );
   };
 
   const handleConfirm = async () => {
-    executeAction(`confirm`, confirmBookingAction(booking.id, `Dealer User`));
+    executeAction(`confirm`, confirmBookingAction(booking.id));
   };
 
   const handleRequestExtension = async () => {
@@ -171,12 +186,12 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
     }
     executeAction(
       `request-extension`,
-      requestBookingExtensionAction(booking.id, 24, extensionReason, `Dealer User`)
+      requestBookingExtensionAction(booking.id, 24, extensionReason)
     );
   };
 
   const handleReviewExtension = async (action: "APPROVE" | "REJECT") => {
-    executeAction(`extension-${action}`, reviewExtensionAction(booking.id, action, `Manager`));
+    executeAction(`extension-${action}`, reviewExtensionAction(booking.id, action));
   };
 
   const handleCancel = async () => {
@@ -186,16 +201,16 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
     }
     executeAction(
       `cancel`,
-      cancelBookingAction(booking.id, session.role === "DEALER" ? `Dealer` : `Manager`, cancelReason || "Cancelled by user")
+      cancelBookingAction(booking.id, undefined, cancelReason || "Cancelled by user")
     );
   };
 
   const handleAllocate = async () => {
-    executeAction(`allocate`, allocateBookingStockAction(booking.id, `Manager`));
+    executeAction(`allocate`, allocateBookingStockAction(booking.id));
   };
 
   const handleFulfill = async () => {
-    executeAction(`fulfill`, fulfillBookingStockAction(booking.id, `Manager`));
+    executeAction(`fulfill`, fulfillBookingStockAction(booking.id));
   };
 
   const handlePrint = () => {
@@ -224,7 +239,7 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
   };
 
   const timelineSteps = getTimelineSteps();
-  const isReadOnly = session.role === "VIEWER";
+  const isReadOnly = session.role === "WEAVER";
 
   return (
     <div className="space-y-6">
@@ -353,7 +368,7 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
               {booking.items.map((item) => {
                 const showQtyAdjustment = 
                   (booking.status === "PENDING_APPROVAL" || booking.status === "ON_HOLD") && 
-                  session.role !== "DEALER" && 
+                  true && 
                   !isReadOnly;
 
                 return (
@@ -448,7 +463,7 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
               </h3>
 
               {/* MANAGER APPROVAL CONTROLS */}
-              {session.role !== "DEALER" && (
+              {true && (
                 <div className="space-y-3">
                   {/* Extension Requests Review */}
                   {booking.extensionRequested && (
@@ -579,7 +594,7 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
               )}
 
               {/* DEALER ACTIONS PORTAL */}
-              {session.role === "DEALER" && (
+              {false && (
                 <div className="space-y-3">
                   {/* Confirm Booking Hold */}
                   {booking.status === "AWAITING_DEALER_CONFIRMATION" && (

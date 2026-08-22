@@ -1,5 +1,6 @@
 "use client";
 
+import { isOffline, OFFLINE_MESSAGE } from "@/lib/offline";
 import React, { useState } from "react";
 import { broadcastAnnouncementAction } from "@/app/actions";
 import { 
@@ -45,8 +46,8 @@ export function AnnouncementsClient({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!navigator.onLine) {
-      alert("You're offline. Reconnect to continue.");
+    if (isOffline()) {
+      setError(OFFLINE_MESSAGE);
       return;
     }
     setError(null);
@@ -66,14 +67,21 @@ export function AnnouncementsClient({
         expiresAt: expiresAt || null,
       });
 
+      // The action reports failure in its return value rather than throwing, so
+      // without this guard a rejected broadcast still rendered a success banner.
+      if (!data.ok) {
+        setError(data.error);
+        return;
+      }
+
       setSuccess(
         willSchedule
           ? `Announcement scheduled for ${new Date(scheduledAt).toLocaleString()}. It will be delivered automatically.`
-          : "Announcement broadcasted successfully! Recipients have been notified."
+          : `Announcement broadcasted to ${data.data.recipientCount ?? 0} recipient(s).`
       );
       setAnnouncements((prev) => [
         {
-          id: data.id,
+          id: data.data.id,
           title,
           message,
           priority,
@@ -301,8 +309,9 @@ export function AnnouncementsClient({
           <h2 className="text-sm font-black uppercase text-[#111111]">Broadcast History Logs</h2>
         </div>
 
-        <div className="overflow-hidden rounded-xl border border-[#EAEAEA] bg-white">
-          <table className="w-full text-left text-xs border-collapse">
+        {/* Scrolls within its own container so the page body never does (§26). */}
+        <div className="overflow-x-auto rounded-xl border border-[#EAEAEA] bg-white">
+          <table className="w-full min-w-[640px] text-left text-xs border-collapse">
             <thead className="border-b border-[#EAEAEA] bg-[#F7F7F5] text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
               <tr>
                 <th className="px-4 py-3">Announcement details</th>

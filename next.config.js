@@ -8,6 +8,10 @@ const nextConfig = {
       { protocol: 'https', hostname: '**' }
     ]
   },
+  // ioredis and Prisma are Node-only. Leaving them external stops the bundler
+  // from pulling them (and the node built-ins they require) into the Edge
+  // bundle it builds for instrumentation/middleware.
+  serverExternalPackages: ['ioredis', '@prisma/client'],
   experimental: {
     workerThreads: false,
     cpus: 1

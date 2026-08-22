@@ -1,42 +1,66 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Search, ArrowRight, CornerDownLeft, Package, User, FileText, MapPin, Sparkles } from "lucide-react";
+import {
+  ArrowRight,
+  CornerDownLeft,
+  FileText,
+  Lock,
+  MapPin,
+  Package,
+  Search,
+  Sparkles,
+  User,
+} from "lucide-react";
 import { globalSearchAction } from "@/app/actions";
+
+type Category = "products" | "blocks" | "dealers" | "showrooms" | "actions";
 
 interface SearchResultItem {
   id: string;
   title: string;
   subtitle?: string;
-  category: "products" | "dealers" | "bookings" | "warehouses" | "actions";
+  meta?: string;
+  category: Category;
   url: string;
 }
 
+const QUICK_ACTIONS: SearchResultItem[] = [
+  { id: "act-inv", title: "All stock inventory", subtitle: "Live stock levels", category: "actions", url: "/inventory" },
+  { id: "act-blocks", title: "Stock blocks", subtitle: "Reservations and approvals", category: "actions", url: "/blocks" },
+  { id: "act-new-block", title: "New stock block", subtitle: "Reserve stock for a dealer", category: "actions", url: "/blocks/new" },
+  { id: "act-pending", title: "Pending approvals", subtitle: "Blocks awaiting a decision", category: "actions", url: "/blocks?status=PENDING" },
+  { id: "act-rep", title: "Reports and exports", subtitle: "Inventory and movement CSVs", category: "actions", url: "/reports" },
+];
+
+/**
+ * Global command palette (⌘K / Ctrl-K, or "/").
+ *
+ * Searches products, blocks, dealers and showrooms server-side, capped and
+ * scoped to the caller. Previously it queried product name and code only, and
+ * a slow response could overwrite a newer one.
+ */
 export function CommandSearch() {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<SearchResultItem[]>([]);
+  const [results, setResults] = useState<SearchResultItem[]>(QUICK_ACTIONS);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [loading, setLoading] = useState(false);
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
+  const seqRef = useRef(0);
 
-  // List of default quick actions
-  const quickActions: SearchResultItem[] = [
-    { id: "act-inv", title: "View All Stock Inventory", subtitle: "Jump to main stock book list", category: "actions", url: "/inventory" },
-    { id: "act-new", title: "New Stock Reservation hold", subtitle: "Submit a new booking hold request", category: "actions", url: "/bookings/new" },
-    { id: "act-queue", title: "All Booking Reservations", subtitle: "Open hold queues & approvals", category: "actions", url: "/bookings" },
-    { id: "act-rep", title: "Export System Reports", subtitle: "Download audit movements & inventory CSV", category: "actions", url: "/reports" },
-  ];
-
-  // Hotkey listener for ⌘K or /
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setIsOpen((open) => !open);
-      } else if (e.key === "/" && document.activeElement?.tagName !== "INPUT" && document.activeElement?.tagName !== "TEXTAREA") {
+      } else if (
+        e.key === "/" &&
+        document.activeElement?.tagName !== "INPUT" &&
+        document.activeElement?.tagName !== "TEXTAREA"
+      ) {
         e.preventDefault();
         setIsOpen(true);
       }
@@ -45,97 +69,96 @@ export function CommandSearch() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // Fetch results when query changes
-  useEffect(() => {
-    if (!isOpen) return;
-    if (query.trim().length < 2) {
-      setResults(quickActions);
-      setSelectedIndex(0);
-      return;
-    }
-
-    const delayDebounce = setTimeout(async () => {
-      setLoading(true);
-      try {
-        const res = await globalSearchAction(query);
-        const mappedResults: SearchResultItem[] = [];
-
-        // Map products
-        res.products.forEach((p) => {
-          mappedResults.push({
-            id: p.id,
-            title: p.name,
-            subtitle: `SKU: ${p.productCode || p.id.slice(-6).toUpperCase()}`,
-            category: "products",
-            url: `/inventory?search=${p.name}`,
-          });
-        });
-
-        // Map bookings
-        res.bookings.forEach((b) => {
-          mappedResults.push({
-            id: b.id,
-            title: b.bookingNumber,
-            subtitle: `Status: ${b.status}`,
-            category: "bookings",
-            url: `/bookings/${b.id}`,
-          });
-        });
-
-        // Map dealers
-        res.dealers.forEach((d) => {
-          mappedResults.push({
-            id: d.id,
-            title: d.name,
-            subtitle: d.company || undefined,
-            category: "dealers",
-            url: `/bookings?dealerId=${d.id}`,
-          });
-        });
-
-        // Map warehouses
-        res.warehouses.forEach((w) => {
-          mappedResults.push({
-            id: w.id,
-            title: w.name,
-            subtitle: `Code: ${w.code}`,
-            category: "warehouses",
-            url: `/inventory?warehouseId=${w.id}`,
-          });
-        });
-
-        // Append filtered quick actions
-        const matchedActions = quickActions.filter(
-          (a) =>
-            a.title.toLowerCase().includes(query.toLowerCase()) ||
-            a.subtitle?.toLowerCase().includes(query.toLowerCase())
-        );
-        mappedResults.push(...matchedActions);
-
-        setResults(mappedResults);
-        setSelectedIndex(0);
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    }, 250);
-
-    return () => clearTimeout(delayDebounce);
-  }, [query, isOpen]);
-
-  // Reset indices and focus when opened
   useEffect(() => {
     if (isOpen) {
-      setTimeout(() => inputRef.current?.focus(), 50);
-      setResults(quickActions);
-      setSelectedIndex(0);
       setQuery("");
+      setResults(QUICK_ACTIONS);
+      setSelectedIndex(0);
+      const t = setTimeout(() => inputRef.current?.focus(), 50);
+      return () => clearTimeout(t);
     }
   }, [isOpen]);
 
-  // Navigate using Keyboard events
+  const runSearch = useCallback(async (q: string) => {
+    // Every request gets a sequence number; a reply that is not the newest is
+    // dropped, so "ACR" can never overwrite "BEI" (spec §24).
+    const seq = ++seqRef.current;
+    setLoading(true);
+    try {
+      const res = await globalSearchAction(q);
+      if (seq !== seqRef.current) return;
+
+      const mapped: SearchResultItem[] = [
+        ...res.products.map((p) => ({
+          id: `p-${p.id}`,
+          title: p.name,
+          subtitle: [p.productNumber, p.size, p.brand].filter(Boolean).join(" · "),
+          meta: `${p.availableStock} free`,
+          category: "products" as const,
+          url: `/inventory?search=${encodeURIComponent(p.productNumber !== "—" ? p.productNumber : p.name)}`,
+        })),
+        ...res.blocks.map((b) => ({
+          id: `b-${b.id}`,
+          title: b.blockNumber || "Block",
+          subtitle: [b.product, b.dealer].filter(Boolean).join(" · "),
+          meta: b.status.replace(/_/g, " "),
+          category: "blocks" as const,
+          url: `/blocks/${b.id}`,
+        })),
+        ...res.dealers.map((d) => ({
+          id: `d-${d.id}`,
+          title: d.name,
+          subtitle: [d.dealerId, d.company].filter(Boolean).join(" · ") || undefined,
+          category: "dealers" as const,
+          url: `/blocks?dealerId=${d.id}`,
+        })),
+        ...res.showrooms.map((s) => ({
+          id: `s-${s.id}`,
+          title: s.name,
+          subtitle: s.city || undefined,
+          category: "showrooms" as const,
+          url: `/blocks?showroomId=${s.id}`,
+        })),
+        ...QUICK_ACTIONS.filter(
+          (a) =>
+            a.title.toLowerCase().includes(q.toLowerCase()) ||
+            a.subtitle?.toLowerCase().includes(q.toLowerCase())
+        ),
+      ];
+
+      setResults(mapped);
+      setSelectedIndex(0);
+    } catch {
+      if (seq === seqRef.current) setResults([]);
+    } finally {
+      if (seq === seqRef.current) setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const q = query.trim();
+    if (q.length < 2) {
+      seqRef.current++; // cancel any in-flight response
+      setLoading(false);
+      setResults(QUICK_ACTIONS);
+      setSelectedIndex(0);
+      return;
+    }
+    const t = setTimeout(() => runSearch(q), 220);
+    return () => clearTimeout(t);
+  }, [query, isOpen, runSearch]);
+
+  const handleSelect = (item: SearchResultItem) => {
+    setIsOpen(false);
+    router.push(item.url);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (results.length === 0) {
+      if (e.key === "Escape") setIsOpen(false);
+      return;
+    }
     if (e.key === "ArrowDown") {
       e.preventDefault();
       setSelectedIndex((prev) => (prev + 1) % results.length);
@@ -144,105 +167,121 @@ export function CommandSearch() {
       setSelectedIndex((prev) => (prev - 1 + results.length) % results.length);
     } else if (e.key === "Enter") {
       e.preventDefault();
-      if (results[selectedIndex]) {
-        handleSelect(results[selectedIndex]);
-      }
+      if (results[selectedIndex]) handleSelect(results[selectedIndex]);
     } else if (e.key === "Escape") {
       setIsOpen(false);
     }
   };
 
-  const handleSelect = (item: SearchResultItem) => {
-    setIsOpen(false);
-    router.push(item.url);
-  };
-
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/80 p-4 pt-[12vh] backdrop-blur-xs">
-      <div 
-        className="w-full max-w-xl rounded-xl border border-slate-800 bg-[#0c1122] shadow-2xl overflow-hidden flex flex-col scale-100 transition-all"
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Search"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/25 p-4 pt-[10vh] backdrop-blur-xs"
+      onClick={() => setIsOpen(false)}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
         onKeyDown={handleKeyDown}
+        className="flex w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-[#EAEAEA] bg-white font-sans text-xs text-[#111111] shadow-2xl"
       >
-        {/* INPUT HEADER */}
-        <div className="flex items-center gap-3 border-b border-slate-850 px-4 py-3 bg-[#080c16]">
-          <Search className="h-5 w-5 text-slate-400 shrink-0" />
+        <div className="flex items-center gap-3 border-b border-[#EAEAEA] bg-[#F7F7F5] px-4 py-3">
+          <Search className="h-4 w-4 shrink-0 text-[#6B6B6B]" />
           <input
             ref={inputRef}
             type="text"
-            placeholder="Search SKU, tiles, brands, bookings, or type quick actions..."
+            placeholder="Product, SKU, brand, block number, dealer, showroom…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="w-full bg-transparent text-sm text-white placeholder-slate-500 focus:outline-hidden"
+            aria-label="Search"
+            className="w-full bg-transparent text-xs font-medium text-[#111111] placeholder-[#9A9A9A] focus:outline-hidden"
           />
-          <div className="rounded border border-slate-800 bg-slate-900 px-1.5 py-0.5 text-[10px] text-slate-400 font-mono flex items-center gap-0.5">
-            <span>ESC</span>
-          </div>
+          <kbd className="flex items-center gap-0.5 rounded-md border border-[#EAEAEA] bg-white px-2 py-0.5 font-mono text-[9px] font-bold text-[#6B6B6B] shadow-xs">
+            ESC
+          </kbd>
         </div>
 
-        {/* RESULTS SCROLL */}
-        <div className="max-h-[350px] overflow-y-auto p-2 space-y-1">
+        <div className="max-h-[360px] space-y-1 overflow-y-auto p-2">
           {loading && (
-            <div className="text-center py-6 text-xs text-slate-450 flex items-center justify-center gap-2">
-              <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-700 border-t-amber-500" />
-              Searching database...
+            <div className="space-y-2 p-2" aria-busy="true">
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="flex items-center gap-3">
+                  <div className="h-8 w-8 shrink-0 animate-pulse rounded-lg bg-[#EAEAEA]" />
+                  <div className="flex-1 space-y-1.5">
+                    <div className="h-3 w-2/3 animate-pulse rounded bg-[#EAEAEA]" />
+                    <div className="h-2.5 w-1/3 animate-pulse rounded bg-[#F7F7F5]" />
+                  </div>
+                </div>
+              ))}
             </div>
           )}
 
           {!loading && results.length === 0 && (
-            <div className="text-center py-8 text-xs text-slate-500">
-              No matching products, bookings, or actions found.
+            <div className="py-8 text-center text-xs text-[#6B6B6B]">
+              <p className="font-bold text-[#111111]">No results found.</p>
+              <p className="mt-1">Try a product number, block number or dealer name.</p>
             </div>
           )}
 
-          {!loading && results.map((item, idx) => {
-            const isSelected = idx === selectedIndex;
-            return (
-              <div
-                key={item.id + idx}
-                onClick={() => handleSelect(item)}
-                onMouseEnter={() => setSelectedIndex(idx)}
-                className={`flex items-center justify-between rounded-lg px-3.5 py-2.5 cursor-pointer transition-colors ${
-                  isSelected ? "bg-slate-900/60 border-l-2 border-amber-500" : "hover:bg-slate-900/30"
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <div className="text-slate-400 shrink-0">
-                    <CategoryIcon category={item.category} />
-                  </div>
-                  <div>
-                    <p className={`text-xs font-bold ${isSelected ? "text-amber-400" : "text-white"}`}>
-                      {item.title}
-                    </p>
-                    {item.subtitle && (
-                      <p className="text-[10px] text-slate-400 mt-0.5">{item.subtitle}</p>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-1 text-[9px] text-slate-500 font-bold uppercase">
-                  {isSelected && (
-                    <span className="flex items-center gap-0.5 text-amber-500/80">
-                      Go <CornerDownLeft className="h-3 w-3" />
+          {!loading &&
+            results.map((item, idx) => {
+              const isSelected = idx === selectedIndex;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => handleSelect(item)}
+                  onMouseEnter={() => setSelectedIndex(idx)}
+                  className={`flex w-full items-center justify-between gap-3 rounded-xl px-3.5 py-2.5 text-left transition-all ${
+                    isSelected ? "bg-[#F2C202]/10" : "hover:bg-[#F7F7F5]"
+                  }`}
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className={`shrink-0 ${isSelected ? "text-[#8A7300]" : "text-[#6B6B6B]"}`}>
+                      <CategoryIcon category={item.category} />
                     </span>
-                  )}
-                  <span className="px-1.5 py-0.5 bg-slate-900/80 rounded border border-slate-850">
-                    {item.category}
+                    <span className="min-w-0">
+                      <span
+                        className={`block truncate text-xs font-bold ${
+                          isSelected ? "text-[#8A7300]" : "text-[#111111]"
+                        }`}
+                      >
+                        {item.title}
+                      </span>
+                      {item.subtitle && (
+                        <span className="mt-0.5 block truncate text-[10px] text-[#6B6B6B]">
+                          {item.subtitle}
+                        </span>
+                      )}
+                    </span>
+                  </div>
+
+                  <span className="flex shrink-0 items-center gap-2 text-[9px] font-bold uppercase text-[#6B6B6B]">
+                    {item.meta && (
+                      <span className="rounded-md border border-[#EAEAEA] bg-[#F7F7F5] px-2 py-0.5">
+                        {item.meta}
+                      </span>
+                    )}
+                    {isSelected && (
+                      <span className="flex items-center gap-0.5 text-[#8A7300]">
+                        Go <CornerDownLeft className="h-3 w-3" />
+                      </span>
+                    )}
                   </span>
-                </div>
-              </div>
-            );
-          })}
+                </button>
+              );
+            })}
         </div>
 
-        {/* COMMAND PALETTE FOOTER */}
-        <div className="border-t border-slate-850 bg-[#080c16] px-4 py-2 flex items-center justify-between text-[10px] text-slate-500">
-          <span className="flex items-center gap-1.5">
-            <Sparkles className="h-3.5 w-3.5 text-amber-500" />
-            <span>Search or command shortcuts active</span>
+        <div className="flex items-center justify-between border-t border-[#EAEAEA] bg-[#F7F7F5] px-4 py-2 text-[10px] text-[#6B6B6B]">
+          <span className="flex items-center gap-1.5 font-medium">
+            <Sparkles className="h-3.5 w-3.5 text-[#F2C202]" />
+            Products, blocks, dealers and showrooms
           </span>
-          <span className="flex items-center gap-2">
+          <span className="hidden items-center gap-2 font-medium sm:flex">
             <span>↑↓ Navigate</span>
             <span>↵ Select</span>
           </span>
@@ -252,15 +291,15 @@ export function CommandSearch() {
   );
 }
 
-function CategoryIcon({ category }: { category: SearchResultItem["category"] }) {
+function CategoryIcon({ category }: { category: Category }) {
   switch (category) {
     case "products":
       return <Package className="h-4 w-4" />;
+    case "blocks":
+      return <Lock className="h-4 w-4" />;
     case "dealers":
       return <User className="h-4 w-4" />;
-    case "bookings":
-      return <FileText className="h-4 w-4" />;
-    case "warehouses":
+    case "showrooms":
       return <MapPin className="h-4 w-4" />;
     default:
       return <ArrowRight className="h-4 w-4" />;

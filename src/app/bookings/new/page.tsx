@@ -8,9 +8,11 @@ export const revalidate = 0;
 export default async function NewBookingPage() {
   const session = await getSessionContext();
 
-  // Route security: Only Dealers, Super Admins, and Managers can create bookings.
-  if (session.role === "VIEWER") {
-    redirect("/dashboard");
+  // Route security: the read-only role can never reach the create form. The
+  // action re-checks independently.
+  if (!session.authenticated) redirect("/login");
+  if (session.role === "WEAVER") {
+    redirect("/viewer/dashboard");
   }
 
   // Fetch available products, brands, and categories

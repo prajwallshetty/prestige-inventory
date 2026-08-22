@@ -20,10 +20,18 @@ export default function LoginPage() {
     formData.append("password", password);
 
     try {
-      const redirectUrl = await signInAction(formData);
-      window.location.href = redirectUrl;
-    } catch (err: any) {
-      setError(err.message || "An unexpected error occurred.");
+      const result = await signInAction(formData);
+      if (!result.ok) {
+        setError(result.error);
+        setIsSubmitting(false);
+        return;
+      }
+      // A `next` parameter from the middleware returns the user to whatever
+      // they were trying to reach before signing in.
+      const next = new URLSearchParams(window.location.search).get("next");
+      window.location.href = next && next.startsWith("/") ? next : result.data.redirectTo;
+    } catch {
+      setError("Connection failed. Please check your network and try again.");
       setIsSubmitting(false);
     }
   };

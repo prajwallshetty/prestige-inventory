@@ -115,35 +115,49 @@ export function NotificationCenter({ session }: NotificationCenterProps) {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [isOpen]);
 
+  // These actions report failure in their return value rather than throwing, so
+  // the local list is only updated once the server has actually confirmed.
   const handleMarkRead = async (id: string) => {
     try {
-      await markNotificationAsReadAction(id);
-      fetchCount();
+      const res = await markNotificationAsReadAction(id);
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
       setNotifications((prev) =>
         prev.map((n) => (n.id === id ? { ...n, isRead: true, readAt: new Date() } : n))
       );
-    } catch (err: any) {
-      alert(err.message);
+      fetchCount();
+    } catch {
+      toast.error("Could not update the notification. Please try again.");
     }
   };
 
   const handleMarkAllRead = async () => {
     try {
-      await markAllNotificationsAsReadAction();
-      fetchCount();
+      const res = await markAllNotificationsAsReadAction();
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
       setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true, readAt: new Date() })));
-    } catch (err: any) {
-      alert(err.message);
+      fetchCount();
+    } catch {
+      toast.error("Could not update your notifications. Please try again.");
     }
   };
 
   const handleDelete = async (id: string) => {
     try {
-      await deleteNotificationAction(id);
-      fetchCount();
+      const res = await deleteNotificationAction(id);
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
       setNotifications((prev) => prev.filter((n) => n.id !== id));
-    } catch (err: any) {
-      alert(err.message);
+      fetchCount();
+    } catch {
+      toast.error("Could not remove the notification. Please try again.");
     }
   };
 

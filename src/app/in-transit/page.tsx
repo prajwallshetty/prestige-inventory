@@ -1,8 +1,14 @@
+import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
+import { getSessionContext } from "@/lib/session";
 
+export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export default async function InTransitPage() {
+  const session = await getSessionContext();
+  if (!session.authenticated) redirect("/login");
+
   const shipments = await db.shipment.findMany({
     include: {
       warehouse: { select: { name: true } },
@@ -23,8 +29,9 @@ export default async function InTransitPage() {
           </div>
         </div>
 
-        <div className="overflow-hidden rounded-xl border border-[#EAEAEA] bg-white shadow-xs">
-          <table className="w-full text-left text-xs">
+        {/* Scrolls within its own container so the page body never does (§26). */}
+        <div className="overflow-x-auto rounded-xl border border-[#EAEAEA] bg-white shadow-xs">
+          <table className="w-full min-w-[720px] text-left text-xs">
             <thead className="border-b border-[#EAEAEA] bg-[#F7F7F5] text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
               <tr>
                 <th className="px-4 py-3.5">Shipment #</th>

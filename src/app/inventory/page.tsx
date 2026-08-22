@@ -1,60 +1,64 @@
-import { getInventoryList } from "@/services/InventoryService";
+import { redirect } from "next/navigation";
+import { getInventoryList, getInventoryFacets } from "@/services/InventoryService";
 import { getSessionContext } from "@/lib/session";
-import { db } from "@/lib/db";
 import { InventoryClientTable } from "@/components/inventory/InventoryClientTable";
 
 export const revalidate = 0;
+
+const first = (v: string | string[] | undefined) => (typeof v === "string" ? v : "");
 
 export default async function InventoryPage({
   searchParams,
 }: {
   searchParams?: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
-  const params = (await searchParams) || {};
-  const search = typeof params.search === "string" ? params.search : "";
-  const brandId = typeof params.brandId === "string" ? params.brandId : "";
-  const categoryId = typeof params.categoryId === "string" ? params.categoryId : "";
-  const stockStatus = typeof params.status === "string" ? params.status : "";
-  const page = parseInt(typeof params.page === "string" ? params.page : "1");
-  const limit = parseInt(typeof params.limit === "string" ? params.limit : "20");
-
   const session = await getSessionContext();
+  if (!session.authenticated) redirect("/login");
 
-  const [inventoryData, brands, categories] = await Promise.all([
+  const params = (await searchParams) || {};
+
+  // Every filter lives in the URL, so a filtered view survives refresh, back,
+  // forward and sharing (spec §22).
+  const filters = {
+    search: first(params.search),
+    brandId: first(params.brandId),
+    categoryId: first(params.categoryId),
+    collection: first(params.collection),
+    size: first(params.size),
+    finish: first(params.finish),
+    stockStatus: first(params.status),
+    sort: first(params.sort) || "newest",
+    page: Math.max(1, parseInt(first(params.page) || "1", 10) || 1),
+    limit: Math.min(100, Math.max(10, parseInt(first(params.limit) || "20", 10) || 20)),
+  };
+
+  const [inventoryData, facets] = await Promise.all([
     getInventoryList({
-      search,
-      brandId,
-      categoryId,
-      stockStatus,
-      page,
-      limit,
+      ...filters,
       userRole: session.role,
+      // A Manager only sees their own warehouse's stock when one is assigned.
       warehouseId: session.role === "MANAGER" ? session.warehouseId : undefined,
     }),
-    db.brand.findMany({ select: { id: true, name: true } }),
-    db.category.findMany({ select: { id: true, name: true } }),
+    getInventoryFacets(),
   ]);
 
   return (
-    <>
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-white">All Stock Inventory</h1>
-            <p className="text-xs text-slate-400">
-              Live stock levels, dealer allocations, in-transit units, and threshold statuses across catalog.
-            </p>
-          </div>
-        </div>
-
-        {/* INVENTORY TABLE COMPONENT */}
-        <InventoryClientTable 
-          initialData={inventoryData} 
-          brands={brands} 
-          categories={categories} 
-          session={session} 
-        />
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-xl font-bold tracking-tight text-[#111111] sm:text-2xl">All Stock Inventory</h1>
+        <p className="text-xs text-[#6B6B6B]">
+          Live stock levels, dealer allocations, in-transit units and threshold statuses across the catalogue.
+        </p>
       </div>
-    </>
+
+      <InventoryClientTable
+        initialData={inventoryData}
+        brands={facets.brands}
+        categories={facets.categories}
+        sizes={facets.sizes}
+        collections={facets.collections}
+        session={session}
+      />
+    </div>
   );
 }

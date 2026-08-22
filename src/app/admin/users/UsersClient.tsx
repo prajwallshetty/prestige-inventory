@@ -1,6 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { createUserAction, updateUserAction, deactivateUserAction } from "@/app/actions";
 import { Plus, Search, Edit2, ShieldAlert, KeyRound, Ban, UserCheck, X } from "lucide-react";
 
@@ -42,6 +44,8 @@ export function UsersClient({ users, dealers, warehouses, showrooms }: Props) {
   const [status, setStatus] = useState("ACTIVE");
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const router = useRouter();
+  const [, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
   const filteredUsers = users.filter((u) => {
@@ -98,18 +102,30 @@ export function UsersClient({ users, dealers, warehouses, showrooms }: Props) {
     };
 
     try {
+      let res;
       if (editingUser) {
-        await updateUserAction(editingUser.id, payload);
+        res = await updateUserAction(editingUser.id, payload);
       } else {
         if (!password) {
-          throw new Error("Password is required for new users.");
+          setError("Password is required for new users.");
+          setIsSubmitting(false);
+          return;
         }
-        await createUserAction(payload);
+        res = await createUserAction(payload);
       }
+
+      if (!res.ok) {
+        setError(res.error);
+        setIsSubmitting(false);
+        return;
+      }
+
       setModalOpen(false);
-      window.location.reload();
+      setIsSubmitting(false);
+      toast.success(editingUser ? "User updated." : "User created.");
+      startTransition(() => router.refresh());
     } catch (err: any) {
-      setError(err.message || "Operation failed.");
+      setError(err?.message || "Operation failed. Please try again.");
       setIsSubmitting(false);
     }
   };
@@ -120,10 +136,15 @@ export function UsersClient({ users, dealers, warehouses, showrooms }: Props) {
     if (!confirm(confirmMsg)) return;
 
     try {
-      await deactivateUserAction(user.id, targetStatus as any);
-      window.location.reload();
+      const res = await deactivateUserAction(user.id, targetStatus as any);
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      toast.success(`${user.name} is now ${targetStatus.toLowerCase()}.`);
+      startTransition(() => router.refresh());
     } catch (err: any) {
-      alert(`Status update failed: ${err.message}`);
+      toast.error(err?.message || "Status update failed.");
     }
   };
 
@@ -150,8 +171,9 @@ export function UsersClient({ users, dealers, warehouses, showrooms }: Props) {
       </div>
 
       {/* USERS DATA TABLE */}
-      <div className="overflow-hidden rounded-xl border border-[#EAEAEA] bg-white shadow-xs">
-        <table className="w-full text-left text-xs border-collapse">
+      {/* Scrolls within its own container so the page body never does (§26). */}
+      <div className="overflow-x-auto rounded-xl border border-[#EAEAEA] bg-white shadow-xs">
+        <table className="w-full min-w-[720px] text-left text-xs border-collapse">
           <thead className="border-b border-[#EAEAEA] bg-[#F7F7F5] text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
             <tr>
               <th className="px-4 py-4">User Details</th>

@@ -80,6 +80,9 @@ model User {
 
   @@index([status])
   @@index([role])
+  // Notification audience resolution filters on both at once.
+  @@index([role, status])
+  @@index([showroomId])
 }
 
 // ————— Catalogue —————
@@ -232,6 +235,10 @@ model Product {
   @@index([featured])
   @@index([collection])
   @@index([sourceImportId])
+  @@index([name])
+  @@index([status, deletedAt])
+  @@index([sku])
+  @@index([productCode])
 }
 
 // ————— Portfolio / Gallery / Video / Testimonials —————
@@ -1292,6 +1299,11 @@ model StockBlock {
   @@index([status])
   @@index([expiresAt])
   @@index([createdById])
+  @@index([showroomId])
+  @@index([createdAt])
+  @@index([status, createdAt])
+  @@index([showroomId, status])
+  @@index([status, expiresAt])
 }
 
 model InventoryMovement {
@@ -1470,6 +1482,8 @@ model Notification {
   @@index([userId])
   @@index([isRead])
   @@index([createdAt])
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
 }
 
 model Announcement {

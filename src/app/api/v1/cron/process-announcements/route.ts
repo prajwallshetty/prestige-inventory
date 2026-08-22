@@ -1,15 +1,19 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { publishScheduledAnnouncements, expireAnnouncements } from "@/services/NotificationService";
+import { assertCronAuthorized } from "@/lib/cron-auth";
+
+export const dynamic = "force-dynamic";
 
 /**
  * Promotes due scheduled announcements and retires expired ones.
  *
- * Without this the `scheduledAt` / `expiresAt` columns are inert — an
- * announcement scheduled for later would simply never be delivered. Point a
- * scheduler at this route (Vercel Cron, an external pinger, etc.); a few
- * minutes' granularity is fine.
+ * Also runs on a timer inside the server process (`src/instrumentation.ts`);
+ * this route exists for an external scheduler and for manual operation.
  */
-export async function GET() {
+async function handle(req: NextRequest) {
+  const denied = assertCronAuthorized(req);
+  if (denied) return denied;
+
   try {
     const [scheduled, expired] = await Promise.all([
       publishScheduledAnnouncements(),
@@ -23,6 +27,9 @@ export async function GET() {
     });
   } catch (error: any) {
     console.error("[CRON ANNOUNCEMENTS ERROR]:", error);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return NextResponse.json({ success: false, error: "Announcement sweep failed." }, { status: 500 });
   }
 }
+
+export const GET = handle;
+export const POST = handle;

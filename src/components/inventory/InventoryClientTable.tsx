@@ -2,6 +2,8 @@
 
 import React, { useState, useEffect, useTransition } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { toast } from "sonner";
+import { isOffline, OFFLINE_MESSAGE } from "@/lib/offline";
 import { adjustStockAction, createBlockAction, getDealersAndWarehousesAction } from "@/app/actions";
 import { 
   Search, 
@@ -37,6 +39,9 @@ interface Props {
   };
   brands: any[];
   categories: any[];
+  /** Distinct values that actually exist in the catalogue (spec §21). */
+  sizes?: string[];
+  collections?: string[];
   session?: {
     role: string;
     dealerId?: string;
@@ -44,7 +49,7 @@ interface Props {
   };
 }
 
-export function InventoryClientTable({ initialData, brands, categories, session }: Props) {
+export function InventoryClientTable({ initialData, brands, categories, sizes = [], collections = [], session }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -54,6 +59,9 @@ export function InventoryClientTable({ initialData, brands, categories, session 
   const currentBrandId = searchParams.get("brandId") || "";
   const currentCategoryId = searchParams.get("categoryId") || "";
   const currentStatus = searchParams.get("status") || "";
+  const currentSize = searchParams.get("size") || "";
+  const currentCollection = searchParams.get("collection") || "";
+  const currentSort = searchParams.get("sort") || "newest";
   const currentPage = parseInt(searchParams.get("page") || "1");
   const currentLimit = parseInt(searchParams.get("limit") || "20");
 
@@ -112,8 +120,17 @@ export function InventoryClientTable({ initialData, brands, categories, session 
     }
   }, [session]);
 
-  const isDealer = session?.role === "DEALER";
-  const isReadOnly = session?.role === "VIEWER";
+  // The DEALER login role was retired in Phase 1; WEAVER is the read-only role.
+  const isDealer = false;
+  const isReadOnly = session?.role === "WEAVER";
+  // Only these roles may raise a block, and only a Super Admin may adjust
+  // physical stock — the same rules the server enforces.
+  const canBlock =
+    session?.role === "SUPER_ADMIN" ||
+    session?.role === "MANAGER" ||
+    session?.role === "SHOWROOM_INCHARGE" ||
+    session?.role === "SHOWROOM_STAFF";
+  const canAdjust = session?.role === "SUPER_ADMIN";
 
   const items = initialData.items || [];
   const total = initialData.total ?? items.length;
@@ -206,7 +223,44 @@ export function InventoryClientTable({ initialData, brands, categories, session 
             <option value="BLOCKED">Blocked</option>
           </select>
 
-          {(currentSearch || currentBrandId || currentCategoryId || currentStatus) && (
+          <select
+            value={currentSize}
+            onChange={(e) => updateFilters({ size: e.target.value })}
+            aria-label="Filter by size"
+            className="min-h-[40px] rounded-lg border border-[#EAEAEA] bg-white p-2 text-xs text-[#111111] focus:border-[#F2C202] focus:outline-hidden cursor-pointer"
+          >
+            <option value="">All Sizes</option>
+            {sizes.map((sz) => (
+              <option key={sz} value={sz}>{sz}</option>
+            ))}
+          </select>
+
+          <select
+            value={currentCollection}
+            onChange={(e) => updateFilters({ collection: e.target.value })}
+            aria-label="Filter by collection"
+            className="min-h-[40px] rounded-lg border border-[#EAEAEA] bg-white p-2 text-xs text-[#111111] focus:border-[#F2C202] focus:outline-hidden cursor-pointer"
+          >
+            <option value="">All Collections</option>
+            {collections.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+
+          <select
+            value={currentSort}
+            onChange={(e) => updateFilters({ sort: e.target.value })}
+            aria-label="Sort products"
+            className="min-h-[40px] rounded-lg border border-[#EAEAEA] bg-white p-2 text-xs text-[#111111] focus:border-[#F2C202] focus:outline-hidden cursor-pointer"
+          >
+            <option value="newest">Newest first</option>
+            <option value="name_asc">Name A–Z</option>
+            <option value="name_desc">Name Z–A</option>
+            <option value="stock_desc">Most available</option>
+            <option value="stock_asc">Least available</option>
+          </select>
+
+          {(currentSearch || currentBrandId || currentCategoryId || currentStatus || currentSize || currentCollection || currentSort !== "newest") && (
             <button
               onClick={() => {
                 setSearch("");
@@ -303,17 +357,29 @@ export function InventoryClientTable({ initialData, brands, categories, session 
                       ) : (
                         <>
                           <button
-                            onClick={() => setAdjustingProduct(item)}
+                            onClick={() => setSelectedProduct(item)}
                             className="rounded-lg border border-[#EAEAEA] bg-white px-2.5 py-1.5 text-[10px] font-bold text-[#6B6B6B] hover:bg-[#F7F7F5] hover:text-[#111111] transition-all touch-target"
                           >
-                            Adjust
+                            Inspect
                           </button>
-                          <button
-                            onClick={() => setBlockingProduct(item)}
-                            className="rounded-lg border border-blue-500/25 bg-blue-50 px-2.5 py-1.5 text-[10px] font-bold text-blue-600 hover:bg-blue-600 hover:text-white transition-all touch-target"
-                          >
-                            Block
-                          </button>
+                          {canAdjust && (
+                            <button
+                              onClick={() => setAdjustingProduct(item)}
+                              className="rounded-lg border border-[#EAEAEA] bg-white px-2.5 py-1.5 text-[10px] font-bold text-[#6B6B6B] hover:bg-[#F7F7F5] hover:text-[#111111] transition-all touch-target"
+                            >
+                              Adjust
+                            </button>
+                          )}
+                          {canBlock && (
+                            <button
+                              onClick={() => setBlockingProduct(item)}
+                              disabled={item.availableStock <= 0}
+                              title={item.availableStock <= 0 ? "No stock available to block" : undefined}
+                              className="rounded-lg border border-blue-500/25 bg-blue-50 px-2.5 py-1.5 text-[10px] font-bold text-blue-600 transition-all touch-target hover:bg-blue-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-blue-50 disabled:hover:text-blue-600"
+                            >
+                              Block
+                            </button>
+                          )}
                         </>
                       )}
                     </div>
@@ -374,7 +440,7 @@ export function InventoryClientTable({ initialData, brands, categories, session 
                           Book Stock
                         </Link>
                       )}
-                      {!isDealer && !isReadOnly && (
+                      {canAdjust && (
                         <>
                           <button
                             onClick={() => { setAdjustingProduct(item); setMobileMenuOpen(null); }}
@@ -679,20 +745,25 @@ export function InventoryClientTable({ initialData, brands, categories, session 
                 >
                   Book Stock Hold
                 </Link>
-              ) : !isReadOnly && (
+              ) : (canAdjust || canBlock) && (
                 <>
+                  {canAdjust && (
                   <button
                     onClick={() => { setAdjustingProduct(selectedProduct); setSelectedProduct(null); }}
                     className="w-full rounded-xl border border-[#EAEAEA] bg-white py-3 text-xs font-bold text-[#6B6B6B] hover:bg-[#F7F7F5] hover:text-[#111111]"
                   >
                     Adjust Stock
                   </button>
-                  <button
-                    onClick={() => { setBlockingProduct(selectedProduct); setSelectedProduct(null); }}
-                    className="w-full rounded-xl bg-blue-600 py-3 text-xs font-bold text-white hover:bg-blue-500"
-                  >
-                    Create Hold
-                  </button>
+                  )}
+                  {canBlock && (
+                    <button
+                      onClick={() => { setBlockingProduct(selectedProduct); setSelectedProduct(null); }}
+                      disabled={selectedProduct.availableStock <= 0}
+                      className="w-full rounded-xl bg-blue-600 py-3 text-xs font-bold text-white transition-all hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {selectedProduct.availableStock > 0 ? "Create Hold" : "No stock available"}
+                    </button>
+                  )}
                 </>
               )}
             </div>
@@ -717,10 +788,25 @@ export function InventoryClientTable({ initialData, brands, categories, session 
 
             <form
               action={async (formData) => {
+                if (isOffline()) {
+                  toast.error(OFFLINE_MESSAGE);
+                  return;
+                }
                 setLoading(true);
-                await adjustStockAction(formData);
-                setLoading(false);
-                setAdjustingProduct(null);
+                try {
+                  const result = await adjustStockAction(formData);
+                  if (!result.ok) {
+                    toast.error(result.error);
+                    return;
+                  }
+                  toast.success("Stock adjusted.");
+                  setAdjustingProduct(null);
+                  startTransition(() => router.refresh());
+                } catch {
+                  toast.error("Connection failed. Please try again.");
+                } finally {
+                  setLoading(false);
+                }
               }}
               className="mt-4 space-y-4"
             >
@@ -788,13 +874,25 @@ export function InventoryClientTable({ initialData, brands, categories, session 
               Available to Lock: <strong className="text-emerald-600">{blockingProduct.availableStock} Boxes</strong>
             </p>            <form
               action={async (formData) => {
+                if (isOffline()) {
+                  toast.error(OFFLINE_MESSAGE);
+                  return;
+                }
                 setButtonState("CREATING");
                 try {
-                  await createBlockAction(formData);
+                  const result = await createBlockAction(formData);
+                  if (!result.ok) {
+                    // The modal stays open so the quantity can be corrected
+                    // against the message rather than retyped from scratch.
+                    toast.error(result.error);
+                    return;
+                  }
                   setButtonState("SUCCESS");
+                  toast.success(`Block ${result.data.blockNumber} created.`);
                   setBlockingProduct(null);
-                } catch (err: any) {
-                  alert(err.message || "Failed to create block.");
+                  startTransition(() => router.refresh());
+                } catch {
+                  toast.error("Connection failed. Please try again.");
                 } finally {
                   setButtonState("IDLE");
                   setLoading(false);

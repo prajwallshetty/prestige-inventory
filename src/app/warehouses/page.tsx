@@ -1,9 +1,14 @@
+import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
+import { getSessionContext } from "@/lib/session";
 import { Warehouse as WarehouseIcon } from "lucide-react";
 
 export const revalidate = 0;
 
 export default async function WarehousesPage() {
+  const session = await getSessionContext();
+  if (!session.authenticated) redirect("/login");
+
   const warehouses = await db.warehouse.findMany({
     include: {
       inventories: true,

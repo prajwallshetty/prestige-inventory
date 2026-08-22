@@ -134,29 +134,48 @@ export async function deleteNotification(userId: string, notificationId: string)
   await deleteCache(notificationsListKey(userId, 20));
 }
 
-/** Translates an audience selection into a User `where` clause. */
+/**
+ * Translates an audience selection into a User `where` clause.
+ *
+ * The retired DEALER and VIEWER values are mapped onto WEAVER — the role that
+ * replaced them. Previously they were passed straight to Prisma as enum
+ * values that no longer exist, so those broadcasts threw instead of sending.
+ * Deactivated accounts are excluded from every audience.
+ */
 function audienceWhere(audienceType: string, audienceFilter?: string | null) {
-  const where: any = {};
-  if (audienceType === "DEALERS") {
-    where.role = "DEALER";
-  } else if (audienceType === "MANAGERS") {
-    where.role = "MANAGER";
-  } else if (audienceType === "SHOWROOM_STAFF") {
-    where.role = "SHOWROOM_STAFF";
-  } else if (audienceType === "SHOWROOM_INCHARGE") {
-    where.role = "SHOWROOM_INCHARGE";
-  } else if (audienceType === "VIEWERS") {
-    where.role = "VIEWER";
-  } else if (audienceType === "SPECIFIC_DEALER") {
-    where.role = "DEALER";
-    where.dealer_id = audienceFilter;
-  } else if (audienceType === "SPECIFIC_SHOWROOM") {
-    where.showroomId = audienceFilter;
-  } else if (audienceType === "SPECIFIC_WAREHOUSE") {
-    where.warehouse_id = audienceFilter;
-  } else if (audienceType === "SPECIFIC_USER") {
-    where.id = audienceFilter;
+  const where: any = { status: "ACTIVE" };
+
+  switch (audienceType) {
+    case "DEALERS":
+    case "VIEWERS":
+      where.role = "WEAVER";
+      break;
+    case "MANAGERS":
+      where.role = "MANAGER";
+      break;
+    case "SHOWROOM_STAFF":
+      where.role = "SHOWROOM_STAFF";
+      break;
+    case "SHOWROOM_INCHARGE":
+      where.role = "SHOWROOM_INCHARGE";
+      break;
+    case "SPECIFIC_DEALER":
+      where.dealer_id = audienceFilter;
+      break;
+    case "SPECIFIC_SHOWROOM":
+      where.showroomId = audienceFilter;
+      break;
+    case "SPECIFIC_WAREHOUSE":
+      where.warehouse_id = audienceFilter;
+      break;
+    case "SPECIFIC_USER":
+      where.id = audienceFilter;
+      break;
+    case "ALL":
+    default:
+      break;
   }
+
   return where;
 }
 
@@ -178,7 +197,7 @@ async function fanOutAnnouncement(
     select: { id: true },
   });
 
-  if (targetUsers.length === 0) return 0;
+  if (targetUsers.length === 0) return [];
 
   const deliveredAt = new Date();
 
@@ -202,22 +221,37 @@ async function fanOutAnnouncement(
     })),
   });
 
-  for (const u of targetUsers) {
-    await deleteCache(unreadCountKey(u.id));
-    await deleteCache(notificationsListKey(u.id, 20));
-    await publishEvent(`user-notifications:${u.id}`, {
-      action: "NEW_NOTIFICATION",
-      notification: {
-        title: `Broadcast: ${announcement.title}`,
-        message: announcement.message,
-        priority: announcement.priority,
-        createdAt: deliveredAt,
-        isRead: false,
-      },
-    });
-  }
+  return targetUsers.map((u: { id: string }) => u.id);
+}
 
-  return targetUsers.length;
+/**
+ * Post-commit side effects for a broadcast: clear each recipient's cached
+ * counters and push the live event. Runs *after* the transaction so no Redis
+ * round trip is ever made while holding database locks (§41).
+ */
+async function publishAnnouncementToRecipients(
+  userIds: string[],
+  announcement: { title: string; message: string; priority: string }
+) {
+  const deliveredAt = new Date();
+  for (const id of userIds) {
+    try {
+      await deleteCache(unreadCountKey(id));
+      await deleteCache(notificationsListKey(id, 20));
+      await publishEvent(`user-notifications:${id}`, {
+        action: "NEW_NOTIFICATION",
+        notification: {
+          title: `Broadcast: ${announcement.title}`,
+          message: announcement.message,
+          priority: announcement.priority,
+          createdAt: deliveredAt,
+          isRead: false,
+        },
+      });
+    } catch {
+      // A cache miss is self-correcting; the notification row is already committed.
+    }
+  }
 }
 
 export async function createAnnouncement({
@@ -242,7 +276,7 @@ export async function createAnnouncement({
 }) {
   const isScheduled = !!scheduledAt && scheduledAt.getTime() > Date.now();
 
-  return await db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     const announcement = await tx.announcement.create({
       data: {
         createdById,
@@ -260,12 +294,15 @@ export async function createAnnouncement({
     // A scheduled announcement stays dormant — no recipients, no
     // notifications — until the cron promotes it. Fanning out at creation
     // time would deliver it immediately and defeat the schedule.
-    if (!isScheduled) {
-      await fanOutAnnouncement(tx, announcement);
-    }
+    const recipientIds = isScheduled ? [] : await fanOutAnnouncement(tx, announcement);
 
-    return announcement;
+    return { ...announcement, recipientIds };
   });
+
+  await publishAnnouncementToRecipients(result.recipientIds, result);
+
+  const { recipientIds, ...announcement } = result;
+  return { ...announcement, recipientCount: recipientIds.length };
 }
 
 /**
@@ -283,20 +320,26 @@ export async function publishScheduledAnnouncements() {
 
   for (const announcement of due) {
     try {
-      await db.$transaction(async (tx) => {
+      const recipientIds = await db.$transaction(async (tx) => {
         // Re-check inside the transaction so two overlapping cron runs can't
         // both fan out the same announcement.
         const fresh = await tx.announcement.findUnique({ where: { id: announcement.id } });
-        if (!fresh || fresh.status !== "SCHEDULED") return;
+        if (!fresh || fresh.status !== "SCHEDULED") return null;
 
-        const count = await fanOutAnnouncement(tx, fresh);
+        const ids = await fanOutAnnouncement(tx, fresh);
         await tx.announcement.update({
           where: { id: fresh.id },
           data: { status: "SENT" },
         });
-        published++;
-        delivered += count;
+        return ids;
       });
+
+      if (recipientIds) {
+        published++;
+        delivered += recipientIds.length;
+        // Outside the transaction, as with an immediate send.
+        await publishAnnouncementToRecipients(recipientIds, announcement);
+      }
     } catch (err) {
       console.error(`[ANNOUNCEMENT SCHEDULER] Failed publishing ${announcement.id}:`, err);
     }
@@ -315,6 +358,14 @@ export async function expireAnnouncements() {
   return { expired: result.count };
 }
 
+/**
+ * Fan-out to several users.
+ *
+ * One `createMany` rather than a round trip per recipient — a block event can
+ * legitimately notify a whole showroom, and the database is remote enough that
+ * the difference is seconds, not milliseconds. Cache invalidation and the
+ * realtime publish still happen per user because both are keyed by user id.
+ */
 export async function sendNotificationsToUsers({
   userIds,
   type,
@@ -331,18 +382,33 @@ export async function sendNotificationsToUsers({
   data?: any;
 }) {
   if (!userIds || userIds.length === 0) return;
-  const uniqueIds = Array.from(new Set(userIds));
+  const uniqueIds = Array.from(new Set(userIds.filter(Boolean)));
+  if (uniqueIds.length === 0) return;
 
-  for (const uid of uniqueIds) {
-    await createNotification({
-      userId: uid,
+  const createdAt = new Date();
+
+  await db.notification.createMany({
+    data: uniqueIds.map((userId) => ({
+      userId,
       type,
       title,
       message,
       priority,
-      data,
-    });
-  }
+      data: data ?? undefined,
+      createdAt,
+    })),
+  });
+
+  await Promise.all(
+    uniqueIds.map(async (userId) => {
+      await deleteCache(unreadCountKey(userId));
+      await deleteCache(notificationsListKey(userId, 20));
+      await publishEvent(`user-notifications:${userId}`, {
+        action: "NEW_NOTIFICATION",
+        notification: { title, message, priority, createdAt, isRead: false },
+      });
+    })
+  );
 }
 
 export async function getAnnouncementsHistory(limit = 20) {

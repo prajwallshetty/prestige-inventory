@@ -1,10 +1,15 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { popQueue } from "@/lib/redis";
 import { createNotification } from "@/services/NotificationService";
+import { assertCronAuthorized } from "@/lib/cron-auth";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+/** Drains the deferred notification queue. Machine-only, like the other jobs. */
+async function handle(req: NextRequest) {
+  const denied = assertCronAuthorized(req);
+  if (denied) return denied;
+
   let processedCount = 0;
   const maxPerBatch = 20;
 
@@ -26,12 +31,12 @@ export async function GET() {
       }
     }
 
-    return NextResponse.json({
-      success: true,
-      processed: processedCount,
-    });
+    return NextResponse.json({ success: true, processed: processedCount });
   } catch (error: any) {
     console.error("[QUEUE WORKER ERROR]:", error);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return NextResponse.json({ success: false, error: "Queue worker failed." }, { status: 500 });
   }
 }
+
+export const GET = handle;
+export const POST = handle;

@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { getBookingList, getBookingSummary } from "@/services/BookingService";
 import { getSessionContext } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -11,6 +12,8 @@ export default async function BookingsPage({
   searchParams?: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
   const session = await getSessionContext();
+  if (!session.authenticated) redirect("/login");
+
   const params = (await searchParams) || {};
 
   // Build filters based on URL parameters and user role security scopes
@@ -21,9 +24,7 @@ export default async function BookingsPage({
   };
 
   // Enforce security scopes
-  if (session.role === "DEALER") {
-    filters.dealerId = session.dealerId || "abc-dealer-id-placeholder";
-  } else if (session.role === "MANAGER") {
+  if (session.role === "MANAGER") {
     filters.warehouseId = session.warehouseId || undefined;
   } else if (session.role === "SHOWROOM_STAFF" || session.role === "SHOWROOM_INCHARGE") {
     filters.requestedBy = session.name;
@@ -73,13 +74,11 @@ export default async function BookingsPage({
       <div className="space-y-6">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-white">
-              {session.role === "DEALER" ? "My Stock Reservations" : "Stock Reservation Management Queue"}
+            <h1 className="text-2xl font-bold tracking-tight text-[#111111]">
+              {"Stock Reservation Management Queue"}
             </h1>
-            <p className="text-xs text-slate-400">
-              {session.role === "DEALER" 
-                ? "Track your submitted hold requests, confirm approved allocations, and monitor timers."
-                : "Review, approve, hold, or dispatch dealer stock holdings, and view queue metrics."}
+            <p className="text-xs text-[#6B6B6B]">
+              Review, approve, hold, or dispatch dealer stock holdings, and view queue metrics.
             </p>
           </div>
         </div>

@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { OFFLINE_MESSAGE } from "@/lib/offline";
 import { Search, Package, X, Loader2, AlertCircle, WifiOff } from "lucide-react";
 import {
   searchBlockableProductsAction,
@@ -61,22 +62,32 @@ export function CreateBlockForm({ dealers, showroomName, createdByName, createdB
 
   // Debounced server-side search — the catalogue is far too large to ship to
   // the browser, so every keystroke queries the database instead (spec §7).
+  //
+  // `searchSeq` discards out-of-order responses: typing "ACR" then "BEI" fires
+  // two requests, and without this the slower "ACR" reply can land last and
+  // overwrite the results the operator is actually looking at (spec §24).
+  const searchSeq = useRef(0);
   useEffect(() => {
     if (selected) return;
     const q = query.trim();
     if (q.length < 2) {
+      searchSeq.current++;
       setResults([]);
+      setSearching(false);
       return;
     }
     setSearching(true);
     const t = setTimeout(async () => {
+      const seq = ++searchSeq.current;
       try {
         const hits = await searchBlockableProductsAction(q);
+        if (seq !== searchSeq.current) return; // a newer query has since fired
         setResults(hits);
       } catch {
+        if (seq !== searchSeq.current) return;
         setResults([]);
       } finally {
-        setSearching(false);
+        if (seq === searchSeq.current) setSearching(false);
       }
     }, 220);
     return () => clearTimeout(t);
@@ -112,7 +123,7 @@ export function CreateBlockForm({ dealers, showroomName, createdByName, createdB
     setError(null);
 
     if (!online) {
-      setError("You are offline. Reconnect to create a block.");
+      setError(OFFLINE_MESSAGE);
       return;
     }
     if (!selected) return setError("Please select a product.");
@@ -124,26 +135,30 @@ export function CreateBlockForm({ dealers, showroomName, createdByName, createdB
     inFlight.current = true;
     setSubmitting(true);
     try {
-      const created = await createBlockFromFormAction({
+      const result = await createBlockFromFormAction({
         productId: selected.id,
         quantity: qtyNum,
         dealerId: dealerId || undefined,
         remarks: remarks || undefined,
         durationHours: Number(durationHours) || 48,
       });
-      toast.success(`Block ${created.blockNumber} created.`);
-      router.push(`/blocks/${created.id}`);
-    } catch (err: any) {
-      // Form state is intentionally preserved so the operator can adjust the
-      // quantity rather than re-enter everything (spec §32).
-      setError(err?.message || "Could not create the block. Please try again.");
-      if (selected) {
+
+      if (!result.ok) {
+        // Form state is intentionally preserved so the operator can adjust the
+        // quantity rather than re-enter everything.
+        setError(result.error);
         try {
           setAvailable(await getAvailableToBlockAction(selected.id));
         } catch {
           /* leave the previous figure */
         }
+        return;
       }
+
+      toast.success(`Block ${result.data.blockNumber} created.`);
+      router.push(`/blocks/${result.data.id}`);
+    } catch {
+      setError("Connection failed. Please check your network and try again.");
     } finally {
       setSubmitting(false);
       inFlight.current = false;
@@ -155,7 +170,7 @@ export function CreateBlockForm({ dealers, showroomName, createdByName, createdB
       {!online && (
         <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-900">
           <WifiOff className="h-4 w-4 shrink-0" />
-          You are offline. Reconnect to create a block.
+          {OFFLINE_MESSAGE}
         </div>
       )}
 
