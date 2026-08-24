@@ -13,7 +13,8 @@
     "test:rbac": "tsx scripts/test-http-rbac.ts",
     "db:indexes": "tsx scripts/apply-indexes.ts",
     "db:repair": "tsx scripts/repair-data.ts",
-    "db:reconcile": "tsx scripts/reconcile-stock.ts"
+    "db:reconcile": "tsx scripts/reconcile-stock.ts",
+    "reset:inventory": "tsx scripts/reset-and-import-inventory.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

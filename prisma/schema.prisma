@@ -116,6 +116,78 @@ model Category {
   @@index([deletedAt])
 }
 
+// ————— Multi-Category Product Architecture —————
+
+model ProductType {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  description String?
+  icon        String?
+  image       String?
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  products             Product[]
+  attributeDefinitions ProductAttributeDefinition[]
+
+  @@index([isActive])
+  @@index([sortOrder])
+}
+
+model ProductAttributeDefinition {
+  id            String      @id @default(cuid())
+  productTypeId String
+  productType   ProductType @relation(fields: [productTypeId], references: [id], onDelete: Cascade)
+  name          String
+  key           String
+  dataType      String      @default("text") // text | number | boolean | select
+  unit          String?
+  options       Json?       // string[] for select type
+  isRequired    Boolean     @default(false)
+  isFilterable  Boolean     @default(true)
+  sortOrder     Int         @default(0)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  values ProductAttributeValue[]
+
+  @@unique([productTypeId, key])
+  @@index([productTypeId])
+}
+
+model ProductAttributeValue {
+  id                    String                     @id @default(cuid())
+  productId             String
+  product               Product                    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  attributeDefinitionId String
+  attributeDefinition   ProductAttributeDefinition @relation(fields: [attributeDefinitionId], references: [id], onDelete: Cascade)
+  value                 String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([productId, attributeDefinitionId])
+  @@index([productId])
+  @@index([attributeDefinitionId])
+}
+
+model Unit {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  symbol    String
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products Product[]
+
+  @@index([isActive])
+}
+
 model Brand {
   id          String  @id @default(cuid())
   slug        String  @unique
@@ -200,6 +272,14 @@ model Product {
   brandId    String?
   brand      Brand?    @relation(fields: [brandId], references: [id], onDelete: SetNull)
 
+  productTypeId String?
+  productType   ProductType? @relation(fields: [productTypeId], references: [id], onDelete: SetNull)
+
+  unitId       String?
+  unitRelation Unit?   @relation(fields: [unitId], references: [id], onDelete: SetNull)
+
+  attributeValues ProductAttributeValue[]
+
   seo Seo?
   inventory Inventory?
   inventoryHistory InventoryHistory[]
@@ -230,6 +310,8 @@ model Product {
 
   @@index([categoryId])
   @@index([brandId])
+  @@index([productTypeId])
+  @@index([unitId])
   @@index([collectionId])
   @@index([published, deletedAt])
   @@index([featured])
@@ -1219,6 +1301,20 @@ model Inventory {
   reorderLevel   Float     @default(0)
   stockStatus    String    @default("OUT_OF_STOCK") // AVAILABLE | LOW_STOCK | OUT_OF_STOCK | INCOMING | BLOCKED | PARTIALLY_AVAILABLE | DAMAGED
   deliveredStock Float     @default(0)
+  brand          String?
+  productName    String?
+  productNumber  String?
+  size           String?
+  remarks        String?
+  sourceFile     String?
+  sourceSheet    String?
+  sourceRow      Int?
+  originalRawData Json?
+  needsReview    Boolean   @default(false)
+  matchConfidence Float?
+  importBatchId  String?
+  importBatch    InventoryImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
+
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -1228,6 +1324,56 @@ model Inventory {
 
   @@index([warehouseId])
   @@index([stockStatus])
+  @@index([importBatchId])
+  @@index([needsReview])
+}
+
+model InventoryImportBatch {
+  id                    String      @id
+  sourceFile            String
+  importDate            DateTime    @default(now())
+  recordsProcessed      Int         @default(0)
+  recordsImported       Int         @default(0)
+  recordsMatched        Int         @default(0)
+  recordsUnmatched      Int         @default(0)
+  recordsNeedsReview    Int         @default(0)
+  recordsRejected       Int         @default(0)
+  totalPhysicalStock    Float       @default(0)
+  totalBlockedStock     Float       @default(0)
+  totalAvailableStock   Float       @default(0)
+  excludedDepletedRows  Int         @default(0)
+  excludedInTransitRows Int         @default(0)
+  status                String      @default("COMPLETED")
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+
+  inventoryRecords      Inventory[]
+  reviewQueueItems      InventoryReviewQueue[]
+}
+
+model InventoryReviewQueue {
+  id                    String               @id @default(cuid())
+  importBatchId         String
+  importBatch           InventoryImportBatch @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
+  sourceSheet           String
+  sourceRow             Int
+  rawData               Json
+  detectedBrand         String?
+  detectedSize          String?
+  detectedProductName   String?
+  detectedProductNumber String?
+  matchCandidates       Json?
+  matchConfidence       Float?
+  reasonForReview       String
+  status                String               @default("PENDING")
+  resolvedProductId     String?
+  resolvedAt            DateTime?
+  resolvedBy            String?
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+
+  @@index([importBatchId])
+  @@index([status])
 }
 
 enum BlockedBy {

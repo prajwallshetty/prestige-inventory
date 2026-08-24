@@ -23,6 +23,7 @@ export default async function InventoryPage({
     search: first(params.search),
     brandId: first(params.brandId),
     categoryId: first(params.categoryId),
+    productTypeId: first(params.productTypeId),
     collection: first(params.collection),
     size: first(params.size),
     finish: first(params.finish),
@@ -55,6 +56,7 @@ export default async function InventoryPage({
         initialData={inventoryData}
         brands={facets.brands}
         categories={facets.categories}
+        productTypes={facets.productTypes}
         sizes={facets.sizes}
         collections={facets.collections}
         session={session}

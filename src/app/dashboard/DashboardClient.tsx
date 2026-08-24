@@ -29,6 +29,12 @@ interface Props {
     outOfStock: number;
     activeBlocks: number;
     pendingBlocks: number;
+    stockDetails?: {
+      available: { box: number; pc: number; bag: number };
+      blocked: { box: number; pc: number; bag: number };
+      transit: { box: number; pc: number; bag: number };
+      total: { box: number; pc: number; bag: number };
+    };
   };
   recentMovements: any[];
   pendingBlocks: any[];
@@ -238,7 +244,13 @@ export function DashboardClient({
             Monitor live stock balances, verify dealer holds, and oversee logistics dispatch.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            href="/admin/product-types"
+            className="rounded-lg border border-[#EAEAEA] bg-white px-3 py-2 text-xs font-bold text-[#111111] hover:bg-[#F7F7F5] transition-all flex items-center gap-1.5 touch-target shadow-xs"
+          >
+            <Boxes className="h-3.5 w-3.5 text-indigo-600" /> Categories & Types
+          </Link>
           <Link
             href="/bookings"
             className="rounded-lg bg-[#F2C202] px-4 py-2 text-xs font-black text-white shadow-xs hover:bg-[#D8AD02] transition-all flex items-center gap-1.5 touch-target"
@@ -288,9 +300,48 @@ export function DashboardClient({
       {/* METRICS GRID */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <MetricCard title="Total Catalog Products" value={summary.totalProducts.toLocaleString()} icon={Boxes} color="blue" />
-        <MetricCard title="Available Stock" value={`${summary.totalAvailableStock.toLocaleString()} Box`} icon={PackageCheck} color="emerald" />
-        <MetricCard title="Blocked Hold" value={`${summary.totalBlockedStock.toLocaleString()} Box`} icon={Lock} color="amber" />
-        <MetricCard title="Transit Stock" value={`${summary.totalInTransit.toLocaleString()} Box`} icon={Truck} color="indigo" />
+        <MetricCard 
+          title="Available Stock" 
+          value={(() => {
+            const d = summary.stockDetails?.available;
+            if (!d) return `${summary.totalAvailableStock.toLocaleString()} Box`;
+            const parts = [];
+            if (d.box > 0) parts.push(`${d.box.toLocaleString()} Box`);
+            if (d.pc > 0) parts.push(`${d.pc.toLocaleString()} Pc`);
+            if (d.bag > 0) parts.push(`${d.bag.toLocaleString()} Bag`);
+            return parts.length > 0 ? parts.join(" • ") : "0 Box";
+          })()} 
+          icon={PackageCheck} 
+          color="emerald" 
+        />
+        <MetricCard 
+          title="Blocked Hold" 
+          value={(() => {
+            const d = summary.stockDetails?.blocked;
+            if (!d) return `${summary.totalBlockedStock.toLocaleString()} Box`;
+            const parts = [];
+            if (d.box > 0) parts.push(`${d.box.toLocaleString()} Box`);
+            if (d.pc > 0) parts.push(`${d.pc.toLocaleString()} Pc`);
+            if (d.bag > 0) parts.push(`${d.bag.toLocaleString()} Bag`);
+            return parts.length > 0 ? parts.join(" • ") : "0 Box";
+          })()} 
+          icon={Lock} 
+          color="amber" 
+        />
+        <MetricCard 
+          title="Transit Stock" 
+          value={(() => {
+            const d = summary.stockDetails?.transit;
+            if (!d) return `${summary.totalInTransit.toLocaleString()} Box`;
+            const parts = [];
+            if (d.box > 0) parts.push(`${d.box.toLocaleString()} Box`);
+            if (d.pc > 0) parts.push(`${d.pc.toLocaleString()} Pc`);
+            if (d.bag > 0) parts.push(`${d.bag.toLocaleString()} Bag`);
+            return parts.length > 0 ? parts.join(" • ") : "0 Box";
+          })()} 
+          icon={Truck} 
+          color="indigo" 
+        />
         <MetricCard title="Low / Out stock" value={`${summary.lowStock} / ${summary.outOfStock}`} icon={AlertTriangle} color="rose" />
       </div>
 

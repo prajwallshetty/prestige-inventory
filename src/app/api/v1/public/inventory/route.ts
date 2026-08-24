@@ -41,10 +41,9 @@ export async function GET(request: Request) {
       product_id: p.id,
       sku: p.sku || p.productCode,
       tile_name: p.name,
-      size: p.size || "Standard",
-      brand: p.brand?.name || "Prestige",
+      size: p.size || null,
+      brand: p.brand?.name || null,
       stock_available: p.inventory?.availableStock ?? 0,
-      in_transit_stock: p.inventory?.transitStock ?? 0,
       status: p.inventory?.stockStatus ?? "OUT_OF_STOCK",
       product_image: getProductImageUrl(p) || "",
     }));

@@ -630,6 +630,8 @@ export async function globalSearchAction(query: string): Promise<GlobalSearchRes
   const q = (query || "").trim();
   if (q.length < 2) return EMPTY_SEARCH;
 
+  const { productSearchClause } = await import("@/services/InventoryService");
+  const productClause = productSearchClause(q);
   const like = { contains: q, mode: "insensitive" as const };
   const role = session.role as Role;
   const showroomScoped = role === "SHOWROOM_STAFF" || role === "SHOWROOM_INCHARGE";
@@ -639,18 +641,7 @@ export async function globalSearchAction(query: string): Promise<GlobalSearchRes
     db.product.findMany({
       where: {
         deletedAt: null,
-        OR: [
-          { name: like },
-          { sku: like },
-          { productCode: like },
-          { importKey: like },
-          { size: like },
-          { collection: like },
-          { finish: like },
-          { surface: like },
-          { brand: { is: { name: like } } },
-          { category: { is: { name: like } } },
-        ],
+        ...(productClause && productClause.length > 0 ? { AND: productClause } : {}),
       },
       take: 6,
       select: {
@@ -680,6 +671,8 @@ export async function globalSearchAction(query: string): Promise<GlobalSearchRes
               { dealer: { is: { name: like } } },
               { dealer: { is: { dealerId: like } } },
               { inventory: { is: { product: { is: { name: like } } } } },
+              { inventory: { is: { product: { is: { sku: like } } } } },
+              { inventory: { is: { product: { is: { productCode: like } } } } },
             ],
           },
         ],

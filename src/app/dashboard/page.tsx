@@ -105,8 +105,8 @@ export default async function DashboardPage() {
     inventory: m.inventory ? {
       product: {
         name: m.inventory.product.name,
-        sku: m.inventory.product.sku || m.inventory.productId.slice(-6).toUpperCase(),
-        size: m.inventory.product.size || "Standard",
+        sku: m.inventory.product.sku || null,
+        size: m.inventory.product.size || null,
       }
     } : null
   }));

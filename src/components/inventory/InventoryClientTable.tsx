@@ -39,6 +39,7 @@ interface Props {
   };
   brands: any[];
   categories: any[];
+  productTypes?: any[];
   /** Distinct values that actually exist in the catalogue (spec §21). */
   sizes?: string[];
   collections?: string[];
@@ -58,6 +59,7 @@ export function InventoryClientTable({ initialData, brands, categories, sizes = 
   const currentSearch = searchParams.get("search") || "";
   const currentBrandId = searchParams.get("brandId") || "";
   const currentCategoryId = searchParams.get("categoryId") || "";
+  const currentProductTypeId = searchParams.get("productTypeId") || "";
   const currentStatus = searchParams.get("status") || "";
   const currentSize = searchParams.get("size") || "";
   const currentCollection = searchParams.get("collection") || "";
@@ -188,6 +190,21 @@ export function InventoryClientTable({ initialData, brands, categories, sizes = 
 
         {/* Dropdown Filters */}
         <div className="flex flex-wrap items-center gap-2">
+          {productTypes && productTypes.length > 0 && (
+            <select
+              value={currentProductTypeId}
+              onChange={(e) => updateFilters({ productTypeId: e.target.value })}
+              className="rounded-lg border border-[#F2C202]/40 bg-[#F7F7F5] p-2 text-xs text-[#111111] font-semibold focus:border-[#F2C202] focus:outline-hidden cursor-pointer"
+            >
+              <option value="">All Product Types</option>
+              {productTypes.map((pt) => (
+                <option key={pt.value} value={pt.value}>
+                  {pt.label} ({pt.count})
+                </option>
+              ))}
+            </select>
+          )}
+
           <select
             value={currentBrandId}
             onChange={(e) => updateFilters({ brandId: e.target.value })}
@@ -289,7 +306,6 @@ export function InventoryClientTable({ initialData, brands, categories, sizes = 
               <th className="px-4 py-4">Size</th>
               <th className="px-4 py-4 text-right">Available</th>
               <th className="px-4 py-4 text-right font-mono">Blocked</th>
-              <th className="px-4 py-4 text-right">In Transit</th>
               <th className="px-4 py-4 text-center">Blocked By</th>
               <th className="px-4 py-4 text-center">Status</th>
               <th className="px-4 py-4 text-center">Actions</th>
@@ -311,7 +327,7 @@ export function InventoryClientTable({ initialData, brands, categories, sizes = 
                       wrapperClassName="h-10 w-10 relative overflow-hidden rounded-lg mx-auto border border-[#EAEAEA]"
                     />
                   </td>
-                  <td className="px-4 py-3.5 font-bold font-mono text-[#111111]">{item.sku}</td>
+                  <td className="px-4 py-3.5 font-bold font-mono text-[#111111]">{item.sku || "—"}</td>
                   <td className="px-4 py-3.5">
                     <button
                       onClick={() => setSelectedProduct(item)}
@@ -320,11 +336,10 @@ export function InventoryClientTable({ initialData, brands, categories, sizes = 
                       {item.productName}
                     </button>
                   </td>
-                  <td className="px-4 py-3.5 text-[#6B6B6B]">{item.brandName}</td>
-                  <td className="px-4 py-3.5 text-[#6B6B6B] font-mono">{item.size}</td>
+                  <td className="px-4 py-3.5 text-[#6B6B6B]">{item.brandName || "—"}</td>
+                  <td className="px-4 py-3.5 text-[#6B6B6B] font-mono">{item.size || "—"}</td>
                   <td className="px-4 py-3.5 text-right font-black text-emerald-600 font-mono">{item.availableStock.toLocaleString()} Box</td>
                   <td className="px-4 py-3.5 text-right text-amber-600 font-mono">{item.blockedStock.toLocaleString()} Box</td>
-                  <td className="px-4 py-3.5 text-right text-indigo-600 font-mono">{item.transitStock.toLocaleString()} Box</td>
                   <td className="px-4 py-3.5 text-center">
                     <div className="flex flex-wrap items-center justify-center gap-1">
                       {uniqueBlockedBy.map((name) => (
@@ -413,8 +428,8 @@ export function InventoryClientTable({ initialData, brands, categories, sizes = 
                 />
                 <div className="flex-1 min-w-0">
                   <h4 className="text-xs font-black text-[#111111] truncate">{item.productName}</h4>
-                  <p className="text-[10px] text-[#6B6B6B] mt-0.5">{item.brandName}</p>
-                  <p className="text-[10px] text-[#6B6B6B] font-mono">{item.size}</p>
+                  <p className="text-[10px] text-[#6B6B6B] mt-0.5">{item.brandName || "—"}</p>
+                  <p className="text-[10px] text-[#6B6B6B] font-mono">{item.size || "—"}</p>
                 </div>
                 <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
                   <button
@@ -462,7 +477,7 @@ export function InventoryClientTable({ initialData, brands, categories, sizes = 
               </div>
 
               {/* Stock Balances */}
-              <div className="grid grid-cols-3 gap-2 py-2 border-y border-[#EAEAEA] text-center bg-[#F7F7F5] rounded-lg">
+              <div className="grid grid-cols-2 gap-2 py-2 border-y border-[#EAEAEA] text-center bg-[#F7F7F5] rounded-lg">
                 <div>
                   <p className="text-[9px] uppercase font-bold text-[#6B6B6B]">Available</p>
                   <p className="text-xs font-black text-emerald-600 mt-0.5">{item.availableStock} Box</p>
@@ -470,10 +485,6 @@ export function InventoryClientTable({ initialData, brands, categories, sizes = 
                 <div>
                   <p className="text-[9px] uppercase font-bold text-[#6B6B6B]">Blocked</p>
                   <p className="text-xs font-bold text-amber-600 mt-0.5">{item.blockedStock} Box</p>
-                </div>
-                <div>
-                  <p className="text-[9px] uppercase font-bold text-[#6B6B6B]">Transit</p>
-                  <p className="text-xs font-bold text-indigo-600 mt-0.5">{item.transitStock} Box</p>
                 </div>
               </div>
 

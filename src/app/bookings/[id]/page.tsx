@@ -85,9 +85,9 @@ export default async function BookingDetailPage({
         product: {
           id: item.product.id,
           name: item.product.name,
-          sku: item.product.sku || item.product.productCode || item.product.id.slice(-6).toUpperCase(),
-          size: item.product.size || "Standard",
-          brandName: item.product.brandId || "Generic",
+          sku: item.product.sku || item.product.productCode || item.product.importKey || "",
+          size: item.product.size || "",
+          brandName: item.product.brandId || "",
           availableStock: inv.availableStock,
           image_key: item.product.image_key,
           thumbnail_key: item.product.thumbnail_key,

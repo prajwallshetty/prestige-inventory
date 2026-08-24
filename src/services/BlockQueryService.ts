@@ -94,22 +94,43 @@ function searchClause(search?: string): any {
   const q = (search || "").trim();
   if (q.length < 2) return {};
 
-  const like = { contains: q, mode: "insensitive" as const };
+  const terms = q.split(/[\s,+]+/).filter(Boolean).slice(0, 10);
+  if (terms.length === 0) return {};
 
-  return {
-    OR: [
-      { block_number: like },
-      { requestedBy: like },
-      { remarks: like },
-      { dealer: { is: { name: like } } },
-      { dealer: { is: { dealerId: like } } },
-      { dealer: { is: { company: like } } },
-      { showroom: { is: { name: like } } },
-      { inventory: { is: { product: { is: { name: like } } } } },
-      { inventory: { is: { product: { is: { sku: like } } } } },
-      { inventory: { is: { product: { is: { productCode: like } } } } },
-    ],
-  };
+  const like = (t: string) => ({ contains: t, mode: "insensitive" as const });
+
+  const termClauses = terms.map((t) => {
+    const variants = new Set<string>();
+    variants.add(t);
+
+    const clean = t.replace(/[^a-zA-Z0-9]/g, "");
+    if (clean && clean !== t) variants.add(clean);
+
+    const hyphenated = t.replace(/^([a-zA-Z]+)(\d+)$/, "$1-$2");
+    if (hyphenated !== t) variants.add(hyphenated);
+
+    const termVariants = Array.from(variants);
+
+    return {
+      OR: termVariants.flatMap((v) => [
+        { block_number: like(v) },
+        { requestedBy: like(v) },
+        { remarks: like(v) },
+        { dealer: { is: { name: like(v) } } },
+        { dealer: { is: { dealerId: like(v) } } },
+        { dealer: { is: { company: like(v) } } },
+        { showroom: { is: { name: like(v) } } },
+        { inventory: { is: { product: { is: { name: like(v) } } } } },
+        { inventory: { is: { product: { is: { sku: like(v) } } } } },
+        { inventory: { is: { product: { is: { productCode: like(v) } } } } },
+        { inventory: { is: { product: { is: { size: like(v) } } } } },
+        { inventory: { is: { product: { is: { color: like(v) } } } } },
+        { inventory: { is: { product: { is: { finish: like(v) } } } } },
+      ]),
+    };
+  });
+
+  return { AND: termClauses };
 }
 
 /** Only the columns the table and the action buttons actually read. */
