@@ -120,6 +120,16 @@ const STATEMENTS: Array<{ label: string; sql: string }> = [
     label: "User.showroomId",
     sql: `CREATE INDEX IF NOT EXISTS user_showroom_idx ON "User" ("showroomId")`,
   },
+
+  // ——— Chat Performance Indexes ———
+  {
+    label: "ConversationParticipant.userId + lastReadAt",
+    sql: `CREATE INDEX IF NOT EXISTS conversation_participant_user_lastread_idx ON "ConversationParticipant" (user_id, last_read_at)`,
+  },
+  {
+    label: "Message.conversationId + senderId + deletedAt + createdAt",
+    sql: `CREATE INDEX IF NOT EXISTS message_conv_sender_deleted_created_idx ON "Message" (conversation_id, sender_id, deleted_at, created_at)`,
+  },
 ];
 
 async function main() {

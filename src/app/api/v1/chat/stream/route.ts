@@ -66,20 +66,29 @@ export async function GET(req: NextRequest) {
         sendEvent({ action: "HEARTBEAT", timestamp: Date.now() });
       }, 15000);
 
-      req.signal.addEventListener("abort", () => {
+      const cleanup = () => {
+        if (isClosed) return;
         isClosed = true;
         clearInterval(heartbeat);
         if (subscriber) {
-          subscriber.unsubscribe(channel).catch(() => {});
-          subscriber.quit().catch(() => {});
+          try {
+            subscriber.unsubscribe(channel).catch(() => {});
+            subscriber.disconnect();
+          } catch {}
+          subscriber = null;
         }
-      });
+      };
+
+      req.signal.addEventListener("abort", cleanup);
     },
     cancel() {
       isClosed = true;
       if (subscriber) {
-        subscriber.unsubscribe(channel).catch(() => {});
-        subscriber.quit().catch(() => {});
+        try {
+          subscriber.unsubscribe(channel).catch(() => {});
+          subscriber.disconnect();
+        } catch {}
+        subscriber = null;
       }
     },
   });

@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { ConversationType, MessageType } from "@prisma/client";
+import { ConversationType, MessageType, Prisma } from "@prisma/client";
 import { publishEvent } from "@/lib/redis";
 import { ROLES } from "@/lib/permissions";
 
@@ -35,6 +35,7 @@ export interface SendMessageInput {
   replyToId?: string;
   metadata?: string;
   userRole?: string;
+  clientMessageId?: string;
 }
 
 /**
@@ -308,74 +309,81 @@ export async function getConversationsForUser(
     db.conversation.count({ where: whereClause }),
   ]);
 
+  const convIds = conversations.map((c) => c.id);
+  const unreadCountMap = new Map<string, number>();
+
+  if (convIds.length > 0) {
+    const unreadRows = await db.$queryRaw<Array<{ conversation_id: string; unread_count: bigint }>>`
+      SELECT m.conversation_id, COUNT(m.id) as unread_count
+      FROM "Message" m
+      JOIN "ConversationParticipant" cp ON cp.conversation_id = m.conversation_id AND cp.user_id = ${userId}
+      WHERE m.conversation_id IN (${Prisma.join(convIds)})
+        AND m.sender_id != ${userId}
+        AND m.deleted_at IS NULL
+        AND m.created_at > cp.last_read_at
+      GROUP BY m.conversation_id
+    `;
+    for (const row of unreadRows) {
+      unreadCountMap.set(row.conversation_id, Number(row.unread_count));
+    }
+  }
+
   // Map conversations with unread counts & partner info
-  const items = await Promise.all(
-    conversations.map(async (conv) => {
-      const myParticipant = conv.participants.find((p) => p.userId === userId);
-      const lastReadAt = myParticipant?.lastReadAt || new Date(0);
+  const items = conversations.map((conv) => {
+    const myParticipant = conv.participants.find((p) => p.userId === userId);
+    const unreadCount = unreadCountMap.get(conv.id) || 0;
 
-      // Compute unread message count
-      const unreadCount = await db.message.count({
-        where: {
-          conversationId: conv.id,
-          senderId: { not: userId },
-          createdAt: { gt: lastReadAt },
-          deletedAt: null,
-        },
-      });
+    // Direct partner info
+    let partner = null;
+    if (conv.type === "DIRECT") {
+      const otherP = conv.participants.find((p) => p.userId !== userId);
+      partner = otherP?.user || conv.participants[0]?.user || null;
+    }
 
-      // Direct partner info
-      let partner = null;
-      if (conv.type === "DIRECT") {
-        const otherP = conv.participants.find((p) => p.userId !== userId);
-        partner = otherP?.user || conv.participants[0]?.user || null;
-      }
+    const lastMsg = conv.messages[0] || null;
 
-      const lastMsg = conv.messages[0] || null;
-
-      return {
-        id: conv.id,
-        type: conv.type,
-        name: conv.name || partner?.name || "Direct Chat",
-        description: conv.description,
-        icon: conv.icon,
-        blockId: conv.blockId,
-        shipmentId: conv.shipmentId,
-        productId: conv.productId,
-        dealerId: conv.dealerId,
-        createdBy: conv.createdBy,
-        createdAt: conv.createdAt,
-        updatedAt: conv.updatedAt,
-        lastMessageAt: conv.lastMessageAt,
-        unreadCount,
-        isMuted: myParticipant?.muted || false,
-        partner,
-        participants: conv.participants.map((p) => ({
-          id: p.id,
-          userId: p.userId,
-          name: p.user.name,
-          email: p.user.email,
-          role: p.user.role,
-          avatar: p.user.avatar,
-          showroomName: p.user.showroom?.name || null,
-          isAdmin: p.isAdmin,
-          joinedAt: p.joinedAt,
-        })),
-        lastMessage: lastMsg
-          ? {
-              id: lastMsg.id,
-              content: lastMsg.content,
-              type: lastMsg.type,
-              senderId: lastMsg.senderId,
-              senderName: lastMsg.sender?.name || "System",
-              attachmentName: lastMsg.attachmentName,
-              createdAt: lastMsg.createdAt,
-            }
-          : null,
-        isSuperAdminView: isAdminGlobal && !myParticipant,
-      };
-    })
-  );
+    return {
+      id: conv.id,
+      type: conv.type,
+      name: conv.name || partner?.name || "Direct Chat",
+      description: conv.description,
+      icon: conv.icon,
+      blockId: conv.blockId,
+      shipmentId: conv.shipmentId,
+      productId: conv.productId,
+      dealerId: conv.dealerId,
+      createdBy: conv.createdBy,
+      createdAt: conv.createdAt,
+      updatedAt: conv.updatedAt,
+      lastMessageAt: conv.lastMessageAt,
+      unreadCount,
+      isMuted: myParticipant?.muted || false,
+      partner,
+      participants: conv.participants.map((p) => ({
+        id: p.id,
+        userId: p.userId,
+        name: p.user.name,
+        email: p.user.email,
+        role: p.user.role,
+        avatar: p.user.avatar,
+        showroomName: p.user.showroom?.name || null,
+        isAdmin: p.isAdmin,
+        joinedAt: p.joinedAt,
+      })),
+      lastMessage: lastMsg
+        ? {
+            id: lastMsg.id,
+            content: lastMsg.content,
+            type: lastMsg.type,
+            senderId: lastMsg.senderId,
+            senderName: lastMsg.sender?.name || "System",
+            attachmentName: lastMsg.attachmentName,
+            createdAt: lastMsg.createdAt,
+          }
+        : null,
+      isSuperAdminView: isAdminGlobal && !myParticipant,
+    };
+  });
 
   return { items, total, page, limit, totalPages: Math.ceil(total / limit) || 1 };
 }
@@ -622,6 +630,7 @@ export async function sendMessage(input: SendMessageInput) {
           action: "NEW_MESSAGE",
           conversationId,
           messageId: message.id,
+          clientMessageId: input.clientMessageId,
         })
       )
   );
@@ -733,25 +742,17 @@ export async function markConversationAsRead(conversationId: string, userId: str
  * Returns total unread chat messages for a user across all active conversations.
  */
 export async function getUnreadChatCount(userId: string) {
-  const participants = await db.conversationParticipant.findMany({
-    where: { userId, conversation: { active: true } },
-    select: { conversationId: true, lastReadAt: true },
-  });
+  const result = await db.$queryRaw<Array<{ total: bigint }>>`
+    SELECT COUNT(m.id) as total
+    FROM "Message" m
+    JOIN "ConversationParticipant" cp ON cp.conversation_id = m.conversation_id AND cp.user_id = ${userId}
+    JOIN "Conversation" c ON c.id = m.conversation_id AND c.active = true
+    WHERE m.sender_id != ${userId}
+      AND m.deleted_at IS NULL
+      AND m.created_at > cp.last_read_at
+  `;
 
-  let totalUnread = 0;
-  for (const p of participants) {
-    const unread = await db.message.count({
-      where: {
-        conversationId: p.conversationId,
-        senderId: { not: userId },
-        createdAt: { gt: p.lastReadAt },
-        deletedAt: null,
-      },
-    });
-    totalUnread += unread;
-  }
-
-  return totalUnread;
+  return Number(result[0]?.total || 0);
 }
 
 /**

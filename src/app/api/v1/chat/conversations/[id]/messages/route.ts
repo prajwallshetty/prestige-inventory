@@ -53,6 +53,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       replyToId: body.replyToId,
       metadata: body.metadata ? JSON.stringify(body.metadata) : undefined,
       userRole: session.role,
+      clientMessageId: body.clientMessageId,
     });
 
     return NextResponse.json({ success: true, data: message });

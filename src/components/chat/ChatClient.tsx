@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import {
   MessageSquare,
@@ -13,7 +13,6 @@ import {
   X,
   Reply,
   Trash2,
-  CheckCheck,
   ShieldAlert,
   ArrowLeft,
   Lock,
@@ -23,16 +22,10 @@ import {
   Info,
   AlertCircle,
   RotateCcw,
+  ArrowDown,
 } from "lucide-react";
 import { toast } from "sonner";
 
-/**
- * `toLocaleTimeString()` with no explicit timeZone resolves to whatever
- * timezone the JS engine is running in — the server (SSR) and the browser
- * (hydration) rarely agree, which threw React error #418 (hydration text
- * mismatch) on every load. Pinning the zone makes server and client compute
- * the identical string.
- */
 function formatMessageTime(value: string | Date): string {
   return new Date(value).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" });
 }
@@ -57,7 +50,14 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
   );
   const [activeConv, setActiveConv] = useState<any | null>(null);
   const [messages, setMessages] = useState<any[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [nextBeforeId, setNextBeforeId] = useState<string | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [loadingMessages, setLoadingMessages] = useState(false);
+
+  // Search & Filter
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [filterType, setFilterType] = useState<"ALL" | "DIRECT" | "GROUP">("ALL");
 
   // Message Input State
@@ -66,8 +66,11 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
   const [attachment, setAttachment] = useState<any | null>(null);
   const [uploading, setUploading] = useState(false);
   const [sendState, setSendState] = useState<SendState>("idle");
-  const [lastFailedPayload, setLastFailedPayload] = useState<{ content: string; attachment: any; replyId?: string } | null>(null);
-  const [loadingMessages, setLoadingMessages] = useState(false);
+  const [lastFailedPayload, setLastFailedPayload] = useState<{ content: string; attachment: any; replyId?: string; clientMsgId?: string } | null>(null);
+
+  // UI state for scrolling & mobile
+  const [showNewMessageBadge, setShowNewMessageBadge] = useState(false);
+  const [mobileShowThread, setMobileShowThread] = useState(false);
 
   // Modals
   const [isNewDirectModalOpen, setIsNewDirectModalOpen] = useState(false);
@@ -78,15 +81,30 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
   const [groupName, setGroupName] = useState("");
   const [groupDescription, setGroupDescription] = useState("");
 
+  // Refs
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const activeIdRef = useRef<string | null>(activeId);
+  const isInitialMount = useRef(true);
 
-  // Mobile View Toggle State
-  const [mobileShowThread, setMobileShowThread] = useState(false);
+  // Sync activeIdRef
+  useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
 
-  const fetchConversations = async () => {
+  // Debounce search query
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 300);
+    return () => clearTimeout(handler);
+  }, [searchQuery]);
+
+  // Fetch Conversations
+  const fetchConversations = useCallback(async () => {
     try {
-      const res = await fetch(`/api/v1/chat/conversations?search=${encodeURIComponent(searchQuery)}`);
+      const res = await fetch(`/api/v1/chat/conversations?search=${encodeURIComponent(debouncedSearchQuery)}`);
       if (res.ok) {
         const json = await res.json();
         if (json.success) {
@@ -96,44 +114,19 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
     } catch (err) {
       console.error("Failed fetching conversations", err);
     }
-  };
+  }, [debouncedSearchQuery]);
 
   useEffect(() => {
     fetchConversations();
-    const interval = setInterval(fetchConversations, 8000);
+  }, [fetchConversations]);
 
-    let es: EventSource | null = null;
-    try {
-      es = new EventSource("/api/v1/chat/stream");
-      es.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.action === "NEW_MESSAGE" || data.action === "CONVERSATION_UPDATED") {
-            fetchConversations();
-            if (activeId && data.conversationId === activeId) {
-              fetchMessages(activeId);
-            }
-          }
-        } catch {}
-      };
-    } catch {}
-
-    return () => {
-      clearInterval(interval);
-      if (es) es.close();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchQuery, activeId]);
-
-  const fetchMessages = async (convId: string) => {
+  // Fetch initial messages for active conversation
+  const fetchMessages = useCallback(async (convId: string) => {
     setLoadingMessages(true);
+    setShowNewMessageBadge(false);
     try {
-      // The messages, conversation-details, and mark-read calls are
-      // independent — awaiting them one after another triples the wait on a
-      // database this far away (each round trip runs ~1-1.5s). Run the two
-      // reads in parallel and don't block the UI on the read receipt at all.
       const [res, detailsRes] = await Promise.all([
-        fetch(`/api/v1/chat/conversations/${convId}/messages?limit=60`),
+        fetch(`/api/v1/chat/conversations/${convId}/messages?limit=40`),
         fetch(`/api/v1/chat/conversations/${convId}`),
       ]);
       fetch(`/api/v1/chat/conversations/${convId}/read`, { method: "POST" }).catch(() => {});
@@ -142,6 +135,8 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
         const json = await res.json();
         if (json.success) {
           setMessages(json.messages || []);
+          setHasMore(!!json.hasMore);
+          setNextBeforeId(json.nextBeforeId || null);
         }
       }
       if (detailsRes.ok) {
@@ -154,50 +149,160 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
       toast.error("Failed loading messages");
     } finally {
       setLoadingMessages(false);
-      setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+      setTimeout(() => scrollToBottom("auto"), 50);
+    }
+  }, []);
+
+  // Load older messages (cursor pagination on scroll top)
+  const loadOlderMessages = async () => {
+    if (!activeId || !nextBeforeId || loadingOlder) return;
+
+    const container = messagesContainerRef.current;
+    const oldScrollHeight = container ? container.scrollHeight : 0;
+
+    setLoadingOlder(true);
+    try {
+      const res = await fetch(
+        `/api/v1/chat/conversations/${activeId}/messages?limit=30&beforeId=${encodeURIComponent(nextBeforeId)}`
+      );
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success) {
+          const older = json.messages || [];
+          setMessages((prev) => [...older, ...prev]);
+          setHasMore(!!json.hasMore);
+          setNextBeforeId(json.nextBeforeId || null);
+
+          // Preserve exact scroll position
+          requestAnimationFrame(() => {
+            if (container) {
+              container.scrollTop = container.scrollHeight - oldScrollHeight;
+            }
+          });
+        }
+      }
+    } catch (err) {
+      toast.error("Failed loading older messages");
+    } finally {
+      setLoadingOlder(false);
     }
   };
 
-  // On mobile, the auto-selected first conversation (see initial state above)
-  // must not jump straight into its thread — the user should land on the
-  // conversation list and tap one, per the mobile-first spec. Only an actual
-  // selection (handleSelectConversation) should flip to the thread view.
-  const isInitialMount = useRef(true);
+  const handleScroll = () => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
 
+    // Check if scrolled near top to load older messages
+    if (container.scrollTop < 50 && hasMore && !loadingOlder) {
+      loadOlderMessages();
+    }
+
+    // Check if near bottom
+    const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
+    if (isNearBottom) {
+      setShowNewMessageBadge(false);
+    }
+  };
+
+  const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
+    messagesEndRef.current?.scrollIntoView({ behavior });
+    setShowNewMessageBadge(false);
+  };
+
+  // Single persistent Realtime SSE stream setup
+  useEffect(() => {
+    let es: EventSource | null = null;
+    let reconnectTimer: NodeJS.Timeout | null = null;
+
+    const connectSSE = () => {
+      try {
+        es = new EventSource("/api/v1/chat/stream");
+        es.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+
+            if (data.action === "NEW_MESSAGE") {
+              fetchConversations();
+              const currentActiveId = activeIdRef.current;
+
+              if (currentActiveId && data.conversationId === currentActiveId) {
+                // If message event arrives, fetch fresh message list or append if missing
+                fetchSingleNewMessage(currentActiveId, data.messageId, data.clientMessageId);
+              }
+            } else if (data.action === "CONVERSATION_UPDATED" || data.action === "UNREAD_UPDATE") {
+              fetchConversations();
+            }
+          } catch {}
+        };
+
+        es.onerror = () => {
+          if (es) es.close();
+          // Automatic silent reconnect after 5s if disconnected
+          reconnectTimer = setTimeout(connectSSE, 5000);
+        };
+      } catch {}
+    };
+
+    connectSSE();
+
+    // Secondary background polling fallback (every 20s)
+    const interval = setInterval(() => {
+      fetchConversations();
+    }, 20000);
+
+    return () => {
+      clearInterval(interval);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (es) es.close();
+    };
+  }, [fetchConversations]);
+
+  // Fetch single new message or update messages feed incrementally
+  const fetchSingleNewMessage = async (convId: string, messageId?: string, clientMsgId?: string) => {
+    try {
+      const res = await fetch(`/api/v1/chat/conversations/${convId}/messages?limit=10`);
+      if (!res.ok) return;
+      const json = await res.json();
+      if (!json.success || !json.messages) return;
+
+      const freshMessages: any[] = json.messages;
+      const container = messagesContainerRef.current;
+      const isNearBottom = container
+        ? container.scrollHeight - container.scrollTop - container.clientHeight < 150
+        : true;
+
+      setMessages((prev) => {
+        // Merge without duplicating IDs or clientMessageIds
+        const existingIds = new Set(prev.map((m) => m.id));
+        const newToAdd = freshMessages.filter(
+          (m) => !existingIds.has(m.id) && (!clientMsgId || m.clientMessageId !== clientMsgId)
+        );
+
+        if (newToAdd.length === 0) return prev;
+
+        const updated = [...prev, ...newToAdd];
+        return updated;
+      });
+
+      fetch(`/api/v1/chat/conversations/${convId}/read`, { method: "POST" }).catch(() => {});
+
+      if (isNearBottom) {
+        setTimeout(() => scrollToBottom("smooth"), 80);
+      } else {
+        setShowNewMessageBadge(true);
+      }
+    } catch {}
+  };
+
+  // Change Active Conversation
   useEffect(() => {
     if (activeId) {
       fetchMessages(activeId);
       if (isInitialMount.current) {
         isInitialMount.current = false;
       }
-
-      // Polling fallback so a message from the other side of the conversation
-      // shows up without a manual refresh even when Redis/SSE isn't delivering.
-      const poll = setInterval(() => pollNewMessages(activeId), 5000);
-      return () => clearInterval(poll);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId]);
-
-  const pollNewMessages = async (convId: string) => {
-    try {
-      const res = await fetch(`/api/v1/chat/conversations/${convId}/messages?limit=60`);
-      if (!res.ok) return;
-      const json = await res.json();
-      if (!json.success) return;
-      const fresh = json.messages || [];
-      setMessages((prev) => {
-        const prevLastId = prev[prev.length - 1]?.id;
-        const freshLastId = fresh[fresh.length - 1]?.id;
-        if (prev.length === fresh.length && prevLastId === freshLastId) return prev;
-        setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
-        return fresh;
-      });
-      fetch(`/api/v1/chat/conversations/${convId}/read`, { method: "POST" }).catch(() => {});
-    } catch {
-      // best-effort; next tick or the SSE stream will catch up
-    }
-  };
+  }, [activeId, fetchMessages]);
 
   const handleSelectConversation = (id: string) => {
     setActiveId(id);
@@ -207,9 +312,55 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
     setMobileShowThread(true);
   };
 
-  const doSend = async (content: string, att: any, replyId?: string) => {
+  // Optimistic Send Flow
+  const doSend = async (content: string, att: any, replyId?: string, retryClientMsgId?: string) => {
     if (!activeId) return;
+
+    const clientMsgId = retryClientMsgId || `opt_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    const now = new Date();
+
+    // Create Optimistic Local Message
+    const optimisticMessage = {
+      id: clientMsgId,
+      conversationId: activeId,
+      senderId: session.userId,
+      senderName: session.name || "Me",
+      senderRole: session.role,
+      type: att?.type?.startsWith("image/") ? "IMAGE" : att ? "FILE" : "TEXT",
+      content: content ? content.trim() : att?.attachmentName || "Attachment",
+      attachmentUrl: att?.attachmentUrl || null,
+      attachmentName: att?.attachmentName || null,
+      replyTo: replyTo ? { id: replyTo.id, content: replyTo.content, senderName: replyTo.senderName } : null,
+      createdAt: now,
+      isOptimistic: true,
+      status: "sending",
+    };
+
+    // Append optimistic message immediately
+    setMessages((prev) => [...prev, optimisticMessage]);
     setSendState("sending");
+    setTimeout(() => scrollToBottom("smooth"), 50);
+
+    // Update conversation item list preview locally
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.id === activeId
+          ? {
+              ...c,
+              lastMessageAt: now,
+              lastMessage: {
+                id: clientMsgId,
+                content: optimisticMessage.content,
+                type: optimisticMessage.type,
+                senderId: session.userId,
+                senderName: session.name || "Me",
+                createdAt: now,
+              },
+            }
+          : c
+      )
+    );
+
     try {
       const res = await fetch(`/api/v1/chat/conversations/${activeId}/messages`, {
         method: "POST",
@@ -220,6 +371,7 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
           attachmentKey: att?.attachmentKey,
           attachmentName: att?.attachmentName,
           replyToId: replyId,
+          clientMessageId: clientMsgId,
         }),
       });
 
@@ -228,13 +380,41 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
         throw new Error(json.error || "Failed to send message");
       }
 
+      // Replace optimistic message with confirmed server message
+      const serverMsg = json.data;
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === clientMsgId
+            ? {
+                id: serverMsg.id,
+                conversationId: serverMsg.conversationId,
+                senderId: serverMsg.senderId,
+                senderName: serverMsg.sender?.name || session.name || "Me",
+                senderRole: serverMsg.sender?.role || session.role,
+                type: serverMsg.type,
+                content: serverMsg.content,
+                attachmentUrl: serverMsg.attachmentUrl,
+                attachmentName: serverMsg.attachmentName,
+                replyTo: serverMsg.replyTo
+                  ? { id: serverMsg.replyTo.id, content: serverMsg.replyTo.content, senderName: serverMsg.replyTo.sender?.name }
+                  : null,
+                createdAt: serverMsg.createdAt,
+                isOptimistic: false,
+                status: "sent",
+              }
+            : m
+        )
+      );
+
       setSendState("idle");
       setLastFailedPayload(null);
-      fetchMessages(activeId);
-      fetchConversations();
     } catch (err: any) {
+      // Mark optimistic message as failed
+      setMessages((prev) =>
+        prev.map((m) => (m.id === clientMsgId ? { ...m, status: "failed" } : m))
+      );
       setSendState("failed");
-      setLastFailedPayload({ content, attachment: att, replyId });
+      setLastFailedPayload({ content, attachment: att, replyId, clientMsgId });
       toast.error(err.message || "Message failed to send");
     }
   };
@@ -257,7 +437,12 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
 
   const handleRetry = async () => {
     if (!lastFailedPayload) return;
-    await doSend(lastFailedPayload.content, lastFailedPayload.attachment, lastFailedPayload.replyId);
+    await doSend(
+      lastFailedPayload.content,
+      lastFailedPayload.attachment,
+      lastFailedPayload.replyId,
+      lastFailedPayload.clientMsgId
+    );
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -511,7 +696,7 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
 
       {/* RIGHT PANEL: Active Chat Thread */}
       <div
-        className={`flex flex-1 flex-col bg-white min-h-0 ${
+        className={`flex flex-1 flex-col bg-white min-h-0 relative ${
           !mobileShowThread ? "hidden md:flex" : "flex"
         }`}
       >
@@ -559,7 +744,19 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
             </div>
 
             {/* Messages Feed */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-[#F7F7F5]/40">
+            <div
+              ref={messagesContainerRef}
+              onScroll={handleScroll}
+              className="flex-1 overflow-y-auto p-4 space-y-4 bg-[#F7F7F5]/40"
+            >
+              {loadingOlder && (
+                <div className="flex justify-center py-2">
+                  <span className="text-[10px] font-semibold text-[#8A7300] bg-white border border-[#EAEAEA] px-3 py-1 rounded-full shadow-xs">
+                    Loading older messages...
+                  </span>
+                </div>
+              )}
+
               {loadingMessages && messages.length === 0 ? (
                 <div className="space-y-4">
                   {[1, 2, 3].map((i) => (
@@ -635,6 +832,10 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
                           </div>
                         )}
 
+                        {m.status === "sending" && (
+                          <span className="mt-1 block text-[9px] text-[#8A7300] font-semibold">Sending...</span>
+                        )}
+
                         <div
                           className={`absolute top-1 hidden group-hover:flex items-center gap-1 bg-white border border-[#EAEAEA] px-1.5 py-0.5 rounded-lg text-[#6B6B6B] shadow-sm ${
                             isMine ? "-left-16" : "-right-16"
@@ -655,7 +856,7 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
                         </div>
                       </div>
 
-                      {isMine && sendState === "failed" && lastFailedPayload?.content === m.content && (
+                      {m.status === "failed" && (
                         <div className="flex items-center gap-1.5 mt-1 text-[10px] text-rose-600">
                           <AlertCircle className="h-3 w-3" /> Failed to send
                           <button onClick={handleRetry} className="flex items-center gap-0.5 font-semibold underline">
@@ -669,6 +870,16 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
               )}
               <div ref={messagesEndRef} />
             </div>
+
+            {/* Floating New Message Badge */}
+            {showNewMessageBadge && (
+              <button
+                onClick={() => scrollToBottom("smooth")}
+                className="absolute bottom-20 right-6 z-10 flex items-center gap-1.5 bg-[#111111] text-white px-3 py-1.5 rounded-full text-xs font-bold shadow-md hover:bg-black transition animate-bounce"
+              >
+                New messages <ArrowDown className="h-3.5 w-3.5" />
+              </button>
+            )}
 
             {replyTo && (
               <div className="flex items-center justify-between bg-[#F7F7F5] border-t border-[#EAEAEA] px-4 py-2 text-xs shrink-0">

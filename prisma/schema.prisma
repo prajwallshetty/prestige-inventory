@@ -1721,6 +1721,7 @@ model ConversationParticipant {
   @@unique([conversationId, userId])
   @@index([userId])
   @@index([conversationId])
+  @@index([userId, lastReadAt])
 }
 
 model Message {
@@ -1749,6 +1750,7 @@ model Message {
   updatedAt      DateTime     @updatedAt @map("updated_at")
 
   @@index([conversationId, createdAt])
+  @@index([conversationId, senderId, deletedAt, createdAt])
   @@index([senderId])
   @@index([deletedAt])
   @@index([replyToId])
