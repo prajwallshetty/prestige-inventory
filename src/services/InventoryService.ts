@@ -54,7 +54,7 @@ export async function getInventorySummary() {
         availableStock: true,
         blockedStock: true,
         transitStock: true,
-        product: { select: { unit: true } },
+        product: { select: { unit: true, unitRelation: { select: { name: true, symbol: true } } } },
       },
     }),
   ]);
@@ -64,13 +64,15 @@ export async function getInventorySummary() {
   let bagTotal = 0, bagAvailable = 0, bagBlocked = 0, bagTransit = 0;
 
   for (const item of inventoryItems) {
-    const unit = (item.product?.unit || "Box").toLowerCase();
-    if (unit === "pc" || unit === "piece") {
+    const rawUnit = item.product?.unitRelation?.name || item.product?.unitRelation?.symbol || item.product?.unit || "Box";
+    const unit = rawUnit.toLowerCase();
+
+    if (unit.includes("pc") || unit.includes("piece") || unit.includes("nos")) {
       pcTotal += item.totalStock;
       pcAvailable += item.availableStock;
       pcBlocked += item.blockedStock;
       pcTransit += item.transitStock;
-    } else if (unit === "bag") {
+    } else if (unit.includes("bag")) {
       bagTotal += item.totalStock;
       bagAvailable += item.availableStock;
       bagBlocked += item.blockedStock;

@@ -25,10 +25,9 @@ async function main() {
   if (result.details.length === 0) {
     console.log(`  No drift found across ${result.checked} inventory row(s).`);
   } else {
-    console.log(`  ${result.details.length} of ${result.checked} row(s) drifted:\n`);
+    console.log(`  ${result.details.length} of ${result.checked} inventory row(s) drifted:\n`);
     for (const d of result.details) {
       console.log(`   • product ${d.productId}`);
-      // Only print the figures that actually moved.
       if (d.was !== d.now) console.log(`       blocked   ${d.was} → ${d.now}`);
       if (d.wasAvailable !== d.nowAvailable) {
         console.log(`       available ${d.wasAvailable} → ${d.nowAvailable}`);
@@ -39,7 +38,7 @@ async function main() {
     }
     console.log(
       apply
-        ? `\n  Repaired ${result.repaired} row(s).`
+        ? `\n  Repaired ${result.repaired} inventory row(s).`
         : `\n  Dry run — nothing written. Re-run with --apply to repair.`
     );
   }

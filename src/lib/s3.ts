@@ -1,3 +1,62 @@
+import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+
+let cachedClient: S3Client | null = null;
+
+function getS3Client(): S3Client {
+  if (!cachedClient) {
+    cachedClient = new S3Client({
+      region: process.env.AWS_REGION || "ap-south-1",
+      credentials: {
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID as string,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY as string,
+      },
+    });
+  }
+  return cachedClient;
+}
+
+export function isS3Configured(): boolean {
+  return !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY && process.env.AWS_S3_BUCKET);
+}
+
+/** Sanitizes a filename to something safe for an S3 key segment. */
+export function sanitizeFileName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-120);
+}
+
+/**
+ * Uploads a buffer to the configured bucket and returns its key + public URL.
+ * No ACL is set — buckets created after 2023 default to ACLs disabled, and
+ * public read is expected to come from a bucket policy (the existing
+ * NEXT_PUBLIC_S3_BUCKET_URL scheme already assumes objects are readable that
+ * way, since it builds plain HTTPS URLs with no signing).
+ */
+export async function uploadBufferToS3(params: {
+  buffer: Buffer;
+  key: string;
+  contentType: string;
+}): Promise<{ key: string; url: string }> {
+  const bucket = process.env.AWS_S3_BUCKET;
+  if (!bucket) throw new Error("AWS_S3_BUCKET is not configured.");
+
+  await getS3Client().send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: params.key,
+      Body: params.buffer,
+      ContentType: params.contentType,
+    })
+  );
+
+  return { key: params.key, url: getS3MediaUrl(params.key)! };
+}
+
+export async function deleteFromS3(key: string): Promise<void> {
+  const bucket = process.env.AWS_S3_BUCKET;
+  if (!bucket || !key) return;
+  await getS3Client().send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+}
+
 export function getS3MediaUrl(key: string | null | undefined): string | null {
   if (!key) return null;
   

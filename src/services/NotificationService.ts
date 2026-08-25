@@ -387,17 +387,37 @@ export async function sendNotificationsToUsers({
 
   const createdAt = new Date();
 
-  await db.notification.createMany({
-    data: uniqueIds.map((userId) => ({
-      userId,
-      type,
-      title,
-      message,
-      priority,
-      data: data ?? undefined,
-      createdAt,
-    })),
-  });
+  // Neon's pooled connections occasionally drop a freshly-opened connection
+  // (P1017 "Server has closed the connection"); one short retry absorbs that
+  // without the caller having to know about it. The stock mutation this
+  // follows has already committed either way — this only affects the
+  // best-effort notification, never the business transaction (spec §46).
+  try {
+    await db.notification.createMany({
+      data: uniqueIds.map((userId) => ({
+        userId,
+        type,
+        title,
+        message,
+        priority,
+        data: data ?? undefined,
+        createdAt,
+      })),
+    });
+  } catch (err) {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await db.notification.createMany({
+      data: uniqueIds.map((userId) => ({
+        userId,
+        type,
+        title,
+        message,
+        priority,
+        data: data ?? undefined,
+        createdAt,
+      })),
+    });
+  }
 
   await Promise.all(
     uniqueIds.map(async (userId) => {

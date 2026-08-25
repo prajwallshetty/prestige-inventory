@@ -50,7 +50,7 @@ interface Props {
   };
 }
 
-export function InventoryClientTable({ initialData, brands, categories, sizes = [], collections = [], session }: Props) {
+export function InventoryClientTable({ initialData, brands, categories, productTypes = [], sizes = [], collections = [], session }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();

@@ -29,11 +29,14 @@ import {
   LogOut,
   User as UserIcon,
   Settings,
-  Megaphone
+  Megaphone,
+  MessageSquare,
+  Package
 } from "lucide-react";
 import { setSimulatedSessionAction, signOutAction } from "@/app/actions";
 import { toast } from "sonner";
 import { NotificationCenter } from "@/components/notifications/NotificationCenter";
+import { ChatHeaderBadge } from "@/components/chat/ChatHeaderBadge";
 
 export type UserRole = "SUPER_ADMIN" | "MANAGER" | "WEAVER" | "SHOWROOM_INCHARGE" | "SHOWROOM_STAFF";
 
@@ -260,6 +263,8 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
     const reports = { name: "Reports & Export", href: `${pathPrefix}/reports`, icon: FileSpreadsheet };
     const settings = { name: "Settings", href: `${pathPrefix}/settings`, icon: Settings };
     const broadcasts = { name: "Broadcasts", href: `${pathPrefix}/announcements`, icon: Megaphone };
+    const chat = { name: "Internal Chat", href: "/chat", icon: MessageSquare };
+    const adminChat = { name: "Chat Monitor", href: "/admin/chat", icon: ShieldCheck };
 
     if (role === "MANAGER") {
       const pendingApprovals = { name: "Pending Approvals", href: `${pathPrefix}/blocks?status=PENDING_MANAGER_APPROVAL`, icon: Lock, badge: pendingApprovalCount };
@@ -274,6 +279,10 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
           items: [dashboard],
         },
         {
+          category: "COMMUNICATION",
+          items: [chat, broadcasts],
+        },
+        {
           category: "INVENTORY CONTROL",
           items: [allStock, lowStock, outOfStock],
         },
@@ -283,7 +292,7 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
         },
         {
           category: "REPORTING & MANAGEMENT",
-          items: [dealersMgmt, broadcasts, reports, settings],
+          items: [dealersMgmt, reports, settings],
         }
       ];
     }
@@ -298,6 +307,10 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
         {
           category: "SHOWROOM STAFF",
           items: [dashboard, stockBooking, myBlocks, pendingMine, allStock],
+        },
+        {
+          category: "COMMUNICATION",
+          items: [chat],
         },
         {
           category: "ANALYTICS & CONTROL",
@@ -317,6 +330,10 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
           items: [dashboard, pendingApprovals, allBlocks, newBlock, allStock],
         },
         {
+          category: "COMMUNICATION",
+          items: [chat],
+        },
+        {
           category: "ANALYTICS & CONTROL",
           items: [reports, settings],
         }
@@ -328,6 +345,10 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
         {
           category: "OVERVIEW",
           items: [dashboard],
+        },
+        {
+          category: "COMMUNICATION",
+          items: [chat],
         },
         {
           category: "INVENTORY READ-ONLY",
@@ -355,11 +376,20 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
     const warehousesMgmt = { name: "Warehouses", href: `${pathPrefix}/warehouses`, icon: WarehouseIcon };
     const audit = { name: "Audit Trail", href: `${pathPrefix}/system/audit`, icon: ShieldCheck };
     const usersMgmt = { name: "Users Management", href: `${pathPrefix}/users`, icon: Users };
+    const productsMgmt = { name: "Products", href: `${pathPrefix}/products`, icon: Package };
 
     return [
       {
         category: "OVERVIEW",
         items: [dashboard],
+      },
+      {
+        category: "COMMUNICATION",
+        items: [chat, adminChat, broadcasts],
+      },
+      {
+        category: "CATALOG",
+        items: [productsMgmt],
       },
       {
         category: "INVENTORY CONTROL",
@@ -379,7 +409,7 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
       },
       {
         category: "SYSTEM MANAGEMENT",
-        items: [dealersMgmt, warehousesMgmt, usersMgmt, broadcasts, reports, audit, settings],
+        items: [dealersMgmt, warehousesMgmt, usersMgmt, reports, audit, settings],
       },
     ];
   };
@@ -696,7 +726,8 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
               </span>
             </div>
 
-            {/* Notification Indicator */}
+            {/* Notification & Chat Indicators */}
+            <ChatHeaderBadge role={role} />
             <NotificationCenter session={session} />
           </div>
         </header>

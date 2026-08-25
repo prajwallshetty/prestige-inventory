@@ -17,6 +17,7 @@
     "reset:inventory": "tsx scripts/reset-and-import-inventory.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1117.0",
     "@prisma/client": "^6.19.3",
     "@tailwindcss/postcss": "^4.3.3",
     "bcryptjs": "^3.0.3",

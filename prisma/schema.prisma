@@ -77,6 +77,9 @@ model User {
   notifications         Notification[]
   announcements         Announcement[]
   announcementRecipients AnnouncementRecipient[]
+  conversationParticipants ConversationParticipant[]
+  messagesSent          Message[]               @relation("SentMessages")
+  chatAudits            ChatAudit[]
 
   @@index([status])
   @@index([role])
@@ -721,7 +724,7 @@ model Showroom {
   @@index([city])
 }
 
-model Conversation {
+model WebChatSession {
   id            String  @id @default(cuid())
   sessionId     String
   messages      Json // [{role, content, at}]
@@ -1661,3 +1664,109 @@ model AnnouncementRecipient {
   @@index([userId])
   @@index([announcementId])
 }
+
+// ————— Internal Chat & Company Communication —————
+
+enum ConversationType {
+  DIRECT
+  GROUP
+  SYSTEM
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  FILE
+  SYSTEM_EVENT
+}
+
+model Conversation {
+  id            String                    @id @default(cuid())
+  type          ConversationType          @default(DIRECT)
+  name          String?
+  description   String?
+  icon          String?
+  blockId       String?                   @map("block_id")
+  shipmentId    String?                   @map("shipment_id")
+  productId     String?                   @map("product_id")
+  dealerId      String?                   @map("dealer_id")
+  createdBy     String?                   @map("created_by")
+  active        Boolean                   @default(true)
+  createdAt     DateTime                  @default(now()) @map("created_at")
+  updatedAt     DateTime                  @default(now()) @updatedAt @map("updated_at")
+  lastMessageAt DateTime                  @default(now()) @map("last_message_at")
+
+  participants  ConversationParticipant[]
+  messages      Message[]
+  auditLogs     ChatAudit[]
+
+  @@index([type])
+  @@index([updatedAt])
+  @@index([lastMessageAt])
+  @@index([blockId])
+  @@index([shipmentId])
+}
+
+model ConversationParticipant {
+  id             String       @id @default(cuid())
+  conversationId String       @map("conversation_id")
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId         String       @map("user_id")
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  joinedAt       DateTime     @default(now()) @map("joined_at")
+  lastReadAt     DateTime     @default(now()) @map("last_read_at")
+  isAdmin        Boolean      @default(false) @map("is_admin")
+  muted          Boolean      @default(false)
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+  @@index([conversationId])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String       @map("conversation_id")
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String       @map("sender_id")
+  sender         User         @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  type           MessageType  @default(TEXT)
+  content        String
+  attachmentUrl  String?      @map("attachment_url")
+  attachmentKey  String?      @map("attachment_key")
+  attachmentName String?      @map("attachment_name")
+  
+  replyToId      String?      @map("reply_to_id")
+  replyTo        Message?     @relation("MessageReplies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies        Message[]    @relation("MessageReplies")
+
+  metadata       String?      // JSON string for links, system event data, block references
+  editedAt       DateTime?    @map("edited_at")
+  editedById     String?      @map("edited_by_id")
+  deletedAt      DateTime?    @map("deleted_at")
+  deletedById    String?      @map("deleted_by_id")
+
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  @@index([conversationId, createdAt])
+  @@index([senderId])
+  @@index([deletedAt])
+  @@index([replyToId])
+}
+
+model ChatAudit {
+  id             String       @id @default(cuid())
+  conversationId String?      @map("conversation_id")
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  actingUserId   String       @map("acting_user_id")
+  actingUser     User         @relation(fields: [actingUserId], references: [id], onDelete: Cascade)
+  action         String       // CONVERSATION_CREATED | PARTICIPANT_ADDED | PARTICIPANT_REMOVED | MESSAGE_SENT | MESSAGE_EDITED | MESSAGE_DELETED | ADMINISTRATIVE_VIEW
+  details        String?      // JSON details
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  @@index([conversationId])
+  @@index([actingUserId])
+  @@index([action])
+  @@index([createdAt])
+}
+
