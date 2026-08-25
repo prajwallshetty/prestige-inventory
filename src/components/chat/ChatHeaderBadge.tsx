@@ -9,19 +9,8 @@ interface Props {
   initialUnreadCount?: number;
 }
 
-export function ChatHeaderBadge({ role, initialUnreadCount = 0 }: Props) {
+export function ChatHeaderBadge({ initialUnreadCount = 0 }: Props) {
   const [unreadCount, setUnreadCount] = useState(initialUnreadCount);
-
-  const pathPrefix =
-    role === "SUPER_ADMIN"
-      ? "/admin"
-      : role === "MANAGER"
-      ? "/warehouse"
-      : role === "SHOWROOM_STAFF"
-      ? "/showroom-staff"
-      : role === "SHOWROOM_INCHARGE"
-      ? "/showroom-incharge"
-      : "/viewer";
 
   const fetchUnread = async () => {
     try {
@@ -63,12 +52,12 @@ export function ChatHeaderBadge({ role, initialUnreadCount = 0 }: Props) {
   return (
     <Link
       href="/chat"
-      className="relative flex items-center justify-center p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
+      className="relative flex items-center justify-center h-9 w-9 rounded-xl border border-[#EAEAEA] bg-white text-[#6B6B6B] hover:text-[#111111] hover:bg-[#F7F7F5] transition"
       title="Internal Company Chat"
     >
-      <MessageSquare className="w-5 h-5 text-indigo-400" />
+      <MessageSquare className="w-4 h-4" />
       {unreadCount > 0 && (
-        <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-indigo-600 px-1 text-[10px] font-bold text-white shadow-md animate-pulse">
+        <span className="absolute -top-1.5 -right-1.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-[#F2C202] px-1 text-[10px] font-bold text-white shadow-sm">
           {unreadCount > 99 ? "99+" : unreadCount}
         </span>
       )}

@@ -19,6 +19,17 @@ import {
 } from "lucide-react";
 import { SessionContext } from "@/lib/session";
 
+/**
+ * `toLocaleTimeString`/`toLocaleDateString` with no explicit locale/timeZone
+ * resolve to the running engine's default — server (SSR) and browser
+ * (hydration) usually disagree, producing a React hydration text mismatch
+ * (error #418) on every dashboard load. Pinning both makes SSR and the
+ * client compute the identical string.
+ */
+function formatIST(value: string | Date, opts: Intl.DateTimeFormatOptions): string {
+  return new Date(value).toLocaleString("en-IN", { ...opts, timeZone: "Asia/Kolkata" });
+}
+
 interface Props {
   summary: {
     totalProducts: number;
@@ -109,7 +120,7 @@ export function DashboardClient({
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           <div className="rounded-xl border border-[#EAEAEA] bg-white p-4 shadow-sm">
             <span className="text-[10px] font-bold text-[#6B6B6B] uppercase tracking-wider block">Active Reserves</span>
-            <p className="text-xl font-bold text-[#111111] tracking-tight mt-1">{dealerSummary.totalBoxes.toLocaleString()}</p>
+            <p className="text-xl font-bold text-[#111111] tracking-tight mt-1">{dealerSummary.totalBoxes.toLocaleString("en-IN")}</p>
             <span className="text-[9px] text-[#6B6B6B] mt-1 block">Total boxes reserved</span>
           </div>
 
@@ -208,8 +219,8 @@ export function DashboardClient({
                 <div key={b.id} className="flex items-center justify-between py-3.5">
                   <div className="space-y-1">
                     <p className="text-xs font-bold text-[#111111] font-mono">{b.bookingNumber}</p>
-                    <p className="text-[10px] text-[#6B6B6B]">
-                      {new Date(b.requestedAt).toLocaleDateString("en-IN")} • {b.items.length} Products ({b.items.reduce((sum: number, i: any) => sum + i.requestedQuantity, 0)} boxes)
+                    <p className="text-[10px] text-[#6B6B6B]" suppressHydrationWarning>
+                      {formatIST(b.requestedAt, { day: "2-digit", month: "short", year: "numeric" })} • {b.items.length} Products ({b.items.reduce((sum: number, i: any) => sum + i.requestedQuantity, 0)} boxes)
                     </p>
                   </div>
                   <div className="flex items-center gap-3">
@@ -299,16 +310,16 @@ export function DashboardClient({
 
       {/* METRICS GRID */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-        <MetricCard title="Total Catalog Products" value={summary.totalProducts.toLocaleString()} icon={Boxes} color="blue" />
+        <MetricCard title="Total Catalog Products" value={summary.totalProducts.toLocaleString("en-IN")} icon={Boxes} color="blue" />
         <MetricCard 
           title="Available Stock" 
           value={(() => {
             const d = summary.stockDetails?.available;
-            if (!d) return `${summary.totalAvailableStock.toLocaleString()} Box`;
+            if (!d) return `${summary.totalAvailableStock.toLocaleString("en-IN")} Box`;
             const parts = [];
-            if (d.box > 0) parts.push(`${d.box.toLocaleString()} Box`);
-            if (d.pc > 0) parts.push(`${d.pc.toLocaleString()} Pc`);
-            if (d.bag > 0) parts.push(`${d.bag.toLocaleString()} Bag`);
+            if (d.box > 0) parts.push(`${d.box.toLocaleString("en-IN")} Box`);
+            if (d.pc > 0) parts.push(`${d.pc.toLocaleString("en-IN")} Pc`);
+            if (d.bag > 0) parts.push(`${d.bag.toLocaleString("en-IN")} Bag`);
             return parts.length > 0 ? parts.join(" • ") : "0 Box";
           })()} 
           icon={PackageCheck} 
@@ -318,11 +329,11 @@ export function DashboardClient({
           title="Blocked Hold" 
           value={(() => {
             const d = summary.stockDetails?.blocked;
-            if (!d) return `${summary.totalBlockedStock.toLocaleString()} Box`;
+            if (!d) return `${summary.totalBlockedStock.toLocaleString("en-IN")} Box`;
             const parts = [];
-            if (d.box > 0) parts.push(`${d.box.toLocaleString()} Box`);
-            if (d.pc > 0) parts.push(`${d.pc.toLocaleString()} Pc`);
-            if (d.bag > 0) parts.push(`${d.bag.toLocaleString()} Bag`);
+            if (d.box > 0) parts.push(`${d.box.toLocaleString("en-IN")} Box`);
+            if (d.pc > 0) parts.push(`${d.pc.toLocaleString("en-IN")} Pc`);
+            if (d.bag > 0) parts.push(`${d.bag.toLocaleString("en-IN")} Bag`);
             return parts.length > 0 ? parts.join(" • ") : "0 Box";
           })()} 
           icon={Lock} 
@@ -332,11 +343,11 @@ export function DashboardClient({
           title="Transit Stock" 
           value={(() => {
             const d = summary.stockDetails?.transit;
-            if (!d) return `${summary.totalInTransit.toLocaleString()} Box`;
+            if (!d) return `${summary.totalInTransit.toLocaleString("en-IN")} Box`;
             const parts = [];
-            if (d.box > 0) parts.push(`${d.box.toLocaleString()} Box`);
-            if (d.pc > 0) parts.push(`${d.pc.toLocaleString()} Pc`);
-            if (d.bag > 0) parts.push(`${d.bag.toLocaleString()} Bag`);
+            if (d.box > 0) parts.push(`${d.box.toLocaleString("en-IN")} Box`);
+            if (d.pc > 0) parts.push(`${d.pc.toLocaleString("en-IN")} Pc`);
+            if (d.bag > 0) parts.push(`${d.bag.toLocaleString("en-IN")} Bag`);
             return parts.length > 0 ? parts.join(" • ") : "0 Box";
           })()} 
           icon={Truck} 
@@ -388,8 +399,8 @@ export function DashboardClient({
                       <p className={`text-xs font-black ${isPositive ? "text-emerald-700" : "text-rose-700"}`}>
                         {isPositive ? `+${mov.quantity}` : mov.quantity} Boxes
                       </p>
-                      <p className="text-[9px] text-[#6B6B6B] mt-0.5">
-                        {new Date(mov.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      <p className="text-[9px] text-[#6B6B6B] mt-0.5" suppressHydrationWarning>
+                        {formatIST(mov.createdAt, { hour: "2-digit", minute: "2-digit" })}
                       </p>
                     </div>
                   </div>

@@ -392,7 +392,7 @@ export function BookingsDashboardClient({ bookings, summary, dealers, warehouses
                       {b.items.map(i => i.product.name).join(", ")}
                     </td>
                     <td className="px-4 py-3.5 text-right font-black text-[#8A7300] font-mono">
-                      {totalQty.toLocaleString()} Box
+                      {totalQty.toLocaleString("en-IN")} Box
                     </td>
                     <td className="px-4 py-3.5">
                       <TimeRemainingBadge expiresAt={b.expiresAt} status={b.status} />

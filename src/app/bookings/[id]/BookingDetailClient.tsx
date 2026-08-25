@@ -350,7 +350,7 @@ export function BookingDetailClient({ booking, auditLogs, session }: Props) {
                   <p className="text-xs font-black text-amber-600 animate-pulse flex items-center gap-1">
                     <Clock className="h-3.5 w-3.5" /> {timeLeft}
                   </p>
-                  <p className="text-[9px] text-[#6B6B6B]">Expires {new Date(booking.expiresAt!).toLocaleString()}</p>
+                  <p className="text-[9px] text-[#6B6B6B]" suppressHydrationWarning>Expires {new Date(booking.expiresAt!).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}</p>
                 </div>
               ) : (
                 <p className="text-xs text-[#6B6B6B] font-semibold mt-1.5">

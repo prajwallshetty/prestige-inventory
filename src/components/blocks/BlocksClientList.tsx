@@ -511,7 +511,7 @@ export function BlocksClientList({ result, filters, dealers, showrooms, session 
                           <ExpiryBadge expiresAt={block.expiresAt} status={block.status} />
                         </td>
 
-                        <td className="px-4 py-3.5 align-top whitespace-nowrap text-[10px] text-[#6B6B6B]">
+                        <td className="px-4 py-3.5 align-top whitespace-nowrap text-[10px] text-[#6B6B6B]" suppressHydrationWarning>
                           {relativeTime(block.lastActivityAt)}
                         </td>
 
@@ -662,7 +662,7 @@ export function BlocksClientList({ result, filters, dealers, showrooms, session 
                       Created by: <strong className="text-[#111111]">{block.requestedBy}</strong>
                       {block.createdRole ? ` (${block.createdRole.replace(/_/g, " ").toLowerCase()})` : ""}
                     </p>
-                    <p>
+                    <p suppressHydrationWarning>
                       Updated: <strong className="text-[#111111]">{relativeTime(block.lastActivityAt)}</strong>
                     </p>
                     {block.remarks && <p className="italic">“{block.remarks}”</p>}
@@ -802,7 +802,7 @@ function relativeTime(iso: string | null): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   if (days < 30) return `${days}d ago`;
-  return new Date(iso).toLocaleDateString();
+  return new Date(iso).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
 }
 
 function RowButton({

@@ -338,8 +338,8 @@ export function InventoryClientTable({ initialData, brands, categories, productT
                   </td>
                   <td className="px-4 py-3.5 text-[#6B6B6B]">{item.brandName || "—"}</td>
                   <td className="px-4 py-3.5 text-[#6B6B6B] font-mono">{item.size || "—"}</td>
-                  <td className="px-4 py-3.5 text-right font-black text-emerald-600 font-mono">{item.availableStock.toLocaleString()} Box</td>
-                  <td className="px-4 py-3.5 text-right text-amber-600 font-mono">{item.blockedStock.toLocaleString()} Box</td>
+                  <td className="px-4 py-3.5 text-right font-black text-emerald-600 font-mono">{item.availableStock.toLocaleString("en-IN")} Box</td>
+                  <td className="px-4 py-3.5 text-right text-amber-600 font-mono">{item.blockedStock.toLocaleString("en-IN")} Box</td>
                   <td className="px-4 py-3.5 text-center">
                     <div className="flex flex-wrap items-center justify-center gap-1">
                       {uniqueBlockedBy.map((name) => (
@@ -532,7 +532,7 @@ export function InventoryClientTable({ initialData, brands, categories, productT
       <div className="flex flex-col sm:flex-row items-center justify-between gap-4 rounded-xl border border-[#EAEAEA] bg-white p-4 shadow-sm text-xs">
         <div className="flex flex-wrap items-center gap-3 text-[#6B6B6B]">
           <span>
-            Showing <strong className="text-[#111111]">{startIndex}</strong> to <strong className="text-[#111111]">{endIndex}</strong> of <strong className="text-[#111111]">{total.toLocaleString()}</strong> catalog items
+            Showing <strong className="text-[#111111]">{startIndex}</strong> to <strong className="text-[#111111]">{endIndex}</strong> of <strong className="text-[#111111]">{total.toLocaleString("en-IN")}</strong> catalog items
           </span>
           <div className="hidden sm:block h-4 w-px bg-[#EAEAEA]" />
           <div className="flex items-center gap-2">
@@ -666,12 +666,12 @@ export function InventoryClientTable({ initialData, brands, categories, productT
                     <span>Depot Stock Balances</span>
                   </h4>
                   <div className="rounded-xl border border-[#EAEAEA] bg-white p-4 space-y-2 text-xs">
-                    <InventoryRow label="Physical Available Stock" value={`${selectedProduct.availableStock.toLocaleString()} Box`} highlight="emerald" />
-                    <InventoryRow label="Allocated (Ready for Shipment)" value={`${selectedProduct.allocatedStock.toLocaleString()} Box`} highlight="blue" />
-                    <InventoryRow label="Temporary Block Holds" value={`${selectedProduct.blockedStock.toLocaleString()} Box`} highlight="amber" />
-                    <InventoryRow label="In-Transit Deliveries" value={`${selectedProduct.transitStock.toLocaleString()} Box`} highlight="indigo" />
-                    <InventoryRow label="Damaged / Write-Offs" value={`${selectedProduct.damagedStock.toLocaleString()} Box`} highlight="rose" />
-                    <InventoryRow label="Reorder Threshold Alert" value={`${selectedProduct.reorderLevel.toLocaleString()} Box`} />
+                    <InventoryRow label="Physical Available Stock" value={`${selectedProduct.availableStock.toLocaleString("en-IN")} Box`} highlight="emerald" />
+                    <InventoryRow label="Allocated (Ready for Shipment)" value={`${selectedProduct.allocatedStock.toLocaleString("en-IN")} Box`} highlight="blue" />
+                    <InventoryRow label="Temporary Block Holds" value={`${selectedProduct.blockedStock.toLocaleString("en-IN")} Box`} highlight="amber" />
+                    <InventoryRow label="In-Transit Deliveries" value={`${selectedProduct.transitStock.toLocaleString("en-IN")} Box`} highlight="indigo" />
+                    <InventoryRow label="Damaged / Write-Offs" value={`${selectedProduct.damagedStock.toLocaleString("en-IN")} Box`} highlight="rose" />
+                    <InventoryRow label="Reorder Threshold Alert" value={`${selectedProduct.reorderLevel.toLocaleString("en-IN")} Box`} />
                   </div>
                 </div>
 
@@ -690,7 +690,7 @@ export function InventoryClientTable({ initialData, brands, categories, productT
                               <span className="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
                               Blocked Hold
                             </span>
-                            <span className="font-black text-[#111111]">{block.quantity.toLocaleString()} Boxes</span>
+                            <span className="font-black text-[#111111]">{block.quantity.toLocaleString("en-IN")} Boxes</span>
                           </div>
                           
                           <div className="grid grid-cols-2 gap-y-2 gap-x-4 text-[11px]">

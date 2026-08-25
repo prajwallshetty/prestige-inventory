@@ -1,6 +1,17 @@
 import { db } from "@/lib/db";
 import { ConversationType, MessageType } from "@prisma/client";
 import { publishEvent } from "@/lib/redis";
+import { ROLES } from "@/lib/permissions";
+
+/**
+ * `User.role` is a Prisma enum — `contains`/`mode: "insensitive"` are string-only
+ * filters and Prisma throws "Unknown argument `contains`" for an enum field.
+ * Matches only an exact (case-insensitive) role name, e.g. "manager" -> MANAGER.
+ */
+function matchingRole(query: string): (typeof ROLES)[number] | null {
+  const normalized = query.trim().toUpperCase().replace(/\s+/g, "_");
+  return (ROLES as readonly string[]).includes(normalized) ? (normalized as (typeof ROLES)[number]) : null;
+}
 
 export interface CreateGroupInput {
   name: string;
@@ -234,7 +245,7 @@ export async function getConversationsForUser(
               OR: [
                 { name: { contains: q, mode: "insensitive" } },
                 { email: { contains: q, mode: "insensitive" } },
-                { role: { contains: q, mode: "insensitive" } },
+                ...(matchingRole(q) ? [{ role: matchingRole(q)! }] : []),
               ],
             },
           },

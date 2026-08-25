@@ -13,20 +13,29 @@ import {
   X,
   Reply,
   Trash2,
-  Edit2,
   CheckCheck,
   ShieldAlert,
   ArrowLeft,
-  Boxes,
   Lock,
-  Truck,
   FileText,
-  Image as ImageIcon,
   Check,
   ChevronRight,
   Info,
+  AlertCircle,
+  RotateCcw,
 } from "lucide-react";
 import { toast } from "sonner";
+
+/**
+ * `toLocaleTimeString()` with no explicit timeZone resolves to whatever
+ * timezone the JS engine is running in — the server (SSR) and the browser
+ * (hydration) rarely agree, which threw React error #418 (hydration text
+ * mismatch) on every load. Pinning the zone makes server and client compute
+ * the identical string.
+ */
+function formatMessageTime(value: string | Date): string {
+  return new Date(value).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" });
+}
 
 interface Props {
   session: {
@@ -38,6 +47,8 @@ interface Props {
   initialConversations?: any[];
   initialActiveId?: string;
 }
+
+type SendState = "idle" | "sending" | "failed";
 
 export function ChatClient({ session, initialConversations = [], initialActiveId }: Props) {
   const [conversations, setConversations] = useState<any[]>(initialConversations);
@@ -54,7 +65,8 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
   const [replyTo, setReplyTo] = useState<any | null>(null);
   const [attachment, setAttachment] = useState<any | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [sending, setSending] = useState(false);
+  const [sendState, setSendState] = useState<SendState>("idle");
+  const [lastFailedPayload, setLastFailedPayload] = useState<{ content: string; attachment: any; replyId?: string } | null>(null);
   const [loadingMessages, setLoadingMessages] = useState(false);
 
   // Modals
@@ -110,28 +122,34 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
       clearInterval(interval);
       if (es) es.close();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchQuery, activeId]);
 
   const fetchMessages = async (convId: string) => {
     setLoadingMessages(true);
     try {
-      const res = await fetch(`/api/v1/chat/conversations/${convId}/messages?limit=60`);
+      // The messages, conversation-details, and mark-read calls are
+      // independent — awaiting them one after another triples the wait on a
+      // database this far away (each round trip runs ~1-1.5s). Run the two
+      // reads in parallel and don't block the UI on the read receipt at all.
+      const [res, detailsRes] = await Promise.all([
+        fetch(`/api/v1/chat/conversations/${convId}/messages?limit=60`),
+        fetch(`/api/v1/chat/conversations/${convId}`),
+      ]);
+      fetch(`/api/v1/chat/conversations/${convId}/read`, { method: "POST" }).catch(() => {});
+
       if (res.ok) {
         const json = await res.json();
         if (json.success) {
           setMessages(json.messages || []);
         }
       }
-      // Fetch details
-      const detailsRes = await fetch(`/api/v1/chat/conversations/${convId}`);
       if (detailsRes.ok) {
         const dJson = await detailsRes.json();
         if (dJson.success) {
           setActiveConv(dJson.data);
         }
       }
-      // Mark read
-      await fetch(`/api/v1/chat/conversations/${convId}/read`, { method: "POST" });
     } catch (err) {
       toast.error("Failed loading messages");
     } finally {
@@ -140,19 +158,25 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
     }
   };
 
+  // On mobile, the auto-selected first conversation (see initial state above)
+  // must not jump straight into its thread — the user should land on the
+  // conversation list and tap one, per the mobile-first spec. Only an actual
+  // selection (handleSelectConversation) should flip to the thread view.
+  const isInitialMount = useRef(true);
+
   useEffect(() => {
     if (activeId) {
       fetchMessages(activeId);
-      if (typeof window !== "undefined" && window.innerWidth < 768) {
-        setMobileShowThread(true);
+      if (isInitialMount.current) {
+        isInitialMount.current = false;
       }
 
       // Polling fallback so a message from the other side of the conversation
-      // shows up without a manual refresh even when Redis/SSE isn't delivering
-      // (e.g. no REDIS_URL configured for this deployment).
+      // shows up without a manual refresh even when Redis/SSE isn't delivering.
       const poll = setInterval(() => pollNewMessages(activeId), 5000);
       return () => clearInterval(poll);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId]);
 
   const pollNewMessages = async (convId: string) => {
@@ -179,23 +203,13 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
     setActiveId(id);
     setReplyTo(null);
     setAttachment(null);
+    setSendState("idle");
     setMobileShowThread(true);
   };
 
-  const handleSendMessage = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!activeId || sending) return;
-    if (!inputText.trim() && !attachment) return;
-
-    setSending(true);
-    const content = inputText;
-    const att = attachment;
-    const replyId = replyTo?.id;
-
-    setInputText("");
-    setAttachment(null);
-    setReplyTo(null);
-
+  const doSend = async (content: string, att: any, replyId?: string) => {
+    if (!activeId) return;
+    setSendState("sending");
     try {
       const res = await fetch(`/api/v1/chat/conversations/${activeId}/messages`, {
         method: "POST",
@@ -214,16 +228,36 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
         throw new Error(json.error || "Failed to send message");
       }
 
-      // Append optimistic or refetch
+      setSendState("idle");
+      setLastFailedPayload(null);
       fetchMessages(activeId);
       fetchConversations();
     } catch (err: any) {
-      toast.error(err.message || "Failed to send message");
-      setInputText(content);
-      setAttachment(att);
-    } finally {
-      setSending(false);
+      setSendState("failed");
+      setLastFailedPayload({ content, attachment: att, replyId });
+      toast.error(err.message || "Message failed to send");
     }
+  };
+
+  const handleSendMessage = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!activeId || sendState === "sending") return;
+    if (!inputText.trim() && !attachment) return;
+
+    const content = inputText;
+    const att = attachment;
+    const replyId = replyTo?.id;
+
+    setInputText("");
+    setAttachment(null);
+    setReplyTo(null);
+
+    await doSend(content, att, replyId);
+  };
+
+  const handleRetry = async () => {
+    if (!lastFailedPayload) return;
+    await doSend(lastFailedPayload.content, lastFailedPayload.attachment, lastFailedPayload.replyId);
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -267,7 +301,6 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
     }
   };
 
-  // Search users for new direct chat
   const handleUserSearch = async (q: string) => {
     setUserSearchQuery(q);
     try {
@@ -293,7 +326,7 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
 
       setIsNewDirectModalOpen(false);
       await fetchConversations();
-      setActiveId(json.data.id);
+      handleSelectConversation(json.data.id);
       toast.success("Conversation opened");
     } catch (err: any) {
       toast.error(err.message || "Failed to start direct chat");
@@ -327,7 +360,7 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
       setGroupDescription("");
       setSelectedUserIds([]);
       await fetchConversations();
-      setActiveId(json.data.id);
+      handleSelectConversation(json.data.id);
       toast.success(`Group "${groupName}" created`);
     } catch (err: any) {
       toast.error(err.message || "Failed to create group");
@@ -341,18 +374,18 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
   });
 
   return (
-    <div className="flex h-[calc(100vh-120px)] min-h-[500px] w-full overflow-hidden rounded-2xl border border-slate-800 bg-slate-950 text-slate-100 shadow-2xl">
+    <div className="flex h-[calc(100dvh-64px)] md:h-[calc(100vh-120px)] md:min-h-[560px] w-full overflow-hidden rounded-none md:rounded-2xl border-0 md:border md:border-[#EAEAEA] bg-white text-[#111111] md:shadow-sm">
       {/* LEFT PANEL: Conversation List */}
       <div
-        className={`flex w-full flex-col border-r border-slate-800 bg-slate-900 md:w-80 md:min-w-[320px] lg:w-96 ${
+        className={`flex w-full flex-col border-r border-[#EAEAEA] bg-white md:w-80 md:min-w-[320px] lg:w-96 ${
           mobileShowThread ? "hidden md:flex" : "flex"
         }`}
       >
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-800 p-4">
+        <div className="flex items-center justify-between border-b border-[#EAEAEA] p-4">
           <div className="flex items-center gap-2">
-            <MessageSquare className="h-5 w-5 text-indigo-400" />
-            <h2 className="text-lg font-bold text-white tracking-tight">Internal Chat</h2>
+            <MessageSquare className="h-5 w-5 text-[#F2C202]" />
+            <h2 className="text-lg font-bold text-[#111111] tracking-tight">Internal Chat</h2>
           </div>
 
           <div className="flex items-center gap-1.5">
@@ -361,7 +394,7 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
                 setIsNewDirectModalOpen(true);
                 handleUserSearch("");
               }}
-              className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition"
+              className="p-2.5 text-[#6B6B6B] hover:text-[#111111] hover:bg-[#F7F7F5] rounded-xl transition min-h-[40px] min-w-[40px] flex items-center justify-center"
               title="New 1-on-1 Chat"
             >
               <UserIcon className="h-4 w-4" />
@@ -373,7 +406,7 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
                   setIsNewGroupModalOpen(true);
                   handleUserSearch("");
                 }}
-                className="p-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition shadow-md"
+                className="p-2.5 bg-[#F2C202] hover:bg-[#D8AD02] text-white rounded-xl transition shadow-sm min-h-[40px] min-w-[40px] flex items-center justify-center"
                 title="New Group Channel"
               >
                 <Plus className="h-4 w-4" />
@@ -383,15 +416,15 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
         </div>
 
         {/* Search & Filter */}
-        <div className="p-3 space-y-2 border-b border-slate-800/60">
+        <div className="p-3 space-y-2 border-b border-[#EAEAEA]">
           <div className="relative">
-            <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#6B6B6B]" />
             <input
               type="text"
               placeholder="Search conversations, staff, blocks..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition"
+              className="w-full bg-[#F7F7F5] border border-[#EAEAEA] rounded-xl pl-9 pr-3 py-2.5 text-xs text-[#111111] placeholder-[#6B6B6B] focus:outline-none focus:border-[#F2C202] transition"
             />
           </div>
 
@@ -400,10 +433,10 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
               <button
                 key={t}
                 onClick={() => setFilterType(t)}
-                className={`px-3 py-1 text-[11px] font-semibold rounded-lg transition ${
+                className={`px-3 py-1.5 text-[11px] font-semibold rounded-lg transition ${
                   filterType === t
-                    ? "bg-indigo-600 text-white shadow-xs"
-                    : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+                    ? "bg-[#111111] text-white"
+                    : "text-[#6B6B6B] hover:bg-[#F7F7F5]"
                 }`}
               >
                 {t === "ALL" ? "All" : t === "DIRECT" ? "Direct" : "Groups"}
@@ -413,16 +446,17 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
         </div>
 
         {/* Conversation List */}
-        <div className="flex-1 overflow-y-auto divide-y divide-slate-800/40">
+        <div className="flex-1 overflow-y-auto divide-y divide-[#EAEAEA]">
           {filteredConversations.length === 0 ? (
-            <div className="p-8 text-center text-slate-500 text-xs">
-              <p>No conversations found.</p>
+            <div className="p-8 text-center text-[#6B6B6B] text-xs">
+              <MessageSquare className="h-8 w-8 mx-auto mb-2 text-[#EAEAEA]" />
+              <p>No conversations yet.</p>
               <button
                 onClick={() => {
                   setIsNewDirectModalOpen(true);
                   handleUserSearch("");
                 }}
-                className="mt-3 text-indigo-400 hover:underline font-semibold"
+                className="mt-3 text-[#8A7300] hover:underline font-semibold"
               >
                 Start a direct chat
               </button>
@@ -435,37 +469,35 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
                 <div
                   key={c.id}
                   onClick={() => handleSelectConversation(c.id)}
-                  className={`p-3.5 cursor-pointer transition flex items-center justify-between ${
-                    isSelected
-                      ? "bg-indigo-600/10 border-l-4 border-indigo-500"
-                      : "hover:bg-slate-800/40"
+                  className={`p-3.5 cursor-pointer transition flex items-center justify-between min-h-[64px] ${
+                    isSelected ? "bg-[#F2C202]/10 border-l-4 border-[#F2C202]" : "hover:bg-[#F7F7F5] border-l-4 border-transparent"
                   }`}
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="relative shrink-0">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-800 border border-slate-700 text-slate-300 font-bold text-sm">
-                        {c.type === "GROUP" ? <Users className="h-5 w-5 text-indigo-400" /> : c.name.charAt(0).toUpperCase()}
+                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#F7F7F5] border border-[#EAEAEA] text-[#111111] font-bold text-sm">
+                        {c.type === "GROUP" ? <Users className="h-5 w-5 text-[#8A7300]" /> : c.name.charAt(0).toUpperCase()}
                       </div>
                       {hasUnread && (
-                        <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-indigo-500 px-1 text-[10px] font-bold text-white">
+                        <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-[#F2C202] px-1 text-[10px] font-bold text-white shadow-sm">
                           {c.unreadCount}
                         </span>
                       )}
                     </div>
 
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between">
-                        <h4 className={`text-xs font-bold truncate ${isSelected ? "text-white" : "text-slate-200"}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <h4 className={`text-xs truncate ${hasUnread ? "font-bold text-[#111111]" : "font-semibold text-[#111111]"}`}>
                           {c.name}
                         </h4>
                         {c.lastMessageAt && (
-                          <span className="text-[10px] text-slate-500 shrink-0">
-                            {new Date(c.lastMessageAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          <span className="text-[10px] text-[#6B6B6B] shrink-0" suppressHydrationWarning>
+                            {formatMessageTime(c.lastMessageAt)}
                           </span>
                         )}
                       </div>
 
-                      <p className="text-[11px] text-slate-400 truncate mt-0.5">
+                      <p className="text-[11px] text-[#6B6B6B] truncate mt-0.5">
                         {c.lastMessage ? c.lastMessage.content : c.description || "Start chatting..."}
                       </p>
                     </div>
@@ -479,36 +511,36 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
 
       {/* RIGHT PANEL: Active Chat Thread */}
       <div
-        className={`flex flex-1 flex-col bg-slate-950 ${
+        className={`flex flex-1 flex-col bg-white min-h-0 ${
           !mobileShowThread ? "hidden md:flex" : "flex"
         }`}
       >
         {activeConv ? (
           <>
             {/* Thread Header */}
-            <div className="flex items-center justify-between border-b border-slate-800 bg-slate-900/80 px-4 py-3 backdrop-blur-md">
-              <div className="flex items-center gap-3">
+            <div className="flex items-center justify-between border-b border-[#EAEAEA] bg-white px-4 py-3 shrink-0">
+              <div className="flex items-center gap-3 min-w-0">
                 <button
                   onClick={() => setMobileShowThread(false)}
-                  className="md:hidden p-1.5 text-slate-400 hover:text-white rounded-lg"
+                  className="md:hidden p-2 -ml-2 text-[#6B6B6B] hover:text-[#111111] rounded-lg min-h-[40px] min-w-[40px] flex items-center justify-center shrink-0"
                 >
                   <ArrowLeft className="h-5 w-5" />
                 </button>
 
-                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 font-bold text-xs">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#F7F7F5] border border-[#EAEAEA] text-[#8A7300] font-bold text-xs shrink-0">
                   {activeConv.type === "GROUP" ? <Users className="h-4 w-4" /> : activeConv.name?.charAt(0) || "C"}
                 </div>
 
-                <div>
+                <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-bold text-white">{activeConv.name || "Chat Thread"}</h3>
+                    <h3 className="text-sm font-bold text-[#111111] truncate">{activeConv.name || "Chat Thread"}</h3>
                     {activeConv.isSuperAdminView && (
-                      <span className="px-2 py-0.5 text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30 rounded-full flex items-center gap-1">
-                        <ShieldAlert className="h-3 w-3" /> Administrative View
+                      <span className="px-2 py-0.5 text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 rounded-full flex items-center gap-1 shrink-0">
+                        <ShieldAlert className="h-3 w-3" /> Admin View
                       </span>
                     )}
                   </div>
-                  <p className="text-[11px] text-slate-400">
+                  <p className="text-[11px] text-[#6B6B6B] truncate">
                     {activeConv.type === "GROUP"
                       ? `${activeConv.participants.length} Participants`
                       : activeConv.participants.find((p: any) => p.userId !== session.userId)?.user?.role || "Internal User"}
@@ -516,11 +548,10 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
                 </div>
               </div>
 
-              {/* Linked Operational Details Banner */}
               {activeConv.blockId && (
                 <Link
                   href={`/blocks?search=${encodeURIComponent(activeConv.blockId)}`}
-                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-xl text-xs font-semibold transition"
+                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-[#F7F7F5] hover:bg-[#EAEAEA] text-[#8A7300] border border-[#EAEAEA] rounded-xl text-xs font-semibold transition shrink-0"
                 >
                   <Lock className="h-3.5 w-3.5" /> Block #{activeConv.blockId} <ChevronRight className="h-3 w-3" />
                 </Link>
@@ -528,16 +559,16 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
             </div>
 
             {/* Messages Feed */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-[#F7F7F5]/40">
               {loadingMessages && messages.length === 0 ? (
                 <div className="space-y-4">
                   {[1, 2, 3].map((i) => (
-                    <div key={i} className="h-12 bg-slate-900 rounded-xl animate-pulse w-2/3" />
+                    <div key={i} className="h-12 bg-[#EAEAEA]/60 rounded-xl animate-pulse w-2/3" />
                   ))}
                 </div>
               ) : messages.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-slate-500 text-xs">
-                  <MessageSquare className="h-8 w-8 mb-2 opacity-50" />
+                <div className="h-full flex flex-col items-center justify-center text-[#6B6B6B] text-xs">
+                  <MessageSquare className="h-8 w-8 mb-2 text-[#EAEAEA]" />
                   <p>No messages yet. Send a message to start.</p>
                 </div>
               ) : (
@@ -548,58 +579,52 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
                   if (isSystem) {
                     return (
                       <div key={m.id} className="flex justify-center my-2">
-                        <span className="px-3 py-1 bg-slate-900 border border-slate-800 text-slate-400 text-[11px] font-medium rounded-full flex items-center gap-1.5 shadow-xs">
-                          <Info className="h-3 w-3 text-indigo-400" /> {m.content}
+                        <span className="px-3 py-1 bg-white border border-[#EAEAEA] text-[#6B6B6B] text-[11px] font-medium rounded-full flex items-center gap-1.5 shadow-xs">
+                          <Info className="h-3 w-3 text-[#8A7300]" /> {m.content}
                         </span>
                       </div>
                     );
                   }
 
                   return (
-                    <div
-                      key={m.id}
-                      className={`flex flex-col group ${isMine ? "items-end" : "items-start"}`}
-                    >
+                    <div key={m.id} className={`flex flex-col group ${isMine ? "items-end" : "items-start"}`}>
                       <div className="flex items-center gap-2 mb-1">
-                        <span className="text-[10px] font-bold text-slate-400">{m.senderName}</span>
-                        <span className="text-[9px] text-slate-500">
-                          {new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        <span className="text-[10px] font-bold text-[#6B6B6B]">{m.senderName}</span>
+                        <span className="text-[9px] text-[#6B6B6B]/70" suppressHydrationWarning>
+                          {formatMessageTime(m.createdAt)}
                         </span>
                       </div>
 
                       <div
-                        className={`relative max-w-[85%] sm:max-w-[70%] rounded-2xl p-3 text-xs leading-relaxed shadow-lg ${
+                        className={`relative max-w-[85%] sm:max-w-[70%] rounded-2xl p-3 text-xs leading-relaxed ${
                           isMine
-                            ? "bg-indigo-600 text-white rounded-br-none"
-                            : "bg-slate-900 border border-slate-800 text-slate-200 rounded-bl-none"
+                            ? "bg-[#FEF6D8] border border-[#F2C202]/40 text-[#111111] rounded-br-sm"
+                            : "bg-white border border-[#EAEAEA] text-[#111111] rounded-bl-sm shadow-xs"
                         }`}
                       >
-                        {/* Reply reference */}
                         {m.replyTo && (
-                          <div className="mb-2 p-2 rounded-lg bg-black/20 border-l-2 border-indigo-300 text-[11px]">
-                            <p className="font-semibold opacity-90">{m.replyTo.senderName}</p>
-                            <p className="line-clamp-1 opacity-75">{m.replyTo.content}</p>
+                          <div className="mb-2 p-2 rounded-lg bg-black/[0.03] border-l-2 border-[#F2C202] text-[11px]">
+                            <p className="font-semibold text-[#111111]/80">{m.replyTo.senderName}</p>
+                            <p className="line-clamp-1 text-[#6B6B6B]">{m.replyTo.content}</p>
                           </div>
                         )}
 
-                        {/* Content */}
                         <p className="whitespace-pre-wrap break-words">{m.content}</p>
 
-                        {/* Attachment display */}
                         {m.attachmentUrl && (
                           <div className="mt-2">
-                            {m.type === "IMAGE" || m.attachmentUrl.startsWith("data:image/") ? (
+                            {m.type === "IMAGE" ? (
                               <img
                                 src={m.attachmentUrl}
                                 alt="Attachment"
-                                className="max-h-48 rounded-lg object-cover border border-black/20"
+                                className="max-h-48 rounded-lg object-cover border border-[#EAEAEA]"
                               />
                             ) : (
                               <a
                                 href={m.attachmentUrl}
                                 target="_blank"
                                 rel="noreferrer"
-                                className="flex items-center gap-2 p-2 bg-black/20 rounded-lg hover:bg-black/30 transition text-indigo-200"
+                                className="flex items-center gap-2 p-2 bg-black/[0.03] rounded-lg hover:bg-black/[0.06] transition text-[#8A7300]"
                               >
                                 <FileText className="h-4 w-4" />
                                 <span className="underline truncate max-w-[180px]">
@@ -610,23 +635,18 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
                           </div>
                         )}
 
-                        {/* Hover Actions */}
                         <div
-                          className={`absolute top-1 hidden group-hover:flex items-center gap-1 bg-slate-950/90 border border-slate-800 px-1.5 py-0.5 rounded-lg text-slate-400 ${
+                          className={`absolute top-1 hidden group-hover:flex items-center gap-1 bg-white border border-[#EAEAEA] px-1.5 py-0.5 rounded-lg text-[#6B6B6B] shadow-sm ${
                             isMine ? "-left-16" : "-right-16"
                           }`}
                         >
-                          <button
-                            onClick={() => setReplyTo(m)}
-                            className="p-1 hover:text-white"
-                            title="Reply"
-                          >
+                          <button onClick={() => setReplyTo(m)} className="p-1 hover:text-[#111111]" title="Reply">
                             <Reply className="h-3.5 w-3.5" />
                           </button>
                           {(isMine || session.role === "SUPER_ADMIN") && (
                             <button
                               onClick={() => handleDeleteMessage(m.id)}
-                              className="p-1 hover:text-red-400"
+                              className="p-1 hover:text-rose-600"
                               title="Delete"
                             >
                               <Trash2 className="h-3.5 w-3.5" />
@@ -634,6 +654,15 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
                           )}
                         </div>
                       </div>
+
+                      {isMine && sendState === "failed" && lastFailedPayload?.content === m.content && (
+                        <div className="flex items-center gap-1.5 mt-1 text-[10px] text-rose-600">
+                          <AlertCircle className="h-3 w-3" /> Failed to send
+                          <button onClick={handleRetry} className="flex items-center gap-0.5 font-semibold underline">
+                            <RotateCcw className="h-2.5 w-2.5" /> Retry
+                          </button>
+                        </div>
+                      )}
                     </div>
                   );
                 })
@@ -641,35 +670,37 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Quoted Reply Preview */}
             {replyTo && (
-              <div className="flex items-center justify-between bg-slate-900 border-t border-slate-800 px-4 py-2 text-xs">
+              <div className="flex items-center justify-between bg-[#F7F7F5] border-t border-[#EAEAEA] px-4 py-2 text-xs shrink-0">
                 <div className="flex items-center gap-2 truncate">
-                  <Reply className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
-                  <span className="text-slate-400">Replying to <strong className="text-white">{replyTo.senderName}</strong>:</span>
-                  <span className="text-slate-300 truncate">{replyTo.content}</span>
+                  <Reply className="h-3.5 w-3.5 text-[#8A7300] shrink-0" />
+                  <span className="text-[#6B6B6B]">Replying to <strong className="text-[#111111]">{replyTo.senderName}</strong>:</span>
+                  <span className="text-[#111111] truncate">{replyTo.content}</span>
                 </div>
-                <button onClick={() => setReplyTo(null)} className="text-slate-500 hover:text-white">
+                <button onClick={() => setReplyTo(null)} className="text-[#6B6B6B] hover:text-[#111111] p-1">
                   <X className="h-4 w-4" />
                 </button>
               </div>
             )}
 
-            {/* Attachment Preview */}
             {attachment && (
-              <div className="flex items-center justify-between bg-indigo-950/40 border-t border-indigo-500/30 px-4 py-2 text-xs">
+              <div className="flex items-center justify-between bg-[#FEF6D8] border-t border-[#F2C202]/30 px-4 py-2 text-xs shrink-0">
                 <div className="flex items-center gap-2 truncate">
-                  <Paperclip className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
-                  <span className="text-indigo-200 font-semibold truncate">{attachment.attachmentName}</span>
+                  <Paperclip className="h-3.5 w-3.5 text-[#8A7300] shrink-0" />
+                  <span className="text-[#111111] font-semibold truncate">{attachment.attachmentName}</span>
                 </div>
-                <button onClick={() => setAttachment(null)} className="text-slate-500 hover:text-white">
+                <button onClick={() => setAttachment(null)} className="text-[#6B6B6B] hover:text-[#111111] p-1">
                   <X className="h-4 w-4" />
                 </button>
               </div>
             )}
 
-            {/* Message Input Box */}
-            <form onSubmit={handleSendMessage} className="border-t border-slate-800 bg-slate-900 p-3">
+            {/* Message Input Box — pinned, safe-area aware for mobile keyboards */}
+            <form
+              onSubmit={handleSendMessage}
+              className="border-t border-[#EAEAEA] bg-white p-3 shrink-0"
+              style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+            >
               <div className="flex items-center gap-2">
                 <input
                   type="file"
@@ -682,7 +713,7 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={uploading}
-                  className="p-2.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition"
+                  className="p-2.5 text-[#6B6B6B] hover:text-[#111111] hover:bg-[#F7F7F5] rounded-xl transition min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
                   title="Attach file"
                 >
                   <Paperclip className="h-4 w-4" />
@@ -690,7 +721,7 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
 
                 <input
                   type="text"
-                  placeholder="Type a message... (Shift + Enter for new line)"
+                  placeholder="Type a message..."
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
                   onKeyDown={(e) => {
@@ -699,24 +730,28 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
                       handleSendMessage();
                     }
                   }}
-                  className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition"
+                  className="flex-1 min-w-0 bg-[#F7F7F5] border border-[#EAEAEA] rounded-xl px-4 py-3 md:py-2.5 text-sm md:text-xs text-[#111111] placeholder-[#6B6B6B] focus:outline-none focus:border-[#F2C202] transition"
                 />
 
                 <button
                   type="submit"
-                  disabled={sending || (!inputText.trim() && !attachment)}
-                  className="flex items-center justify-center p-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl transition shadow-md"
+                  disabled={sendState === "sending" || (!inputText.trim() && !attachment)}
+                  className="flex items-center justify-center min-h-[44px] min-w-[44px] p-2.5 bg-[#F2C202] hover:bg-[#D8AD02] disabled:opacity-40 text-white rounded-xl transition shadow-sm shrink-0"
                 >
-                  <Send className="h-4 w-4" />
+                  {sendState === "sending" ? (
+                    <span className="h-4 w-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <Send className="h-4 w-4" />
+                  )}
                 </button>
               </div>
             </form>
           </>
         ) : (
-          <div className="h-full flex flex-col items-center justify-center text-slate-500 p-8 text-center">
-            <MessageSquare className="h-12 w-12 text-slate-700 mb-3" />
-            <h3 className="text-base font-bold text-slate-300">No Conversation Selected</h3>
-            <p className="text-xs text-slate-500 max-w-sm mt-1">
+          <div className="h-full flex flex-col items-center justify-center text-[#6B6B6B] p-8 text-center">
+            <MessageSquare className="h-12 w-12 text-[#EAEAEA] mb-3" />
+            <h3 className="text-base font-bold text-[#111111]">No Conversation Selected</h3>
+            <p className="text-xs text-[#6B6B6B] max-w-sm mt-1">
               Select a conversation from the left menu or click New Chat to start communicating.
             </p>
           </div>
@@ -725,41 +760,42 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
 
       {/* Modal: New Direct 1-on-1 Chat */}
       {isNewDirectModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-2xl p-6 space-y-4 shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-xs" onClick={() => setIsNewDirectModalOpen(false)} />
+          <div className="relative bg-white border border-[#EAEAEA] w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl p-6 space-y-4 shadow-lg max-h-[85vh] overflow-y-auto">
             <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold text-white">Start 1-on-1 Chat</h3>
-              <button onClick={() => setIsNewDirectModalOpen(false)} className="text-slate-500 hover:text-white">
+              <h3 className="text-base font-bold text-[#111111]">Start 1-on-1 Chat</h3>
+              <button onClick={() => setIsNewDirectModalOpen(false)} className="text-[#6B6B6B] hover:text-[#111111] p-1">
                 <X className="h-5 w-5" />
               </button>
             </div>
 
             <div className="relative">
-              <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#6B6B6B]" />
               <input
                 type="text"
                 placeholder="Search staff by name, email, role..."
                 value={userSearchQuery}
                 onChange={(e) => handleUserSearch(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                className="w-full bg-[#F7F7F5] border border-[#EAEAEA] rounded-xl pl-9 pr-3 py-2.5 text-xs text-[#111111] focus:outline-none focus:border-[#F2C202]"
               />
             </div>
 
-            <div className="max-h-60 overflow-y-auto divide-y divide-slate-800/50">
+            <div className="max-h-60 overflow-y-auto divide-y divide-[#EAEAEA]">
               {foundUsers.length === 0 ? (
-                <p className="p-4 text-center text-xs text-slate-500">No matching active users.</p>
+                <p className="p-4 text-center text-xs text-[#6B6B6B]">No matching active users.</p>
               ) : (
                 foundUsers.map((u) => (
                   <div
                     key={u.id}
                     onClick={() => startDirectChat(u.id)}
-                    className="p-3 flex items-center justify-between hover:bg-slate-800/50 cursor-pointer rounded-xl transition"
+                    className="p-3 flex items-center justify-between hover:bg-[#F7F7F5] cursor-pointer rounded-xl transition min-h-[52px]"
                   >
                     <div>
-                      <h4 className="text-xs font-bold text-white">{u.name}</h4>
-                      <p className="text-[10px] text-slate-400">{u.role} • {u.email}</p>
+                      <h4 className="text-xs font-bold text-[#111111]">{u.name}</h4>
+                      <p className="text-[10px] text-[#6B6B6B]">{u.role} • {u.email}</p>
                     </div>
-                    <ChevronRight className="h-4 w-4 text-slate-500" />
+                    <ChevronRight className="h-4 w-4 text-[#6B6B6B]" />
                   </div>
                 ))
               )}
@@ -770,49 +806,50 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
 
       {/* Modal: New Group Operational Channel */}
       {isNewGroupModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-2xl p-6 space-y-4 shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-xs" onClick={() => setIsNewGroupModalOpen(false)} />
+          <div className="relative bg-white border border-[#EAEAEA] w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl p-6 space-y-4 shadow-lg max-h-[85vh] overflow-y-auto">
             <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold text-white">Create Group Channel</h3>
-              <button onClick={() => setIsNewGroupModalOpen(false)} className="text-slate-500 hover:text-white">
+              <h3 className="text-base font-bold text-[#111111]">Create Group Channel</h3>
+              <button onClick={() => setIsNewGroupModalOpen(false)} className="text-[#6B6B6B] hover:text-[#111111] p-1">
                 <X className="h-5 w-5" />
               </button>
             </div>
 
             <form onSubmit={createGroup} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Group Name</label>
+                <label className="block text-xs font-semibold text-[#111111] mb-1">Group Name</label>
                 <input
                   type="text"
                   required
                   placeholder="e.g. Mangalore Showroom Operational"
                   value={groupName}
                   onChange={(e) => setGroupName(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                  className="w-full bg-[#F7F7F5] border border-[#EAEAEA] rounded-xl px-3.5 py-2.5 text-xs text-[#111111] focus:outline-none focus:border-[#F2C202]"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Description (Optional)</label>
+                <label className="block text-xs font-semibold text-[#111111] mb-1">Description (Optional)</label>
                 <input
                   type="text"
                   placeholder="Purpose of this group..."
                   value={groupDescription}
                   onChange={(e) => setGroupDescription(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                  className="w-full bg-[#F7F7F5] border border-[#EAEAEA] rounded-xl px-3.5 py-2.5 text-xs text-[#111111] focus:outline-none focus:border-[#F2C202]"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Add Members</label>
+                <label className="block text-xs font-semibold text-[#111111] mb-1">Add Members</label>
                 <div className="relative mb-2">
-                  <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-500" />
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#6B6B6B]" />
                   <input
                     type="text"
                     placeholder="Search users to add..."
                     value={userSearchQuery}
                     onChange={(e) => handleUserSearch(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-[#F7F7F5] border border-[#EAEAEA] rounded-xl pl-8 pr-3 py-2 text-xs text-[#111111] focus:outline-none focus:border-[#F2C202]"
                   />
                 </div>
 
@@ -827,12 +864,12 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
                             isSelected ? prev.filter((id) => id !== u.id) : [...prev, u.id]
                           );
                         }}
-                        className={`p-2 rounded-lg flex items-center justify-between text-xs cursor-pointer transition ${
-                          isSelected ? "bg-indigo-600/20 text-indigo-300 border border-indigo-500/40" : "bg-slate-950 hover:bg-slate-800 text-slate-300"
+                        className={`p-2.5 rounded-lg flex items-center justify-between text-xs cursor-pointer transition min-h-[40px] ${
+                          isSelected ? "bg-[#F2C202]/10 text-[#8A7300] border border-[#F2C202]/40" : "bg-[#F7F7F5] hover:bg-[#EAEAEA] text-[#111111]"
                         }`}
                       >
                         <span>{u.name} ({u.role})</span>
-                        {isSelected && <Check className="h-3.5 w-3.5 text-indigo-400" />}
+                        {isSelected && <Check className="h-3.5 w-3.5 text-[#8A7300]" />}
                       </div>
                     );
                   })}
@@ -843,13 +880,13 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
                 <button
                   type="button"
                   onClick={() => setIsNewGroupModalOpen(false)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-400 hover:text-white"
+                  className="px-4 py-2.5 text-xs font-semibold text-[#6B6B6B] hover:text-[#111111]"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs rounded-xl shadow-lg"
+                  className="px-4 py-2.5 bg-[#F2C202] hover:bg-[#D8AD02] text-white font-bold text-xs rounded-xl shadow-sm"
                 >
                   Create Group
                 </button>
