@@ -41,7 +41,7 @@ async function main() {
     update: { role: "SUPER_ADMIN" },
     create: {
       email: "admin@prestigetiles.com",
-      name: "Aditya Hegde",
+      name: "Super Admin",
       password: hashedPassword,
       role: "SUPER_ADMIN",
       status: "ACTIVE",
