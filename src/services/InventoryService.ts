@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { ACTIVE_BLOCK_STATUSES, PENDING_BLOCK_STATUSES } from "@/lib/permissions";
+import { ACTIVE_BLOCK_STATUSES, PENDING_BLOCK_STATUSES, AppError } from "@/lib/permissions";
 
 /**
  * THE single server-side definition of how much stock may still be blocked.
@@ -34,8 +34,38 @@ export async function getAvailableToBlock(productId: string): Promise<number> {
   return computeAvailableToBlock(inv);
 }
 
+/** Same bucketing rule as the JS version this replaced: pc/piece/nos → "pc", bag → "bag", else "box". */
+const UNIT_BUCKET_SQL = `
+  SELECT
+    CASE
+      WHEN LOWER(COALESCE(NULLIF(u.name, ''), NULLIF(u.symbol, ''), NULLIF(p.unit, ''), 'Box')) LIKE '%pc%'
+        OR LOWER(COALESCE(NULLIF(u.name, ''), NULLIF(u.symbol, ''), NULLIF(p.unit, ''), 'Box')) LIKE '%piece%'
+        OR LOWER(COALESCE(NULLIF(u.name, ''), NULLIF(u.symbol, ''), NULLIF(p.unit, ''), 'Box')) LIKE '%nos%'
+        THEN 'pc'
+      WHEN LOWER(COALESCE(NULLIF(u.name, ''), NULLIF(u.symbol, ''), NULLIF(p.unit, ''), 'Box')) LIKE '%bag%'
+        THEN 'bag'
+      ELSE 'box'
+    END AS bucket,
+    SUM(i."totalStock")::float AS total,
+    SUM(i."availableStock")::float AS available,
+    SUM(i."blockedStock")::float AS blocked,
+    SUM(i."transitStock")::float AS transit
+  FROM "Inventory" i
+  JOIN "Product" p ON p.id = i."productId"
+  LEFT JOIN "Unit" u ON u.id = p."unitId"
+  GROUP BY bucket
+`;
+
+interface UnitBucketRow {
+  bucket: "pc" | "bag" | "box";
+  total: number;
+  available: number;
+  blocked: number;
+  transit: number;
+}
+
 export async function getInventorySummary() {
-  const [totalProducts, stockTotals, inventoryByStatus, blocksByStatus, inventoryItems] = await Promise.all([
+  const [totalProducts, stockTotals, inventoryByStatus, blocksByStatus, unitBuckets] = await Promise.all([
     db.product.count({ where: { deletedAt: null } }),
     db.inventory.aggregate({
       _sum: {
@@ -48,40 +78,29 @@ export async function getInventorySummary() {
     }),
     db.inventory.groupBy({ by: ["stockStatus"], _count: { _all: true } }),
     db.stockBlock.groupBy({ by: ["status"], _count: { _all: true } }),
-    db.inventory.findMany({
-      select: {
-        totalStock: true,
-        availableStock: true,
-        blockedStock: true,
-        transitStock: true,
-        product: { select: { unit: true, unitRelation: { select: { name: true, symbol: true } } } },
-      },
-    }),
+    // Grouped in SQL rather than pulling every Inventory row (+ nested
+    // product/unit) into Node to bucket by hand — was the single largest
+    // contributor to dashboard load time (docs/AUDIT.md-style finding: ~3-5s
+    // in isolation against the live catalog).
+    db.$queryRawUnsafe(UNIT_BUCKET_SQL) as Promise<UnitBucketRow[]>,
   ]);
 
   let boxTotal = 0, boxAvailable = 0, boxBlocked = 0, boxTransit = 0;
   let pcTotal = 0, pcAvailable = 0, pcBlocked = 0, pcTransit = 0;
   let bagTotal = 0, bagAvailable = 0, bagBlocked = 0, bagTransit = 0;
 
-  for (const item of inventoryItems) {
-    const rawUnit = item.product?.unitRelation?.name || item.product?.unitRelation?.symbol || item.product?.unit || "Box";
-    const unit = rawUnit.toLowerCase();
+  for (const row of unitBuckets) {
+    const total = Number(row.total) || 0;
+    const available = Number(row.available) || 0;
+    const blocked = Number(row.blocked) || 0;
+    const transit = Number(row.transit) || 0;
 
-    if (unit.includes("pc") || unit.includes("piece") || unit.includes("nos")) {
-      pcTotal += item.totalStock;
-      pcAvailable += item.availableStock;
-      pcBlocked += item.blockedStock;
-      pcTransit += item.transitStock;
-    } else if (unit.includes("bag")) {
-      bagTotal += item.totalStock;
-      bagAvailable += item.availableStock;
-      bagBlocked += item.blockedStock;
-      bagTransit += item.transitStock;
+    if (row.bucket === "pc") {
+      pcTotal = total; pcAvailable = available; pcBlocked = blocked; pcTransit = transit;
+    } else if (row.bucket === "bag") {
+      bagTotal = total; bagAvailable = available; bagBlocked = blocked; bagTransit = transit;
     } else {
-      boxTotal += item.totalStock;
-      boxAvailable += item.availableStock;
-      boxBlocked += item.blockedStock;
-      boxTransit += item.transitStock;
+      boxTotal = total; boxAvailable = available; boxBlocked = blocked; boxTransit = transit;
     }
   }
 
@@ -281,6 +300,7 @@ export async function getInventoryList({
         thumbnail_key: true,
         lifestyleImage: true,
         textureImage: true,
+        images: true,
         productType: { select: { id: true, name: true, slug: true, icon: true } },
         unitRelation: { select: { id: true, name: true, symbol: true } },
         brand: { select: { id: true, name: true } },
@@ -370,6 +390,7 @@ export async function getInventoryList({
       thumbnail_key: p.thumbnail_key,
       lifestyleImage: p.lifestyleImage,
       textureImage: p.textureImage,
+      images: Array.isArray(p.images) ? (p.images as string[]) : [],
       totalStock,
       availableStock,
       blockedStock,
@@ -491,4 +512,362 @@ export async function getInventoryFacets() {
       count: pt._count.products,
     })),
   };
+}
+
+export interface CreateStockProductInput {
+  name: string;
+  sku?: string;
+  productCode?: string;
+  brandId?: string;
+  categoryId?: string;
+  productTypeId?: string;
+  collectionId?: string;
+  size?: string;
+  finish?: string;
+  surface?: string;
+  color?: string;
+  material?: string;
+  price?: number;
+  mrp?: number;
+  description?: string;
+  images?: string[];
+  image_key?: string;
+  thumbnail_key?: string;
+  lifestyleImage?: string;
+  totalStock?: number;
+  looseStock?: number;
+  minimumStock?: number;
+  maximumStock?: number;
+  reorderLevel?: number;
+  warehouseId?: string;
+  remarks?: string;
+  performedBy: string;
+  performedById?: string;
+  role: string;
+}
+
+export async function createStockProductItem(input: CreateStockProductInput) {
+  if (!input.name || !input.name.trim()) {
+    throw new AppError("Product name is required.", 400, "VALIDATION");
+  }
+
+  const slugBase = input.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+  const uniqueSlug = `${slugBase}-${Date.now().toString(36)}`;
+
+  return await db.$transaction(async (tx) => {
+    const imagesList = Array.isArray(input.images) ? input.images.filter(Boolean) : [];
+    const heroImage = input.image_key || imagesList[0] || null;
+    const thumbImage = input.thumbnail_key || imagesList[0] || null;
+
+    const product = await tx.product.create({
+      data: {
+        name: input.name.trim(),
+        slug: uniqueSlug,
+        sku: input.sku?.trim() || undefined,
+        productCode: input.productCode?.trim() || undefined,
+        brandId: input.brandId || undefined,
+        categoryId: input.categoryId || undefined,
+        productTypeId: input.productTypeId || undefined,
+        collectionId: input.collectionId || undefined,
+        size: input.size?.trim() || undefined,
+        finish: input.finish?.trim() || undefined,
+        surface: input.surface?.trim() || undefined,
+        color: input.color?.trim() || undefined,
+        material: input.material?.trim() || undefined,
+        price: input.price ? input.price : undefined,
+        mrp: input.mrp ? input.mrp : undefined,
+        description: input.description?.trim() || undefined,
+        images: imagesList,
+        image_key: heroImage,
+        thumbnail_key: thumbImage,
+        lifestyleImage: input.lifestyleImage || undefined,
+        createdById: input.performedById,
+        updatedById: input.performedById,
+      },
+    });
+
+    const total = Math.max(0, input.totalStock ?? 0);
+    const loose = Math.max(0, input.looseStock ?? 0);
+    const min = Math.max(0, input.minimumStock ?? 0);
+    const max = Math.max(0, input.maximumStock ?? 0);
+    const reorder = Math.max(0, input.reorderLevel ?? 0);
+    const available = total;
+    const status = total <= 0 ? "OUT_OF_STOCK" : (reorder > 0 && available <= reorder) ? "LOW_STOCK" : "AVAILABLE";
+
+    const inventory = await tx.inventory.create({
+      data: {
+        productId: product.id,
+        warehouseId: input.warehouseId || undefined,
+        totalStock: total,
+        looseStock: loose,
+        availableStock: available,
+        blockedStock: 0,
+        allocatedStock: 0,
+        damagedStock: 0,
+        transitStock: 0,
+        deliveredStock: 0,
+        minimumStock: min,
+        maximumStock: max,
+        reorderLevel: reorder,
+        stockStatus: status,
+        remarks: input.remarks?.trim() || undefined,
+      },
+    });
+
+    if (total > 0) {
+      await tx.inventoryMovement.create({
+        data: {
+          inventoryId: inventory.id,
+          productId: product.id,
+          warehouseId: input.warehouseId || undefined,
+          movementType: "STOCK_IN",
+          quantity: total,
+          previousQuantity: 0,
+          newQuantity: total,
+          referenceType: "ADJUSTMENT",
+          reason: input.remarks || "Initial stock record created",
+          performedBy: input.performedBy,
+        },
+      });
+    }
+
+    await tx.auditLog.create({
+      data: {
+        action: "STOCK_PRODUCT_CREATED",
+        entity: "Product",
+        entityId: product.id,
+        userId: input.performedById,
+        roleAtTime: input.role,
+        newValue: { name: product.name, sku: product.sku, totalStock: total },
+        meta: { performedBy: input.performedBy },
+      },
+    });
+
+    return { product, inventory };
+  });
+}
+
+export interface UpdateStockProductInput {
+  productId: string;
+  inventoryId?: string;
+  name?: string;
+  sku?: string;
+  productCode?: string;
+  brandId?: string;
+  categoryId?: string;
+  productTypeId?: string;
+  collectionId?: string;
+  size?: string;
+  finish?: string;
+  surface?: string;
+  color?: string;
+  material?: string;
+  price?: number;
+  mrp?: number;
+  description?: string;
+  images?: string[];
+  image_key?: string;
+  thumbnail_key?: string;
+  lifestyleImage?: string;
+  totalStock?: number;
+  looseStock?: number;
+  minimumStock?: number;
+  maximumStock?: number;
+  reorderLevel?: number;
+  warehouseId?: string;
+  remarks?: string;
+  performedBy: string;
+  performedById?: string;
+  role: string;
+}
+
+export async function updateStockProductItem(input: UpdateStockProductInput) {
+  if (!input.productId) throw new AppError("Product ID is required.", 400, "VALIDATION");
+
+  return await db.$transaction(async (tx) => {
+    const existingProduct = await tx.product.findUnique({
+      where: { id: input.productId },
+      include: { inventory: true },
+    });
+    if (!existingProduct) throw new AppError("Product record not found.", 404, "NOT_FOUND");
+
+    const imagesList = input.images ? input.images.filter(Boolean) : (Array.isArray(existingProduct.images) ? (existingProduct.images as string[]) : []);
+    const heroImage = input.image_key ?? imagesList[0] ?? existingProduct.image_key;
+    const thumbImage = input.thumbnail_key ?? imagesList[0] ?? existingProduct.thumbnail_key;
+
+    const updatedProduct = await tx.product.update({
+      where: { id: input.productId },
+      data: {
+        name: input.name ? input.name.trim() : existingProduct.name,
+        sku: input.sku !== undefined ? (input.sku.trim() || null) : existingProduct.sku,
+        productCode: input.productCode !== undefined ? (input.productCode.trim() || null) : existingProduct.productCode,
+        brandId: input.brandId !== undefined ? (input.brandId || null) : existingProduct.brandId,
+        categoryId: input.categoryId !== undefined ? (input.categoryId || null) : existingProduct.categoryId,
+        productTypeId: input.productTypeId !== undefined ? (input.productTypeId || null) : existingProduct.productTypeId,
+        collectionId: input.collectionId !== undefined ? (input.collectionId || null) : existingProduct.collectionId,
+        size: input.size !== undefined ? (input.size.trim() || null) : existingProduct.size,
+        finish: input.finish !== undefined ? (input.finish.trim() || null) : existingProduct.finish,
+        surface: input.surface !== undefined ? (input.surface.trim() || null) : existingProduct.surface,
+        color: input.color !== undefined ? (input.color.trim() || null) : existingProduct.color,
+        material: input.material !== undefined ? (input.material.trim() || null) : existingProduct.material,
+        price: input.price !== undefined ? input.price : existingProduct.price,
+        mrp: input.mrp !== undefined ? input.mrp : existingProduct.mrp,
+        description: input.description !== undefined ? (input.description.trim() || null) : existingProduct.description,
+        images: imagesList,
+        image_key: heroImage,
+        thumbnail_key: thumbImage,
+        lifestyleImage: input.lifestyleImage !== undefined ? (input.lifestyleImage || null) : existingProduct.lifestyleImage,
+        updatedById: input.performedById,
+      },
+    });
+
+    let updatedInventory = existingProduct.inventory;
+    if (existingProduct.inventory) {
+      const prevTotal = existingProduct.inventory.totalStock;
+      const newTotal = input.totalStock !== undefined ? Math.max(0, input.totalStock) : prevTotal;
+      const loose = input.looseStock !== undefined ? Math.max(0, input.looseStock) : existingProduct.inventory.looseStock;
+      const min = input.minimumStock !== undefined ? Math.max(0, input.minimumStock) : existingProduct.inventory.minimumStock;
+      const max = input.maximumStock !== undefined ? Math.max(0, input.maximumStock) : existingProduct.inventory.maximumStock;
+      const reorder = input.reorderLevel !== undefined ? Math.max(0, input.reorderLevel) : existingProduct.inventory.reorderLevel;
+
+      const blocked = existingProduct.inventory.blockedStock;
+      const allocated = existingProduct.inventory.allocatedStock;
+      const damaged = existingProduct.inventory.damagedStock;
+      const reserved = existingProduct.inventory.reservedStock;
+      const available = Math.max(0, newTotal - blocked - allocated - damaged - reserved);
+
+      const status = available <= 0 ? (existingProduct.inventory.transitStock > 0 ? "INCOMING" : newTotal <= 0 ? "OUT_OF_STOCK" : "BLOCKED") : (reorder > 0 && available <= reorder) ? "LOW_STOCK" : "AVAILABLE";
+
+      updatedInventory = await tx.inventory.update({
+        where: { id: existingProduct.inventory.id },
+        data: {
+          totalStock: newTotal,
+          looseStock: loose,
+          availableStock: available,
+          minimumStock: min,
+          maximumStock: max,
+          reorderLevel: reorder,
+          stockStatus: status,
+          warehouseId: input.warehouseId !== undefined ? (input.warehouseId || null) : existingProduct.inventory.warehouseId,
+          remarks: input.remarks !== undefined ? (input.remarks.trim() || null) : existingProduct.inventory.remarks,
+        },
+      });
+
+      if (newTotal !== prevTotal) {
+        const delta = newTotal - prevTotal;
+        await tx.inventoryMovement.create({
+          data: {
+            inventoryId: existingProduct.inventory.id,
+            productId: input.productId,
+            warehouseId: input.warehouseId || existingProduct.inventory.warehouseId,
+            movementType: "ADJUSTMENT",
+            quantity: delta,
+            previousQuantity: prevTotal,
+            newQuantity: newTotal,
+            referenceType: "ADJUSTMENT",
+            reason: input.remarks || `Stock level updated from ${prevTotal} to ${newTotal}`,
+            performedBy: input.performedBy,
+          },
+        });
+      }
+    }
+
+    await tx.auditLog.create({
+      data: {
+        action: "STOCK_PRODUCT_UPDATED",
+        entity: "Product",
+        entityId: input.productId,
+        userId: input.performedById,
+        roleAtTime: input.role,
+        meta: { performedBy: input.performedBy, details: `Updated stock item ${updatedProduct.name}` },
+      },
+    });
+
+    return { product: updatedProduct, inventory: updatedInventory };
+  });
+}
+
+export async function deleteStockProductItem({
+  productId,
+  inventoryId,
+  reason,
+  performedBy,
+  performedById,
+  role,
+}: {
+  productId: string;
+  inventoryId?: string;
+  reason?: string;
+  performedBy: string;
+  performedById?: string;
+  role: string;
+}) {
+  return await db.$transaction(async (tx) => {
+    const product = await tx.product.findUnique({
+      where: { id: productId },
+      include: {
+        inventory: {
+          include: {
+            stockBlocks: { where: { status: { in: [...ACTIVE_BLOCK_STATUSES] } } },
+          },
+        },
+      },
+    });
+
+    if (!product) throw new AppError("Product record not found.", 404, "NOT_FOUND");
+
+    if (product.inventory?.stockBlocks && product.inventory.stockBlocks.length > 0) {
+      throw new AppError("Cannot delete stock item with active block holds. Release or deliver holds first.", 400, "ACTIVE_BLOCKS");
+    }
+
+    await tx.product.update({
+      where: { id: productId },
+      data: {
+        deletedAt: new Date(),
+        deletedById: performedById,
+        status: "ARCHIVED",
+        published: false,
+      },
+    });
+
+    if (product.inventory) {
+      await tx.inventory.update({
+        where: { id: product.inventory.id },
+        data: {
+          totalStock: 0,
+          availableStock: 0,
+          stockStatus: "OUT_OF_STOCK",
+          remarks: `Deleted by ${performedBy}: ${reason || "No reason given"}`,
+        },
+      });
+
+      await tx.inventoryMovement.create({
+        data: {
+          inventoryId: product.inventory.id,
+          productId,
+          warehouseId: product.inventory.warehouseId,
+          movementType: "ADJUSTMENT",
+          quantity: -product.inventory.totalStock,
+          previousQuantity: product.inventory.totalStock,
+          newQuantity: 0,
+          referenceType: "ADJUSTMENT",
+          reason: `Stock item soft-deleted: ${reason || "Removed from catalogue"}`,
+          performedBy,
+        },
+      });
+    }
+
+    await tx.auditLog.create({
+      data: {
+        action: "STOCK_PRODUCT_DELETED",
+        entity: "Product",
+        entityId: productId,
+        userId: performedById,
+        roleAtTime: role,
+        meta: { performedBy, reason },
+      },
+    });
+
+    return { success: true };
+  });
 }

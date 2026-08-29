@@ -14,13 +14,14 @@ export default async function AdminAnnouncementsPage() {
     redirect("/login");
   }
 
-  // Fetch past announcements with recipient stats
-  const announcements = await getAnnouncementsHistory(20);
-
-  // Fetch audiences targets (dealers, showrooms, warehouses)
-  const dealers = await db.dealer.findMany({ orderBy: { name: "asc" } });
-  const showrooms = await db.showroom.findMany({ orderBy: { name: "asc" } });
-  const warehouses = await db.warehouse.findMany({ orderBy: { name: "asc" } });
+  // Independent reads — parallel rather than sequential (each round trip to
+  // the database costs ~2s here, see docs/AUDIT.md J1).
+  const [announcements, dealers, showrooms, warehouses] = await Promise.all([
+    getAnnouncementsHistory(20),
+    db.dealer.findMany({ orderBy: { name: "asc" } }),
+    db.showroom.findMany({ orderBy: { name: "asc" } }),
+    db.warehouse.findMany({ orderBy: { name: "asc" } }),
+  ]);
 
   return (
     <div className="space-y-6">

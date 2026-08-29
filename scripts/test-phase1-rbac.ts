@@ -30,7 +30,6 @@ import {
 import {
   createBlockRequest,
   approveBlock,
-  markBlockReadyToShip,
   shipBlock,
   deliverBlock,
 } from "../src/services/StockBlockService";
@@ -80,36 +79,50 @@ function testPermissionMatrix() {
   check("SHOWROOM_STAFF can create", canCreateBlock("SHOWROOM_STAFF"), true);
   check("WEAVER CANNOT create", canCreateBlock("WEAVER"), false);
 
-  // Staff-block approval (PENDING_INCHARGE_APPROVAL)
+  // Staff-block approval (PENDING_INCHARGE_APPROVAL). Showroom-scoped roles
+  // are denied unless the actor's showroom matches the block's (spec §8/§22),
+  // so in-scope checks below pass matching showroom ids explicitly.
   const staffStage: BlockStatus = "PENDING_INCHARGE_APPROVAL";
-  check("INCHARGE approves staff block", canApproveBlock("SHOWROOM_INCHARGE", staffStage), true);
+  const sameShowroom = { blockShowroomId: "s1", actorShowroomId: "s1" };
+  const otherShowroom = { blockShowroomId: "s1", actorShowroomId: "s2" };
+  check("INCHARGE approves staff block in own showroom", canApproveBlock("SHOWROOM_INCHARGE", staffStage, sameShowroom), true);
   check("SUPER_ADMIN approves staff block", canApproveBlock("SUPER_ADMIN", staffStage), true);
-  check("STAFF CANNOT approve", canApproveBlock("SHOWROOM_STAFF", staffStage), false);
+  check("STAFF CANNOT approve", canApproveBlock("SHOWROOM_STAFF", staffStage, sameShowroom), false);
   check("WEAVER CANNOT approve", canApproveBlock("WEAVER", staffStage), false);
+
+  // Showroom isolation (spec §22): an In-Charge of a different showroom may
+  // never approve this block, regardless of who created it.
+  check(
+    "INCHARGE of a DIFFERENT showroom CANNOT approve",
+    canApproveBlock("SHOWROOM_INCHARGE", staffStage, otherShowroom),
+    false
+  );
 
   // In-Charge must never approve their own block (spec §5)
   check(
     "INCHARGE CANNOT approve own block",
-    canApproveBlock("SHOWROOM_INCHARGE", staffStage, { createdById: "u1", actorId: "u1" }),
+    canApproveBlock("SHOWROOM_INCHARGE", staffStage, { ...sameShowroom, createdById: "u1", actorId: "u1" }),
     false
   );
   check(
     "INCHARGE can approve someone else's block",
-    canApproveBlock("SHOWROOM_INCHARGE", staffStage, { createdById: "u2", actorId: "u1" }),
+    canApproveBlock("SHOWROOM_INCHARGE", staffStage, { ...sameShowroom, createdById: "u2", actorId: "u1" }),
     true
   );
 
-  // Final approval (PENDING_MANAGER_APPROVAL)
+  // Final approval (PENDING_MANAGER_APPROVAL) — Manager/Super Admin operate
+  // centrally, so no showroom scope applies to them (spec §10/§26).
   const mgrStage: BlockStatus = "PENDING_MANAGER_APPROVAL";
   check("MANAGER final approval", canApproveBlock("MANAGER", mgrStage), true);
   check("SUPER_ADMIN final approval", canApproveBlock("SUPER_ADMIN", mgrStage), true);
-  check("INCHARGE CANNOT final approve", canApproveBlock("SHOWROOM_INCHARGE", mgrStage), false);
-  check("STAFF CANNOT final approve", canApproveBlock("SHOWROOM_STAFF", mgrStage), false);
+  check("INCHARGE CANNOT final approve", canApproveBlock("SHOWROOM_INCHARGE", mgrStage, sameShowroom), false);
+  check("STAFF CANNOT final approve", canApproveBlock("SHOWROOM_STAFF", mgrStage, sameShowroom), false);
   check("WEAVER CANNOT final approve", canApproveBlock("WEAVER", mgrStage), false);
 
   // Reject mirrors approve
-  check("INCHARGE can reject staff block", canRejectBlock("SHOWROOM_INCHARGE", staffStage), true);
-  check("STAFF CANNOT reject", canRejectBlock("SHOWROOM_STAFF", staffStage), false);
+  check("INCHARGE can reject staff block in own showroom", canRejectBlock("SHOWROOM_INCHARGE", staffStage, sameShowroom), true);
+  check("INCHARGE of a DIFFERENT showroom CANNOT reject", canRejectBlock("SHOWROOM_INCHARGE", staffStage, otherShowroom), false);
+  check("STAFF CANNOT reject", canRejectBlock("SHOWROOM_STAFF", staffStage, sameShowroom), false);
   check("WEAVER CANNOT reject", canRejectBlock("WEAVER", mgrStage), false);
 
   // Ship / deliver — Manager & Super Admin only
@@ -129,12 +142,17 @@ function testPermissionMatrix() {
   // Cancel own block
   check(
     "STAFF can cancel own active block",
-    canCancelBlock("SHOWROOM_STAFF", "PENDING_INCHARGE_APPROVAL", { createdById: "u1", actorId: "u1" }),
+    canCancelBlock("SHOWROOM_STAFF", "PENDING_INCHARGE_APPROVAL", { ...sameShowroom, createdById: "u1", actorId: "u1" }),
     true
   );
   check(
     "STAFF CANNOT cancel someone else's",
-    canCancelBlock("SHOWROOM_STAFF", "PENDING_INCHARGE_APPROVAL", { createdById: "u2", actorId: "u1" }),
+    canCancelBlock("SHOWROOM_STAFF", "PENDING_INCHARGE_APPROVAL", { ...sameShowroom, createdById: "u2", actorId: "u1" }),
+    false
+  );
+  check(
+    "STAFF of a DIFFERENT showroom CANNOT cancel even their own block",
+    canCancelBlock("SHOWROOM_STAFF", "PENDING_INCHARGE_APPROVAL", { ...otherShowroom, createdById: "u1", actorId: "u1" }),
     false
   );
   check("MANAGER can cancel any active block", canCancelBlock("MANAGER", "APPROVED"), true);
@@ -212,7 +230,7 @@ async function testAcceptanceWorkflow() {
       requestedBy: "Test Staff",
       createdById: staffUser.id,
       userRole: "SHOWROOM_STAFF",
-      showroomId: undefined,
+      showroomId: staffUser.showroomId ?? undefined,
     });
     blockId = block.id;
 
@@ -248,34 +266,30 @@ async function testAcceptanceWorkflow() {
       approvedBy: "Test Incharge",
       approvedById: inchargeUser.id,
       role: "SHOWROOM_INCHARGE",
+      actorShowroomId: inchargeUser.showroomId ?? undefined,
     });
     check("now awaiting manager", afterIncharge.status, "PENDING_MANAGER_APPROVAL");
     check("in-charge sign-off recorded", afterIncharge.inchargeApprovedBy, "Test Incharge");
 
-    // Manager approves
-    const afterManager = await approveBlock({
-      blockId: block.id,
-      approvedBy: "Test Manager",
-      approvedById: managerUser.id,
-      role: "MANAGER",
-    });
-    check("approved", afterManager.status, "APPROVED");
-    check("manager sign-off recorded", afterManager.managerApprovedBy, "Test Manager");
-
-    // Cannot ship before READY_TO_SHIP
+    // Cannot ship before manager approval (still PENDING_MANAGER_APPROVAL)
     let earlyShipRejected = false;
     try {
       await shipBlock({ blockId: block.id, performedBy: "Test Manager", performedById: managerUser.id, role: "MANAGER" });
     } catch {
       earlyShipRejected = true;
     }
-    check("cannot ship before ready", earlyShipRejected, true);
+    check("cannot ship before approval", earlyShipRejected, true);
 
-    // Ready to ship
-    const ready = await markBlockReadyToShip({
-      blockId: block.id, performedBy: "Test Manager", performedById: managerUser.id, role: "MANAGER",
+    // Manager approves — lands directly on READY_TO_SHIP (spec §4/§10; APPROVED
+    // is retained only for historical rows created before this change).
+    const afterManager = await approveBlock({
+      blockId: block.id,
+      approvedBy: "Test Manager",
+      approvedById: managerUser.id,
+      role: "MANAGER",
     });
-    check("ready to ship", ready.status, "READY_TO_SHIP");
+    check("approved directly to ready-to-ship", afterManager.status, "READY_TO_SHIP");
+    check("manager sign-off recorded", afterManager.managerApprovedBy, "Test Manager");
 
     inv = await db.inventory.findUniqueOrThrow({ where: { id: inventory.id } });
     check("physical STILL 100 pre-ship", inv.totalStock, 100);
@@ -289,9 +303,11 @@ async function testAcceptanceWorkflow() {
     }
     check("STAFF ship is refused", staffShipRejected, true);
 
-    // Manager ships — physical stock now reduces
+    // Manager ships — physical stock now reduces. Vehicle number is mandatory
+    // (spec §24-26).
     const shipped = await shipBlock({
       blockId: block.id, performedBy: "Test Manager", performedById: managerUser.id, role: "MANAGER",
+      vehicleNumber: "KA-19-TEST-0001",
     });
     check("shipped", shipped.status, "SHIPPED");
 
@@ -312,7 +328,7 @@ async function testAcceptanceWorkflow() {
     });
     const actions = audits.map((a) => a.action);
     check("audit has full trail", actions, [
-      "CREATE_BLOCK", "APPROVE_BLOCK", "APPROVE_BLOCK", "READY_TO_SHIP", "SHIP_BLOCK", "DELIVER_BLOCK",
+      "CREATE_BLOCK", "APPROVE_BLOCK", "APPROVE_BLOCK", "SHIP_BLOCK", "DELIVER_BLOCK",
     ]);
     check("audit records old→new status", !!(audits[1].oldValue && audits[1].newValue), true);
     check("audit records the actor's role", audits[1].roleAtTime, "SHOWROOM_INCHARGE");

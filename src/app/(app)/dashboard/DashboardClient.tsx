@@ -2,20 +2,17 @@
 
 import React from "react";
 import Link from "next/link";
-import { 
-  Boxes, 
-  PackageCheck, 
-  Lock, 
-  Truck, 
-  AlertTriangle, 
-  ArrowUpRight, 
-  ArrowDownRight, 
-  Plus, 
+import {
+  Boxes,
+  PackageCheck,
+  Lock,
+  Truck,
+  AlertTriangle,
+  ArrowUpRight,
+  ArrowDownRight,
+  Plus,
   ChevronRight,
-  Clock,
-  Inbox,
-  AlertCircle,
-  Store
+  AlertCircle
 } from "lucide-react";
 import { SessionContext } from "@/lib/session";
 
@@ -49,26 +46,15 @@ interface Props {
   };
   recentMovements: any[];
   pendingBlocks: any[];
-  dealerBookings: any[];
-  dealerSummary: {
-    pendingCount: number;
-    awaitingConfirmCount: number;
-    confirmedCount: number;
-    totalBoxes: number;
-  };
   session: SessionContext;
 }
 
-export function DashboardClient({ 
-  summary, 
-  recentMovements, 
-  pendingBlocks, 
-  dealerBookings, 
-  dealerSummary,
-  session 
+export function DashboardClient({
+  summary,
+  recentMovements,
+  pendingBlocks,
+  session
 }: Props) {
-  const isDealer = false; // the DEALER login role was retired in Phase 1
-
   const getOperationalAlerts = () => {
     const alerts = [];
     if (summary.pendingBlocks > 0) {
@@ -103,146 +89,6 @@ export function DashboardClient({
 
   const operationalAlerts = getOperationalAlerts();
 
-  if (isDealer) {
-    return (
-      <div className="space-y-6">
-        {/* Dealer Header */}
-        <div className="flex flex-col gap-2">
-          <h1 className="text-xl font-bold text-[#111111] tracking-tight sm:text-2xl">
-            Good morning, Dealer Partner
-          </h1>
-          <p className="text-xs text-[#6B6B6B]">
-            Request stock holds, monitor reservation timers, and confirm approved bookings.
-          </p>
-        </div>
-
-        {/* Dealer Metrics Grid */}
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-          <div className="rounded-xl border border-[#EAEAEA] bg-white p-4 shadow-sm">
-            <span className="text-[10px] font-bold text-[#6B6B6B] uppercase tracking-wider block">Active Reserves</span>
-            <p className="text-xl font-bold text-[#111111] tracking-tight mt-1">{dealerSummary.totalBoxes.toLocaleString("en-IN")}</p>
-            <span className="text-[9px] text-[#6B6B6B] mt-1 block">Total boxes reserved</span>
-          </div>
-
-          <div className="rounded-xl border border-[#EAEAEA] bg-white p-4 shadow-sm">
-            <span className="text-[10px] font-bold text-[#6B6B6B] uppercase tracking-wider block">Awaiting Confirm</span>
-            <p className="text-xl font-bold text-amber-600 tracking-tight mt-1">{dealerSummary.awaitingConfirmCount}</p>
-            <span className="text-[9px] text-[#6B6B6B] mt-1 block">Action required</span>
-          </div>
-
-          <div className="rounded-xl border border-[#EAEAEA] bg-white p-4 shadow-sm">
-            <span className="text-[10px] font-bold text-[#6B6B6B] uppercase tracking-wider block">Pending Approval</span>
-            <p className="text-xl font-bold text-blue-600 tracking-tight mt-1">{dealerSummary.pendingCount}</p>
-            <span className="text-[9px] text-[#6B6B6B] mt-1 block">Hold requests queued</span>
-          </div>
-
-          <div className="rounded-xl border border-[#EAEAEA] bg-white p-4 shadow-sm">
-            <span className="text-[10px] font-bold text-[#6B6B6B] uppercase tracking-wider block">Confirmed Holds</span>
-            <p className="text-xl font-bold text-emerald-600 tracking-tight mt-1">{dealerSummary.confirmedCount}</p>
-            <span className="text-[9px] text-[#6B6B6B] mt-1 block">Stock locked in warehouse</span>
-          </div>
-        </div>
-
-        {/* Action Required Banner */}
-        {dealerSummary.awaitingConfirmCount > 0 && (
-          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <Clock className="h-5 w-5 text-amber-600 shrink-0" />
-              <div className="text-xs text-amber-900">
-                <p className="font-bold text-amber-950">Action Required: Pending Confirmations</p>
-                <p className="text-amber-800">You have {dealerSummary.awaitingConfirmCount} approved bookings that will expire if not confirmed.</p>
-              </div>
-            </div>
-            <Link
-              href="/bookings"
-              className="rounded-lg bg-[#F2C202] px-3.5 py-1.5 text-[10px] font-black text-white hover:bg-[#D8AD02] whitespace-nowrap transition-all shadow-xs"
-            >
-              Confirm Now
-            </Link>
-          </div>
-        )}
-
-        {/* Dealer Actions */}
-        <div className="grid grid-cols-2 gap-4">
-          <Link
-            href="/bookings/new"
-            className="rounded-xl border border-[#EAEAEA] bg-white p-4 flex items-center justify-between hover:border-slate-300 transition-all group shadow-sm"
-          >
-            <div className="flex items-center gap-3">
-              <div className="rounded-lg bg-[#F2C202]/10 p-2.5 text-[#8A7300]">
-                <Store className="h-5 w-5" />
-              </div>
-              <div className="text-left">
-                <p className="text-xs font-bold text-[#111111] group-hover:text-[#8A7300] transition-colors">Request New Hold</p>
-                <p className="text-[10px] text-[#6B6B6B] hidden sm:block">Book tile stock directly from depot</p>
-              </div>
-            </div>
-            <ChevronRight className="h-4 w-4 text-[#6B6B6B]" />
-          </Link>
-
-          <Link
-            href="/inventory"
-            className="rounded-xl border border-[#EAEAEA] bg-white p-4 flex items-center justify-between hover:border-slate-300 transition-all group shadow-sm"
-          >
-            <div className="flex items-center gap-3">
-              <div className="rounded-lg bg-blue-50 p-2.5 text-blue-600 border border-blue-100">
-                <Boxes className="h-5 w-5" />
-              </div>
-              <div className="text-left">
-                <p className="text-xs font-bold text-[#111111] group-hover:text-blue-600 transition-colors">Browse Products</p>
-                <p className="text-[10px] text-[#6B6B6B] hidden sm:block">Check live catalog available quantities</p>
-              </div>
-            </div>
-            <ChevronRight className="h-4 w-4 text-[#6B6B6B]" />
-          </Link>
-        </div>
-
-        {/* Recent Reservations */}
-        <div className="rounded-xl border border-[#EAEAEA] bg-white p-5 shadow-xs space-y-4">
-          <div className="flex items-center justify-between border-b border-[#EAEAEA] pb-4">
-            <div>
-              <h2 className="text-xs font-bold text-[#6B6B6B] uppercase tracking-wider">Your Recent Reservation Holds</h2>
-            </div>
-            <Link href="/bookings" className="text-[10px] font-bold text-[#8A7300] hover:underline">
-              View All Holds →
-            </Link>
-          </div>
-
-          <div className="divide-y divide-[#EAEAEA]">
-            {dealerBookings.length === 0 ? (
-              <div className="py-8 text-center text-xs text-[#6B6B6B] flex flex-col items-center justify-center gap-2">
-                <Inbox className="h-8 w-8 text-[#9A9A9A]" />
-                <p>No active reservations yet. Click "Request New Hold" to begin.</p>
-              </div>
-            ) : (
-              dealerBookings.map((b) => (
-                <div key={b.id} className="flex items-center justify-between py-3.5">
-                  <div className="space-y-1">
-                    <p className="text-xs font-bold text-[#111111] font-mono">{b.bookingNumber}</p>
-                    <p className="text-[10px] text-[#6B6B6B]" suppressHydrationWarning>
-                      {formatIST(b.requestedAt, { day: "2-digit", month: "short", year: "numeric" })} • {b.items.length} Products ({b.items.reduce((sum: number, i: any) => sum + i.requestedQuantity, 0)} boxes)
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="rounded-full bg-[#F7F7F5] border border-[#EAEAEA] px-2 py-0.5 text-[9px] font-bold text-[#6B6B6B] uppercase">
-                      {b.status.replace(/_/g, " ")}
-                    </span>
-                    <Link
-                      href={`/bookings/${b.id}`}
-                      className="rounded bg-white border border-[#EAEAEA] px-2.5 py-1 text-[10px] font-bold text-[#111111] hover:bg-[#F7F7F5]"
-                    >
-                      View
-                    </Link>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-6">
       {/* Master Manager Header */}
@@ -269,10 +115,10 @@ export function DashboardClient({
             <Plus className="h-4 w-4" /> Review Queue
           </Link>
           <Link
-            href="/in-transit"
+            href="/transit"
             className="rounded-lg border border-[#EAEAEA] bg-white px-4 py-2 text-xs font-bold text-[#6B6B6B] hover:bg-[#F7F7F5] transition-all touch-target"
           >
-            Receive Shipment
+            Track Incoming Transit
           </Link>
         </div>
       </div>
@@ -309,7 +155,7 @@ export function DashboardClient({
       )}
 
       {/* METRICS GRID */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
         <MetricCard title="Total Catalog Products" value={summary.totalProducts.toLocaleString("en-IN")} icon={Boxes} color="blue" />
         <MetricCard 
           title="Available Stock" 

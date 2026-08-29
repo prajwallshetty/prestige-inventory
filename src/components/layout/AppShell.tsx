@@ -17,15 +17,12 @@ import type { Role } from "@/lib/permissions";
 export async function AppShell({ children }: { children: React.ReactNode }) {
   const session = await getEffectiveSession();
 
-  // The dealer/warehouse/showroom lists exist solely to populate the Super
-  // Admin's role-preview simulator. Fetching them for every user on every
-  // navigation cost three extra round trips that nobody else could see.
+  // The warehouse/showroom lists exist solely to populate the Super Admin's
+  // role-preview simulator. Fetching them for every user on every navigation
+  // cost extra round trips that nobody else could see.
   const isSuperAdmin = session?.role === "SUPER_ADMIN";
 
-  const [dealers, warehouses, showrooms, pendingApprovalCount] = await Promise.all([
-    isSuperAdmin
-      ? db.dealer.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } })
-      : Promise.resolve([]),
+  const [warehouses, showrooms, pendingApprovalCount] = await Promise.all([
     isSuperAdmin
       ? db.warehouse.findMany({ select: { id: true, name: true, code: true }, orderBy: { name: "asc" } })
       : Promise.resolve([]),
@@ -50,7 +47,6 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
     <Suspense fallback={null}>
       <SidebarLayout
         session={session}
-        dealers={dealers}
         warehouses={warehouses}
         showrooms={showrooms}
         pendingApprovalCount={pendingApprovalCount}

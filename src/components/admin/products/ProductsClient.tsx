@@ -14,7 +14,7 @@ import {
   ChevronRight,
   ImageOff,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 interface ProductListItem {
   id: string;
@@ -73,6 +73,7 @@ export function ProductsClient({ initialData, options }: Props) {
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isFirstRun = useRef(true);
 
   const load = useCallback(
     async (opts: { page?: number } = {}) => {
@@ -100,8 +101,14 @@ export function ProductsClient({ initialData, options }: Props) {
     [search, categoryId, brandId, showArchived, page]
   );
 
-  // Debounced search + immediate filter changes
+  // Debounced search + immediate filter changes. Skipped on the very first
+  // run — the server already fetched `initialData` for the default filters,
+  // so refiring here would duplicate that request on every page load.
   useEffect(() => {
+    if (isFirstRun.current) {
+      isFirstRun.current = false;
+      return;
+    }
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => load({ page: 1 }), 350);
     return () => {
@@ -110,7 +117,11 @@ export function ProductsClient({ initialData, options }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, categoryId, brandId, showArchived]);
 
+  const [busyId, setBusyId] = useState<string | null>(null);
+
   const handleDeactivate = async (id: string, currentlyArchived: boolean) => {
+    if (busyId) return;
+    setBusyId(id);
     try {
       const res = await fetch(`/api/v1/products/${id}/status`, {
         method: "PATCH",
@@ -123,11 +134,15 @@ export function ProductsClient({ initialData, options }: Props) {
       load({ page });
     } catch (err: any) {
       toast.error(err.message || "Failed to update status");
+    } finally {
+      setBusyId(null);
     }
   };
 
   const handleDelete = async (id: string, name: string) => {
+    if (busyId) return;
     if (!confirm(`Delete "${name}"? This is reversible only by a database admin.`)) return;
+    setBusyId(id);
     try {
       const res = await fetch(`/api/v1/products/${id}`, { method: "DELETE" });
       const json = await res.json();
@@ -136,44 +151,46 @@ export function ProductsClient({ initialData, options }: Props) {
       load({ page });
     } catch (err: any) {
       toast.error(err.message || "Failed to delete product");
+    } finally {
+      setBusyId(null);
     }
   };
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-slate-900 border border-slate-800 p-6 rounded-2xl">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-white border border-[#EAEAEA] p-6 rounded-2xl shadow-xs">
         <div>
-          <div className="flex items-center gap-2 text-indigo-400 font-semibold text-xs uppercase tracking-wider mb-1">
+          <div className="flex items-center gap-2 text-[#F2C202] font-black text-xs uppercase tracking-wider mb-1">
             <Package className="w-4 h-4" /> Catalog Management
           </div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">Product Catalog</h1>
-          <p className="text-slate-400 text-sm mt-1">
+          <h1 className="text-xl font-black text-[#111111] tracking-tight">Product Catalog</h1>
+          <p className="text-[#6B6B6B] text-xs mt-1">
             {data.total} product{data.total === 1 ? "" : "s"} · create, edit, search, and retire tile products.
           </p>
         </div>
         <Link
           href="/admin/products/new"
-          className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm rounded-xl transition shadow-lg shadow-indigo-600/25"
+          className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-[#F2C202] hover:bg-[#D8AD02] text-white font-black text-xs rounded-xl transition shadow-xs"
         >
           <Plus className="w-4 h-4" /> Add Product
         </Link>
       </div>
 
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row gap-3">
+      <div className="bg-white border border-[#EAEAEA] rounded-2xl p-4 flex flex-col sm:flex-row gap-3 shadow-xs">
         <div className="relative flex-1">
-          <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-3" />
+          <Search className="w-4 h-4 text-[#6B6B6B] absolute left-3.5 top-3" />
           <input
             type="text"
             placeholder="Search by name, SKU, product number, size, finish, surface..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition"
+            className="w-full bg-[#F7F7F5] border border-[#EAEAEA] rounded-xl pl-9 pr-3 py-2 text-xs text-[#111111] placeholder-[#6B6B6B] focus:outline-hidden focus:border-[#F2C202] transition"
           />
         </div>
         <select
           value={categoryId}
           onChange={(e) => setCategoryId(e.target.value)}
-          className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+          className="bg-white border border-[#EAEAEA] rounded-xl px-3 py-2 text-xs text-[#111111] focus:outline-hidden focus:border-[#F2C202]"
         >
           <option value="">All Categories</option>
           {options.categories.map((c) => (
@@ -183,45 +200,45 @@ export function ProductsClient({ initialData, options }: Props) {
         <select
           value={brandId}
           onChange={(e) => setBrandId(e.target.value)}
-          className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+          className="bg-white border border-[#EAEAEA] rounded-xl px-3 py-2 text-xs text-[#111111] focus:outline-hidden focus:border-[#F2C202]"
         >
           <option value="">All Brands</option>
           {options.brands.map((b) => (
             <option key={b.id} value={b.id}>{b.name}</option>
           ))}
         </select>
-        <label className="flex items-center gap-2 text-xs text-slate-400 px-3 whitespace-nowrap">
+        <label className="flex items-center gap-2 text-xs font-medium text-[#6B6B6B] px-3 whitespace-nowrap cursor-pointer">
           <input
             type="checkbox"
             checked={showArchived}
             onChange={(e) => setShowArchived(e.target.checked)}
-            className="accent-indigo-600"
+            className="accent-[#F2C202]"
           />
           Include deleted
         </label>
       </div>
 
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+      <div className="bg-white border border-[#EAEAEA] rounded-2xl overflow-hidden shadow-xs">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-800 text-left text-[11px] uppercase tracking-wider text-slate-500">
-                <th className="p-4 font-semibold">Product</th>
-                <th className="p-4 font-semibold">Brand / Category</th>
-                <th className="p-4 font-semibold">Size / Finish</th>
-                <th className="p-4 font-semibold">Stock</th>
-                <th className="p-4 font-semibold">Status</th>
-                <th className="p-4 font-semibold text-right">Actions</th>
+          <table className="w-full text-xs text-left">
+            <thead className="border-b border-[#EAEAEA] bg-[#F7F7F5] text-[10px] font-black uppercase tracking-wider text-[#6B6B6B]">
+              <tr>
+                <th className="p-4">Product</th>
+                <th className="p-4">Brand / Category</th>
+                <th className="p-4">Size / Finish</th>
+                <th className="p-4">Stock</th>
+                <th className="p-4">Status</th>
+                <th className="p-4 text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/60">
+            <tbody className="divide-y divide-[#EAEAEA] font-medium text-[#111111]">
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-slate-500 text-xs">Loading…</td>
+                  <td colSpan={6} className="p-8 text-center text-[#6B6B6B] text-xs">Loading…</td>
                 </tr>
               ) : data.items.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-slate-500 text-xs">
+                  <td colSpan={6} className="p-8 text-center text-[#6B6B6B] text-xs">
                     No products found. Try clearing filters or add a new product.
                   </td>
                 </tr>
@@ -230,42 +247,42 @@ export function ProductsClient({ initialData, options }: Props) {
                   const thumb = thumbnailUrl(p);
                   const isArchived = p.status === "ARCHIVED" || !p.published;
                   return (
-                    <tr key={p.id} className="hover:bg-slate-800/30 transition">
+                    <tr key={p.id} className="hover:bg-[#F7F7F5]/50 transition">
                       <td className="p-4">
                         <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center overflow-hidden shrink-0">
+                          <div className="w-10 h-10 rounded-lg bg-[#F7F7F5] border border-[#EAEAEA] flex items-center justify-center overflow-hidden shrink-0">
                             {thumb ? (
                               <img src={thumb} alt={p.name} className="w-full h-full object-cover" />
                             ) : (
-                              <ImageOff className="w-4 h-4 text-slate-600" />
+                              <ImageOff className="w-4 h-4 text-[#6B6B6B]" />
                             )}
                           </div>
                           <div className="min-w-0">
-                            <p className="text-white font-semibold truncate max-w-[220px]">{p.name}</p>
-                            <p className="text-[11px] text-slate-500">
+                            <p className="text-[#111111] font-bold truncate max-w-[220px]">{p.name}</p>
+                            <p className="text-[10px] text-[#6B6B6B] font-mono">
                               {p.sku || p.productCode || "No SKU"}
                             </p>
                           </div>
                         </div>
                       </td>
-                      <td className="p-4 text-slate-300 text-xs">
-                        <p>{p.brand?.name || "—"}</p>
-                        <p className="text-slate-500">{p.category?.name || "—"}</p>
-                      </td>
-                      <td className="p-4 text-slate-300 text-xs">
-                        <p>{p.size || "—"}</p>
-                        <p className="text-slate-500">{[p.finish, p.surface].filter(Boolean).join(" · ") || "—"}</p>
+                      <td className="p-4 text-xs">
+                        <p className="font-bold text-[#111111]">{p.brand?.name || "—"}</p>
+                        <p className="text-[#6B6B6B]">{p.category?.name || "—"}</p>
                       </td>
                       <td className="p-4 text-xs">
-                        <span className="text-white font-medium">{p.inventory?.availableStock ?? 0}</span>
-                        <span className="text-slate-500"> / {p.inventory?.totalStock ?? 0}</span>
+                        <p className="font-mono text-[#111111]">{p.size || "—"}</p>
+                        <p className="text-[#6B6B6B]">{[p.finish, p.surface].filter(Boolean).join(" · ") || "—"}</p>
+                      </td>
+                      <td className="p-4 text-xs font-mono">
+                        <span className="text-emerald-600 font-black">{p.inventory?.availableStock ?? 0}</span>
+                        <span className="text-[#6B6B6B]"> / {p.inventory?.totalStock ?? 0}</span>
                       </td>
                       <td className="p-4">
                         <span
-                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                          className={`px-2 py-0.5 rounded-full text-[9.5px] font-black uppercase tracking-wider border ${
                             isArchived
-                              ? "bg-slate-800 text-slate-400 border-slate-700"
-                              : "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                              ? "bg-gray-100 text-gray-600 border-gray-200"
+                              : "bg-emerald-50 text-emerald-700 border-emerald-200"
                           }`}
                         >
                           {isArchived ? "ARCHIVED" : "ACTIVE"}
@@ -275,21 +292,23 @@ export function ProductsClient({ initialData, options }: Props) {
                         <div className="flex items-center justify-end gap-1">
                           <Link
                             href={`/admin/products/${p.id}/edit`}
-                            className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition"
+                            className="p-1.5 text-[#6B6B6B] hover:text-[#111111] hover:bg-[#F7F7F5] rounded-lg transition border border-[#EAEAEA]"
                             title="Edit"
                           >
                             <Edit2 className="w-3.5 h-3.5" />
                           </Link>
                           <button
                             onClick={() => handleDeactivate(p.id, isArchived)}
-                            className="p-2 text-slate-400 hover:text-amber-400 hover:bg-slate-800 rounded-lg transition"
+                            disabled={busyId === p.id}
+                            className="p-1.5 text-[#6B6B6B] hover:text-amber-600 hover:bg-amber-50 rounded-lg transition border border-[#EAEAEA] disabled:opacity-50 disabled:cursor-not-allowed"
                             title={isArchived ? "Reactivate" : "Deactivate"}
                           >
                             {isArchived ? <RotateCcw className="w-3.5 h-3.5" /> : <Archive className="w-3.5 h-3.5" />}
                           </button>
                           <button
                             onClick={() => handleDelete(p.id, p.name)}
-                            className="p-2 text-slate-400 hover:text-red-400 hover:bg-slate-800 rounded-lg transition"
+                            disabled={busyId === p.id}
+                            className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition border border-rose-200 disabled:opacity-50 disabled:cursor-not-allowed"
                             title="Delete"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -305,7 +324,7 @@ export function ProductsClient({ initialData, options }: Props) {
         </div>
 
         {data.totalPages > 1 && (
-          <div className="flex items-center justify-between p-4 border-t border-slate-800 text-xs text-slate-400">
+          <div className="flex items-center justify-between p-4 border-t border-[#EAEAEA] text-xs text-[#6B6B6B]">
             <span>
               Page {data.page} of {data.totalPages}
             </span>
@@ -313,14 +332,14 @@ export function ProductsClient({ initialData, options }: Props) {
               <button
                 disabled={page <= 1}
                 onClick={() => load({ page: page - 1 })}
-                className="p-2 rounded-lg border border-slate-800 disabled:opacity-30 hover:bg-slate-800 transition"
+                className="p-1.5 rounded-lg border border-[#EAEAEA] disabled:opacity-30 hover:bg-[#F7F7F5] transition"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
               <button
                 disabled={page >= data.totalPages}
                 onClick={() => load({ page: page + 1 })}
-                className="p-2 rounded-lg border border-slate-800 disabled:opacity-30 hover:bg-slate-800 transition"
+                className="p-1.5 rounded-lg border border-[#EAEAEA] disabled:opacity-30 hover:bg-[#F7F7F5] transition"
               >
                 <ChevronRight className="w-4 h-4" />
               </button>

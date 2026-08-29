@@ -72,6 +72,24 @@ export const PENDING_BLOCK_STATUSES: readonly BlockStatus[] = [
 ];
 
 /**
+ * Statuses shown on the Shipments view — the post-approval dealer-shipment
+ * lifecycle. Pre-approval statuses (PENDING_*, APPROVED, REJECTED, EXPIRED,
+ * RELEASED) aren't shipments yet/anymore, so they stay off this list; the
+ * full lifecycle including those remains visible on /blocks.
+ */
+export const SHIPMENT_BLOCK_STATUSES: readonly BlockStatus[] = [
+  "READY_TO_SHIP",
+  "SHIPPED",
+  "PARTIALLY_SHIPPED",
+  "DELIVERED",
+  "PARTIALLY_DELIVERED",
+  "CANCELLED",
+];
+
+/** Statuses shown on the Transit view — goods that have left but not fully arrived. */
+export const TRANSIT_BLOCK_STATUSES: readonly BlockStatus[] = ["SHIPPED", "PARTIALLY_SHIPPED"];
+
+/**
  * Every legal status transition. Anything absent here is rejected — the
  * frontend can never drive a block into an arbitrary state.
  *
@@ -283,6 +301,8 @@ export const canManageDealers = canManageProducts;
 export const canManageUsers = canManageProducts;
 export const canManageRoles = canManageProducts;
 export const canManageSystemSettings = canManageProducts;
+export const canManageWarehouses = canManageProducts;
+export const canManageShowrooms = canManageProducts;
 
 /** True for roles that must never mutate state. */
 export function isReadOnly(role: Role): boolean {

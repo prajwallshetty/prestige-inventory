@@ -13,23 +13,10 @@ export default async function DashboardPage() {
   const session = await getSessionContext();
   if (!session.authenticated) redirect("/login");
 
-  // The DEALER login role was retired; dealer-scoped dashboard queries no
-  // longer apply to any signed-in role.
-  const isDealer = false;
-
   // Every independent read goes out in ONE parallel batch. The database is
   // geographically remote (~1.5s per round trip), so awaiting these in
   // sequence costs seconds of pure network wait — parallel is ~7x faster.
-  const [
-    summary,
-    recentMovements,
-    pendingBlocks,
-    dealerBookingsRaw,
-    dealerPending,
-    dealerAwaiting,
-    dealerConfirmed,
-    dealerItemsSum,
-  ] = await Promise.all([
+  const [summary, recentMovements, pendingBlocks] = await Promise.all([
     getInventorySummary(),
     db.inventoryMovement.findMany({
       take: 8,
@@ -64,34 +51,6 @@ export default async function DashboardPage() {
         dealer: { select: { name: true, company: true } },
       },
     }),
-    isDealer
-      ? db.stockBooking.findMany({
-          where: { dealerId: session.dealerId },
-          orderBy: { requestedAt: "desc" },
-          take: 5,
-          include: { items: { select: { requestedQuantity: true } } },
-        })
-      : Promise.resolve([]),
-    isDealer
-      ? db.stockBooking.count({ where: { dealerId: session.dealerId, status: "PENDING_APPROVAL" } })
-      : Promise.resolve(0),
-    isDealer
-      ? db.stockBooking.count({ where: { dealerId: session.dealerId, status: "AWAITING_DEALER_CONFIRMATION" } })
-      : Promise.resolve(0),
-    isDealer
-      ? db.stockBooking.count({ where: { dealerId: session.dealerId, status: "CONFIRMED" } })
-      : Promise.resolve(0),
-    isDealer
-      ? db.stockBookingItem.aggregate({
-          where: {
-            booking: {
-              dealerId: session.dealerId,
-              status: { in: ["APPROVED", "AWAITING_DEALER_CONFIRMATION", "CONFIRMED", "ALLOCATED", "FULFILLED"] },
-            },
-          },
-          _sum: { approvedQuantity: true },
-        })
-      : Promise.resolve(null),
   ]);
 
   // Serialize movements dates
@@ -125,35 +84,12 @@ export default async function DashboardPage() {
     } : null
   }));
 
-  // Dealer portal metrics — the underlying queries already ran in the batch
-  // above (resolving to empty/zero for non-dealers), so this is pure shaping.
-  const dealerBookings = dealerBookingsRaw.map((b) => ({
-    id: b.id,
-    bookingNumber: b.bookingNumber,
-    status: b.status,
-    requestedAt: b.requestedAt.toISOString(),
-    items: b.items.map((i) => ({
-      requestedQuantity: i.requestedQuantity,
-    })),
-  }));
-
-  const dealerSummary = {
-    pendingCount: dealerPending,
-    awaitingConfirmCount: dealerAwaiting,
-    confirmedCount: dealerConfirmed,
-    totalBoxes: dealerItemsSum?._sum.approvedQuantity || 0,
-  };
-
   return (
-    <>
-      <DashboardClient
-        summary={summary}
-        recentMovements={serializedMovements}
-        pendingBlocks={serializedPendingBlocks}
-        dealerBookings={dealerBookings}
-        dealerSummary={dealerSummary}
-        session={session}
-      />
-    </>
+    <DashboardClient
+      summary={summary}
+      recentMovements={serializedMovements}
+      pendingBlocks={serializedPendingBlocks}
+      session={session}
+    />
   );
 }

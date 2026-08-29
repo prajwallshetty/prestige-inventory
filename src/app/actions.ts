@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 
 import { adjustStock } from "@/services/StockAdjustmentService";
+
 import {
   createBlockRequest,
   approveBlock,
@@ -14,8 +15,11 @@ import {
   shipBlock,
   markBlockReadyToShip,
   cancelBlock,
+  createLogisticsTransitRecord,
+  createLogisticsShipmentRecord,
+  updateLogisticsRecord,
+  deleteLogisticsRecord,
 } from "@/services/StockBlockService";
-import { createShipment, receiveShipmentStock } from "@/services/ShipmentService";
 import {
   createBooking,
   reviewBooking,
@@ -35,6 +39,8 @@ import {
   canCreateBlock,
   canCreateBooking,
   canManageDealers,
+  canManageWarehouses,
+  canManageShowrooms,
   canReviewBooking,
   canViewAuditLogs,
   isRole,
@@ -50,6 +56,7 @@ import {
   hashPassword,
   requireUser,
   updateSessionPreview,
+  SESSION_MAX_AGE,
 } from "@/lib/auth";
 import {
   ActionResult,
@@ -94,6 +101,132 @@ export async function adjustStockAction(formData: FormData): Promise<ActionResul
 
     revalidateBlockViews();
     return undefined;
+  });
+}
+
+// ————————————————————————————————————————————————
+// All Stock CRUD Actions (Super Admin & Manager)
+// ————————————————————————————————————————————————
+
+export async function createStockItemAction(payload: {
+  name: string;
+  sku?: string;
+  productCode?: string;
+  brandId?: string;
+  categoryId?: string;
+  productTypeId?: string;
+  collectionId?: string;
+  size?: string;
+  finish?: string;
+  surface?: string;
+  color?: string;
+  material?: string;
+  price?: number;
+  mrp?: number;
+  description?: string;
+  images?: string[];
+  image_key?: string;
+  thumbnail_key?: string;
+  lifestyleImage?: string;
+  totalStock?: number;
+  looseStock?: number;
+  minimumStock?: number;
+  maximumStock?: number;
+  reorderLevel?: number;
+  warehouseId?: string;
+  remarks?: string;
+}): Promise<ActionResult<{ productId: string; inventoryId: string }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    if (user.role !== "SUPER_ADMIN" && user.role !== "MANAGER") {
+      throw new AppError("Only Super Admin or Manager can create new stock items.", 403, "FORBIDDEN");
+    }
+
+    const { createStockProductItem } = await import("@/services/InventoryService");
+    const res = await createStockProductItem({
+      ...payload,
+      performedBy: user.name,
+      performedById: user.userId,
+      role: user.role,
+    });
+
+    revalidateBlockViews();
+    return { productId: res.product.id, inventoryId: res.inventory.id };
+  });
+}
+
+export async function updateStockItemAction(
+  productId: string,
+  payload: {
+    name?: string;
+    sku?: string;
+    productCode?: string;
+    brandId?: string;
+    categoryId?: string;
+    productTypeId?: string;
+    collectionId?: string;
+    size?: string;
+    finish?: string;
+    surface?: string;
+    color?: string;
+    material?: string;
+    price?: number;
+    mrp?: number;
+    description?: string;
+    images?: string[];
+    image_key?: string;
+    thumbnail_key?: string;
+    lifestyleImage?: string;
+    totalStock?: number;
+    looseStock?: number;
+    minimumStock?: number;
+    maximumStock?: number;
+    reorderLevel?: number;
+    warehouseId?: string;
+    remarks?: string;
+  }
+): Promise<ActionResult<{ productId: string }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    if (user.role !== "SUPER_ADMIN" && user.role !== "MANAGER") {
+      throw new AppError("Only Super Admin or Manager can edit stock items.", 403, "FORBIDDEN");
+    }
+
+    const { updateStockProductItem } = await import("@/services/InventoryService");
+    const res = await updateStockProductItem({
+      productId,
+      ...payload,
+      performedBy: user.name,
+      performedById: user.userId,
+      role: user.role,
+    });
+
+    revalidateBlockViews();
+    return { productId: res.product.id };
+  });
+}
+
+export async function deleteStockItemAction(
+  productId: string,
+  reason?: string
+): Promise<ActionResult<{ success: boolean }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    if (user.actualRole !== "SUPER_ADMIN") {
+      throw new AppError("Only Super Admin can delete stock items.", 403, "FORBIDDEN");
+    }
+
+    const { deleteStockProductItem } = await import("@/services/InventoryService");
+    const res = await deleteStockProductItem({
+      productId,
+      reason,
+      performedBy: user.name,
+      performedById: user.userId,
+      role: user.actualRole,
+    });
+
+    revalidateBlockViews();
+    return { success: res.success };
   });
 }
 
@@ -240,13 +373,25 @@ export async function markReadyToShipAction(blockId: string): Promise<ActionResu
 /** READY_TO_SHIP → SHIPPED / PARTIALLY_SHIPPED (Manager / Super Admin). */
 export async function shipBlockAction(
   blockId: string,
-  quantity?: number
+  quantity?: number,
+  vehicle?: {
+    vehicleNumber?: string;
+    driverName?: string;
+    driverPhone?: string;
+    transporter?: string;
+    expectedDeliveryAt?: string;
+  }
 ): Promise<ActionResult<{ status: string }>> {
   return runAction(async () => {
     const user = await requireUser();
     const block = await shipBlock({
       blockId,
       quantity,
+      vehicleNumber: vehicle?.vehicleNumber,
+      driverName: vehicle?.driverName,
+      driverPhone: vehicle?.driverPhone,
+      transporter: vehicle?.transporter,
+      expectedDeliveryAt: vehicle?.expectedDeliveryAt ? new Date(vehicle.expectedDeliveryAt) : undefined,
       performedBy: user.name,
       performedById: user.userId,
       role: user.role,
@@ -311,6 +456,129 @@ export async function releaseBlockAction(
       releasedById: user.userId,
       role: user.role,
       reason: reason || "Manual reservation release",
+    });
+
+    revalidateBlockViews(blockId);
+    return { status: block.status };
+  });
+}
+
+// ————————————————————————————————————————————————
+// Super Admin Logistics & Transit Management
+// ————————————————————————————————————————————————
+
+export async function createLogisticsTransitAction(payload: {
+  productId: string;
+  quantity: number;
+  warehouseId?: string;
+  dealerId?: string;
+  showroomId?: string;
+  vehicleNumber: string;
+  driverName?: string;
+  driverPhone?: string;
+  transporter?: string;
+  expectedDeliveryAt?: string;
+  remarks?: string;
+}): Promise<ActionResult<{ id: string; blockNumber: string | null }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    if (user.role !== "SUPER_ADMIN" && user.role !== "MANAGER") {
+      throw new AppError("Only Super Admin or Manager can create transit dispatches.", 403, "FORBIDDEN");
+    }
+
+    const block = await createLogisticsTransitRecord({
+      ...payload,
+      expectedDeliveryAt: payload.expectedDeliveryAt ? new Date(payload.expectedDeliveryAt) : undefined,
+      performedBy: user.name,
+      performedById: user.userId,
+      role: user.role,
+    });
+
+    revalidateBlockViews(block.id);
+    return { id: block.id, blockNumber: block.block_number };
+  });
+}
+
+export async function createLogisticsShipmentAction(payload: {
+  productId: string;
+  quantity: number;
+  warehouseId?: string;
+  dealerId?: string;
+  showroomId?: string;
+  vehicleNumber?: string;
+  driverName?: string;
+  driverPhone?: string;
+  transporter?: string;
+  deliveredAt?: string;
+  remarks?: string;
+}): Promise<ActionResult<{ id: string; blockNumber: string | null }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    if (user.role !== "SUPER_ADMIN" && user.role !== "MANAGER") {
+      throw new AppError("Only Super Admin or Manager can record delivered shipments.", 403, "FORBIDDEN");
+    }
+
+    const block = await createLogisticsShipmentRecord({
+      ...payload,
+      deliveredAt: payload.deliveredAt ? new Date(payload.deliveredAt) : undefined,
+      performedBy: user.name,
+      performedById: user.userId,
+      role: user.role,
+    });
+
+    revalidateBlockViews(block.id);
+    return { id: block.id, blockNumber: block.block_number };
+  });
+}
+
+export async function updateLogisticsRecordAction(
+  blockId: string,
+  payload: {
+    vehicleNumber?: string;
+    driverName?: string;
+    driverPhone?: string;
+    transporter?: string;
+    expectedDeliveryAt?: string;
+    status?: string;
+    remarks?: string;
+  }
+): Promise<ActionResult<{ status: string }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    if (user.role !== "SUPER_ADMIN" && user.role !== "MANAGER") {
+      throw new AppError("Only Super Admin or Manager can edit logistics records.", 403, "FORBIDDEN");
+    }
+
+    const block = await updateLogisticsRecord({
+      blockId,
+      ...payload,
+      expectedDeliveryAt: payload.expectedDeliveryAt ? new Date(payload.expectedDeliveryAt) : undefined,
+      performedBy: user.name,
+      performedById: user.userId,
+      role: user.role,
+    });
+
+    revalidateBlockViews(block.id);
+    return { status: block.status };
+  });
+}
+
+export async function deleteLogisticsRecordAction(
+  blockId: string,
+  reason?: string
+): Promise<ActionResult<{ status: string }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    if (user.actualRole !== "SUPER_ADMIN") {
+      throw new AppError("Only Super Admin can delete logistics records.", 403, "FORBIDDEN");
+    }
+
+    const block = await deleteLogisticsRecord({
+      blockId,
+      reason,
+      performedBy: user.name,
+      performedById: user.userId,
+      role: user.actualRole,
     });
 
     revalidateBlockViews(blockId);
@@ -843,7 +1111,7 @@ export async function setSimulatedSessionAction(
       ["prestige_warehouse_id", warehouseId],
       ["prestige_showroom_id", showroomId],
     ] as const) {
-      if (value) cookieStore.set(name, value, { path: "/" });
+      if (value) cookieStore.set(name, value, { path: "/", maxAge: SESSION_MAX_AGE });
       else cookieStore.delete(name);
     }
 
@@ -1173,4 +1441,166 @@ export async function getDealerDetailAction(id: string) {
   if (!session || session.role !== "SUPER_ADMIN") return null;
   const { getDealerDetail } = await import("@/services/DealerService");
   return getDealerDetail(id);
+}
+
+// ————————————————————————————————————————————————
+// Warehouse management (Super Admin only)
+// ————————————————————————————————————————————————
+
+export async function createWarehouseAction(data: {
+  name: string;
+  code: string;
+  location?: string | null;
+  address?: string | null;
+  status?: string;
+}): Promise<ActionResult<{ id: string }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    assertPermission(canManageWarehouses(user.role), "Warehouse management is restricted to Super Admin.");
+    const { createWarehouse } = await import("@/services/WarehouseService");
+
+    const created = await createWarehouse({
+      ...data,
+      createdById: user.userId,
+      createdByName: user.name,
+    });
+
+    revalidatePath("/admin/warehouses");
+    revalidatePath("/warehouses");
+    return { id: created.id };
+  });
+}
+
+export async function updateWarehouseAction(
+  id: string,
+  data: {
+    name?: string;
+    location?: string | null;
+    address?: string | null;
+    status?: string;
+  }
+): Promise<ActionResult<undefined>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    assertPermission(canManageWarehouses(user.role), "Warehouse management is restricted to Super Admin.");
+    const { updateWarehouse } = await import("@/services/WarehouseService");
+
+    await updateWarehouse({
+      id,
+      ...data,
+      updatedById: user.userId,
+      updatedByName: user.name,
+    });
+
+    revalidatePath("/admin/warehouses");
+    revalidatePath("/warehouses");
+    return undefined;
+  });
+}
+
+export async function deleteWarehouseAction(id: string): Promise<ActionResult<undefined>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    assertPermission(canManageWarehouses(user.role), "Warehouse management is restricted to Super Admin.");
+    const { deleteWarehouse } = await import("@/services/WarehouseService");
+
+    await deleteWarehouse({
+      id,
+      performedById: user.userId,
+      performedByName: user.name,
+    });
+
+    revalidatePath("/admin/warehouses");
+    revalidatePath("/warehouses");
+    return undefined;
+  });
+}
+
+// ————————————————————————————————————————————————
+// Showroom management (Super Admin only)
+// ————————————————————————————————————————————————
+
+export async function createShowroomAction(data: {
+  name: string;
+  subtitle?: string | null;
+  addressLine: string;
+  locality?: string | null;
+  city: string;
+  state?: string;
+  postalCode?: string | null;
+  phone: string;
+  whatsapp?: string | null;
+  email?: string | null;
+  managerName?: string | null;
+  managerPhone?: string | null;
+  isFlagship?: boolean;
+  published?: boolean;
+}): Promise<ActionResult<{ id: string }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    assertPermission(canManageShowrooms(user.role), "Showroom management is restricted to Super Admin.");
+    const { createShowroom } = await import("@/services/ShowroomService");
+
+    const created = await createShowroom({
+      ...data,
+      createdById: user.userId,
+      createdByName: user.name,
+    });
+
+    revalidatePath("/admin/showrooms");
+    return { id: created.id };
+  });
+}
+
+export async function updateShowroomAction(
+  id: string,
+  data: {
+    name?: string;
+    subtitle?: string | null;
+    addressLine?: string;
+    locality?: string | null;
+    city?: string;
+    state?: string;
+    postalCode?: string | null;
+    phone?: string;
+    whatsapp?: string | null;
+    email?: string | null;
+    managerName?: string | null;
+    managerPhone?: string | null;
+    isFlagship?: boolean;
+    published?: boolean;
+  }
+): Promise<ActionResult<undefined>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    assertPermission(canManageShowrooms(user.role), "Showroom management is restricted to Super Admin.");
+    const { updateShowroom } = await import("@/services/ShowroomService");
+
+    await updateShowroom({
+      id,
+      ...data,
+      updatedById: user.userId,
+      updatedByName: user.name,
+    });
+
+    revalidatePath("/admin/showrooms");
+    return undefined;
+  });
+}
+
+export async function deleteShowroomAction(id: string): Promise<ActionResult<undefined>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    assertPermission(canManageShowrooms(user.role), "Showroom management is restricted to Super Admin.");
+    const { deleteShowroom } = await import("@/services/ShowroomService");
+
+    await deleteShowroom({
+      id,
+      deletedById: user.userId,
+      deletedByName: user.name,
+    });
+
+    revalidatePath("/admin/showrooms");
+    return undefined;
+  });
 }

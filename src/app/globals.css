@@ -112,3 +112,26 @@
     padding-bottom: 0 !important;
   }
 }
+
+/* Remove padding and prevent scrolling of the main layout container for Chat pages on mobile screen sizes */
+@media (max-width: 1023px) {
+  body:has(a[href="/chat"][aria-current="page"]) main,
+  body:has(a[href="/admin/chat"][aria-current="page"]) main {
+    padding: 0 !important;
+    overflow: hidden !important;
+    display: flex !important;
+    flex-direction: column !important;
+    height: calc(100vh - 64px) !important;
+    min-height: 0 !important;
+  }
+  body:has(a[href="/chat"][aria-current="page"]) main > div,
+  body:has(a[href="/admin/chat"][aria-current="page"]) main > div {
+    height: 100% !important;
+    width: 100% !important;
+    max-width: none !important;
+    display: flex !important;
+    flex-direction: column !important;
+    flex: 1 !important;
+    min-height: 0 !important;
+  }
+}

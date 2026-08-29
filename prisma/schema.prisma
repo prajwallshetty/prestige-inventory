@@ -1646,6 +1646,7 @@ model Notification {
   @@index([createdAt])
   @@index([userId, isRead])
   @@index([userId, createdAt])
+  @@index([userId, isRead, createdAt])
 }
 
 model Announcement {
@@ -1735,6 +1736,7 @@ model ConversationParticipant {
   @@index([userId])
   @@index([conversationId])
   @@index([userId, lastReadAt])
+  @@index([conversationId, userId, lastReadAt])
 }
 
 model Message {
@@ -1768,6 +1770,7 @@ model Message {
   updatedAt      DateTime     @updatedAt @map("updated_at")
 
   @@index([conversationId, createdAt])
+  @@index([conversationId, deletedAt, createdAt])
   @@index([conversationId, senderId, deletedAt, createdAt])
   @@index([senderId])
   @@index([deletedAt])

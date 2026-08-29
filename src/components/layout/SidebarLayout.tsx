@@ -31,7 +31,8 @@ import {
   Settings,
   Megaphone,
   MessageSquare,
-  Package
+  Package,
+  Navigation
 } from "lucide-react";
 import { setSimulatedSessionAction, signOutAction } from "@/app/actions";
 import { toast } from "sonner";
@@ -44,14 +45,13 @@ interface Props {
   children: React.ReactNode;
   /** Fetched server-side by AppShell so the chrome never blocks on a client round trip. */
   session: any;
-  dealers: any[];
   warehouses: any[];
   showrooms: any[];
   /** Blocks currently waiting on *this* user's decision. Drives the nav badge. */
   pendingApprovalCount?: number;
 }
 
-export function SidebarLayout({ children, session, dealers, warehouses, showrooms, pendingApprovalCount = 0 }: Props) {
+export function SidebarLayout({ children, session, warehouses, showrooms, pendingApprovalCount = 0 }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -66,7 +66,6 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
   const activeRole: UserRole =
     session?.role === "SUPER_ADMIN" && session?.previewRole ? session.previewRole : session?.role || "WEAVER";
   const [role, setRole] = useState<UserRole>(activeRole);
-  const [dealerId, setDealerId] = useState(session?.dealerId || "");
   const [warehouseId, setWarehouseId] = useState(session?.warehouseId || "");
   const [showroomId, setShowroomId] = useState(session?.showroomId || "");
   const [isOnline, setIsOnline] = useState(true);
@@ -169,20 +168,6 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
     }
   };
 
-  const handleDealerChange = async (newDealerId: string) => {
-    if (!navigator.onLine) {
-      alert("You're offline. Reconnect to continue.");
-      return;
-    }
-    setDealerId(newDealerId);
-    try {
-      await setSimulatedSessionAction(role, newDealerId, "", "");
-      window.location.reload();
-    } catch (err: any) {
-      alert(err.message);
-    }
-  };
-
   const handleWarehouseChange = async (newWarehouseId: string) => {
     if (!navigator.onLine) {
       alert("You're offline. Reconnect to continue.");
@@ -237,29 +222,14 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
   const getNavItems = () => {
     const dashboard = { name: "Dashboard", href: `${pathPrefix}/dashboard`, icon: LayoutDashboard };
     const allStock = { name: "All Stock", href: `${pathPrefix}/inventory`, icon: Boxes };
-    
-    // Role-specific routing configuration
-    if (false) {
-      const stockBooking = { name: "Book Stock", href: `${pathPrefix}/blocks/new`, icon: Store };
-      const myBookings = { name: "My Bookings", href: `${pathPrefix}/bookings`, icon: FileSpreadsheet };
-      const reports = { name: "Reports & Export", href: `${pathPrefix}/reports`, icon: FileSpreadsheet };
-      const settings = { name: "Settings", href: `${pathPrefix}/settings`, icon: Settings };
-      
-      return [
-        {
-          category: "DEALER PORTAL",
-          items: [dashboard, stockBooking, myBookings, allStock],
-        },
-        {
-          category: "ANALYTICS & CONTROL",
-          items: [reports, settings],
-        }
-      ];
-    }
 
     const bookingsQueue = { name: "Booking Queue", href: `${pathPrefix}/bookings`, icon: FileSpreadsheet };
-    const dealerBlocks = { name: "Dealer Blocks", href: `${pathPrefix}/blocks`, icon: Lock };
-    const shipments = { name: "Shipments & Transit", href: `${pathPrefix}/in-transit`, icon: Truck };
+    // All stock blocks across every showroom — the StockBlock lifecycle,
+    // distinct from the unrelated inbound factory→warehouse feature that used
+    // to sit behind this label.
+    const allBlocks = { name: "All Blocks", href: `${pathPrefix}/blocks`, icon: Lock };
+    const shipments = { name: "Shipments", href: `${pathPrefix}/shipments`, icon: Truck };
+    const transit = { name: "Transit", href: `${pathPrefix}/transit`, icon: Navigation };
     const reports = { name: "Reports & Export", href: `${pathPrefix}/reports`, icon: FileSpreadsheet };
     const settings = { name: "Settings", href: `${pathPrefix}/settings`, icon: Settings };
     const broadcasts = { name: "Broadcasts", href: `${pathPrefix}/announcements`, icon: Megaphone };
@@ -288,7 +258,7 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
         },
         {
           category: "RESERVATIONS & LOGISTICS",
-          items: [pendingApprovals, readyToShip, dealerBlocks, bookingsQueue, shipments],
+          items: [pendingApprovals, readyToShip, allBlocks, bookingsQueue, shipments, transit],
         },
         {
           category: "REPORTING & MANAGEMENT",
@@ -313,6 +283,10 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
           items: [chat],
         },
         {
+          category: "LOGISTICS",
+          items: [shipments, transit],
+        },
+        {
           category: "ANALYTICS & CONTROL",
           items: [reports, settings],
         }
@@ -332,6 +306,10 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
         {
           category: "COMMUNICATION",
           items: [chat],
+        },
+        {
+          category: "LOGISTICS",
+          items: [shipments, transit],
         },
         {
           category: "ANALYTICS & CONTROL",
@@ -360,7 +338,7 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
         },
         {
           category: "LOGISTICS",
-          items: [shipments],
+          items: [shipments, transit],
         },
         {
           category: "ANALYTICS",
@@ -374,6 +352,7 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
     const outOfStock = { name: "Out of Stock", href: `${pathPrefix}/inventory?status=OUT_OF_STOCK`, icon: PackageCheck };
     const dealersMgmt = { name: "Dealers", href: `${pathPrefix}/dealers`, icon: Users };
     const warehousesMgmt = { name: "Warehouses", href: `${pathPrefix}/warehouses`, icon: WarehouseIcon };
+    const showroomsMgmt = { name: "Showrooms", href: `${pathPrefix}/showrooms`, icon: Store };
     const audit = { name: "Audit Trail", href: `${pathPrefix}/system/audit`, icon: ShieldCheck };
     const usersMgmt = { name: "Users Management", href: `${pathPrefix}/users`, icon: Users };
     const productsMgmt = { name: "Products", href: `${pathPrefix}/products`, icon: Package };
@@ -399,23 +378,22 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
         category: "STOCK RESERVATION",
         items: [
           { name: "Pending Approvals", href: `${pathPrefix}/blocks?status=PENDING`, icon: Lock, badge: pendingApprovalCount },
-          dealerBlocks,
+          allBlocks,
           bookingsQueue,
         ],
       },
       {
         category: "LOGISTICS & TRANSIT",
-        items: [shipments],
+        items: [shipments, transit],
       },
       {
         category: "SYSTEM MANAGEMENT",
-        items: [dealersMgmt, warehousesMgmt, usersMgmt, reports, audit, settings],
+        items: [dealersMgmt, warehousesMgmt, showroomsMgmt, usersMgmt, reports, audit, settings],
       },
     ];
   };
 
   const navGroups = getNavItems();
-  const currentDealerName = dealers.find(d => d.id === dealerId)?.name || "Select Dealer";
   const currentWarehouseName = warehouses.find(w => w.id === warehouseId)?.name || "Select Warehouse";
 
   // Checks if the user is in preview mode
@@ -440,19 +418,30 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
         {/* BRAND LOGO */}
         <div className="flex h-16 shrink-0 items-center justify-between border-b border-[#EAEAEA] px-4 bg-white">
           {(!collapsed || mobileOpen) ? (
-            <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#F2C202] font-black text-white shadow-xs">
-                PT
+            <Link href="/" className="flex items-center gap-2.5">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white border border-[#EAEAEA] p-1 shadow-xs overflow-hidden shrink-0">
+                <img
+                  src="/icons/logo.png"
+                  alt="Prestige Logo"
+                  className="h-full w-full object-contain"
+                  onError={(e) => {
+                    (e.currentTarget as HTMLElement).style.display = "none";
+                  }}
+                />
               </div>
               <div className="flex flex-col">
                 <h1 className="text-xs font-black tracking-wider text-[#111111] uppercase">PRESTIGE TILES</h1>
                 <p className="text-[9px] font-bold text-[#F2C202] tracking-widest">ENTERPRISE ERP</p>
               </div>
-            </div>
+            </Link>
           ) : (
-            <div className="mx-auto flex h-9 w-9 items-center justify-center rounded-xl bg-[#F2C202] font-bold text-white shadow-xs">
-              PT
-            </div>
+            <Link href="/" className="mx-auto flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl bg-white border border-[#EAEAEA] p-1 shadow-xs">
+              <img
+                src="/icons/logo.png"
+                alt="Prestige Logo"
+                className="h-full w-full object-contain"
+              />
+            </Link>
           )}
 
           <div className="flex items-center gap-1">
@@ -552,21 +541,6 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
                   </select>
                 </div>
 
-                {false && dealers.length > 0 && (
-                  <div className="space-y-1">
-                    <p className="text-[9px] text-[#6B6B6B] font-bold uppercase">Dealer Scope</p>
-                    <select
-                      value={dealerId}
-                      onChange={(e) => handleDealerChange(e.target.value)}
-                      className="w-full rounded-lg border border-[#EAEAEA] bg-white p-1.5 text-xs text-[#111111] focus:border-[#F2C202] focus:outline-hidden"
-                    >
-                      {dealers.map((d) => (
-                        <option key={d.id} value={d.id}>{d.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-
                 {role === "MANAGER" && warehouses.length > 0 && (
                   <div className="space-y-1">
                     <p className="text-[9px] text-[#6B6B6B] font-bold uppercase">Depot Context</p>
@@ -613,7 +587,7 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
       </aside>
 
       {/* CONTENT INNER CONTAINER */}
-      <div className="flex flex-1 flex-col overflow-hidden pb-16 lg:pb-0">
+      <div className="flex flex-1 flex-col overflow-hidden pb-0">
         {/* PREVIEW MODE WARNING BANNER */}
         {isPreviewMode && (
           <div className="flex items-center justify-between bg-amber-50 border-b border-amber-200 px-4 py-2 text-xs font-bold text-amber-900 shadow-xs">
@@ -668,14 +642,16 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
               <Menu className="h-5 w-5" />
             </button>
 
-            {/* Clickable Search input */}
+            {/* Clickable Search input — icon-only below sm so the header row
+                doesn't outgrow a 320-375px viewport and clip the actions on
+                the right (notification bell, chat badge). */}
             <button
               onClick={triggerSearch}
-              className="flex items-center gap-3 rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] py-1.5 px-3 w-48 sm:w-80 text-left text-xs text-[#6B6B6B] hover:border-slate-300 transition-all touch-target"
+              className="flex items-center justify-center gap-3 rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] p-2.5 sm:justify-start sm:py-1.5 sm:px-3 w-auto sm:w-48 md:w-80 text-left text-xs text-[#6B6B6B] hover:border-slate-300 transition-all touch-target"
             >
               <Search className="h-3.5 w-3.5 text-[#6B6B6B] shrink-0" />
-              <span className="truncate flex-1 text-[#6B6B6B]">Search (⌘K or /)</span>
-              <kbd className="hidden sm:inline-block rounded bg-white border border-[#EAEAEA] px-1.5 py-0.5 text-[9px] font-mono font-bold text-[#6B6B6B]">
+              <span className="hidden sm:inline truncate flex-1 text-[#6B6B6B]">Search (⌘K or /)</span>
+              <kbd className="hidden md:inline-block rounded bg-white border border-[#EAEAEA] px-1.5 py-0.5 text-[9px] font-mono font-bold text-[#6B6B6B]">
                 ⌘K
               </kbd>
             </button>
@@ -718,8 +694,10 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
               )}
             </div>
 
-            {/* Connectivity status */}
-            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#EAEAEA] bg-white text-[10px] font-bold select-none">
+            {/* Connectivity status — hidden below sm to keep the notification
+                bell and chat badge from being pushed out of view on a
+                320-375px header row. */}
+            <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#EAEAEA] bg-white text-[10px] font-bold select-none">
               <span className={`h-2 w-2 rounded-full ${isOnline ? "bg-emerald-500" : "bg-rose-500 animate-ping"}`}></span>
               <span className={isOnline ? "text-[#6B6B6B]" : "text-rose-700"}>
                 {isOnline ? "Connected" : "Offline"}
@@ -737,31 +715,6 @@ export function SidebarLayout({ children, session, dealers, warehouses, showroom
           <div className="mx-auto max-w-[1600px]">{children}</div>
         </main>
       </div>
-
-      {/* MOBILE BOTTOM NAVIGATION BAR FOR DEALER */}
-      {false && (
-        <nav className="fixed bottom-0 left-0 right-0 z-40 flex h-16 items-center justify-around border-t border-[#EAEAEA] bg-white/95 backdrop-blur-md px-2 lg:hidden mobile-bottom-nav">
-          <BottomTabLink href={`${pathPrefix}/dashboard`} icon={LayoutDashboard} label="Home" active={pathname === `${pathPrefix}/dashboard`} />
-          <BottomTabLink href={`${pathPrefix}/inventory`} icon={Boxes} label="Products" active={pathname === `${pathPrefix}/inventory`} />
-          <BottomTabLink href={`${pathPrefix}/blocks/new`} icon={Store} label="Book" active={pathname === `${pathPrefix}/blocks/new`} />
-          <BottomTabLink href={`${pathPrefix}/bookings`} icon={FileSpreadsheet} label="Bookings" active={pathname === `${pathPrefix}/bookings`} />
-          <BottomTabLink href={`${pathPrefix}/settings`} icon={Settings} label="Settings" active={pathname === `${pathPrefix}/settings`} />
-        </nav>
-      )}
     </div>
-  );
-}
-
-function BottomTabLink({ href, icon: Icon, label, active }: { href: string; icon: any; label: string; active: boolean }) {
-  return (
-    <Link
-      href={href}
-      className={`flex flex-col items-center justify-center gap-1 flex-1 h-full text-[10px] font-bold ${
-        active ? "text-[#8A7300]" : "text-[#6B6B6B]"
-      }`}
-    >
-      <Icon className={`h-5 w-5 ${active ? "text-[#8A7300]" : "text-[#6B6B6B]"}`} />
-      <span>{label}</span>
-    </Link>
   );
 }

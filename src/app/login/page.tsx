@@ -41,8 +41,8 @@ export default function LoginPage() {
       <div className="w-full max-w-md space-y-8">
         {/* BRAND IDENTITY */}
         <div className="text-center space-y-2">
-          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[#F2C202] font-black text-white text-xl shadow-xs">
-            PT
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-white border border-[#EAEAEA] p-1 shadow-xs">
+            <img src="/icons/logo.png" alt="Prestige Logo" className="h-full w-full object-contain" />
           </div>
           <div>
             <h2 className="text-sm font-black tracking-widest text-[#111111] uppercase">PRESTIGE TILES</h2>
@@ -129,17 +129,10 @@ export default function LoginPage() {
               </button>
               <button
                 type="button"
-                onClick={() => { setEmail("staff@prestigetiles.com"); setPassword("prestige123"); }}
+                onClick={() => { setEmail("showroomstaff@prestigetiles.com"); setPassword("prestige123"); }}
                 className="rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] py-1.5 px-2 text-[10px] font-bold text-[#111111] hover:bg-[#EAEAEA] transition-all text-center cursor-pointer"
               >
                 Showroom Staff
-              </button>
-              <button
-                type="button"
-                onClick={() => { setEmail("dealer@prestigetiles.com"); setPassword("prestige123"); }}
-                className="rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] py-1.5 px-2 text-[10px] font-bold text-[#111111] hover:bg-[#EAEAEA] transition-all text-center cursor-pointer"
-              >
-                Dealer Partner
               </button>
               <button
                 type="button"

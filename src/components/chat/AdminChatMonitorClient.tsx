@@ -9,7 +9,7 @@ import {
   Eye,
   ChevronRight,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { ChatClient } from "./ChatClient";
 
 /** Pinned timezone so SSR and client hydration compute the identical string (see ChatClient). */

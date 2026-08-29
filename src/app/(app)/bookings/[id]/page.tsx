@@ -15,7 +15,15 @@ export default async function BookingDetailPage({
   if (!session.authenticated) redirect("/login");
 
   const { id } = await params;
-  const booking = await getBookingById(id);
+  // Independent reads — parallel rather than sequential (each round trip to
+  // the database costs ~2s here, see docs/AUDIT.md J1).
+  const [booking, auditLogs] = await Promise.all([
+    getBookingById(id),
+    db.auditLog.findMany({
+      where: { entity: "StockBooking", entityId: id },
+      orderBy: { createdAt: "desc" },
+    }),
+  ]);
 
   if (!booking) {
     notFound();
@@ -29,15 +37,6 @@ export default async function BookingDetailPage({
   if ((session.role === "SHOWROOM_STAFF" || session.role === "SHOWROOM_INCHARGE") && booking.requestedBy !== session.name) {
     notFound();
   }
-
-  // Fetch recent audit logs for this booking
-  const auditLogs = await db.auditLog.findMany({
-    where: {
-      entity: "StockBooking",
-      entityId: id,
-    },
-    orderBy: { createdAt: "desc" },
-  });
 
   // Map and serialize items for client safety
   const serializedBooking = {

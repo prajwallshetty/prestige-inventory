@@ -24,7 +24,6 @@ import {
 import {
   createBlockRequest,
   approveBlock,
-  markBlockReadyToShip,
   shipBlock,
 } from "../src/services/StockBlockService";
 
@@ -202,17 +201,22 @@ async function testNotificationFanOut() {
     check("manager NOT notified on create", await notifsFor(manager.id, "BLOCK_CREATED"), 0);
 
     // §11 — in-charge approval notifies manager + super admin
-    await approveBlock({ blockId: block.id, approvedBy: incharge.name, approvedById: incharge.id, role: "SHOWROOM_INCHARGE" });
+    await approveBlock({
+      blockId: block.id, approvedBy: incharge.name, approvedById: incharge.id, role: "SHOWROOM_INCHARGE",
+      actorShowroomId: incharge.showroomId ?? showroom?.id ?? undefined,
+    });
     check("manager notified for final approval", (await notifsFor(manager.id, "BLOCK_SENT_FOR_APPROVAL")) > 0, true);
     check("super admin notified for final approval", (await notifsFor(admin.id, "BLOCK_SENT_FOR_APPROVAL")) > 0, true);
 
-    // §13 — manager approval notifies the creator
+    // §13 — manager approval notifies the creator, lands directly on READY_TO_SHIP.
     await approveBlock({ blockId: block.id, approvedBy: manager.name, approvedById: manager.id, role: "MANAGER" });
     check("creator notified of approval", (await notifsFor(staff.id, "BLOCK_APPROVED")) > 0, true);
 
-    // §15 — shipping notifies creator + in-charge
-    await markBlockReadyToShip({ blockId: block.id, performedBy: manager.name, performedById: manager.id, role: "MANAGER" });
-    await shipBlock({ blockId: block.id, performedBy: manager.name, performedById: manager.id, role: "MANAGER" });
+    // §15 — shipping notifies creator + in-charge. Vehicle number is mandatory.
+    await shipBlock({
+      blockId: block.id, performedBy: manager.name, performedById: manager.id, role: "MANAGER",
+      vehicleNumber: "KA-19-TEST-0002",
+    });
     check("creator notified of shipment", (await notifsFor(staff.id, "BLOCK_SHIPPED")) > 0, true);
     check("in-charge notified of shipment", (await notifsFor(incharge.id, "BLOCK_SHIPPED")) > 0, true);
 

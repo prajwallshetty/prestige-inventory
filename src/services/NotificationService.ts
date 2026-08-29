@@ -437,13 +437,12 @@ export async function getAnnouncementsHistory(limit = 20) {
     take: limit,
     include: {
       createdBy: { select: { id: true, name: true, email: true, role: true } },
+      // Only readAt/deliveredAt feed the counts below — the UI never renders
+      // individual recipients, so the nested user object is dropped.
       recipients: {
         select: {
-          id: true,
-          userId: true,
           deliveredAt: true,
           readAt: true,
-          user: { select: { name: true, email: true, role: true } },
         },
       },
     },

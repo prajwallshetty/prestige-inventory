@@ -99,6 +99,8 @@ export function revalidateBlockViews(blockId?: string) {
     revalidatePath(`${prefix}/inventory`);
     revalidatePath(`${prefix}/dashboard`);
     revalidatePath(`${prefix}/in-transit`);
+    revalidatePath(`${prefix}/shipments`);
+    revalidatePath(`${prefix}/transit`);
     if (blockId) revalidatePath(`${prefix}/blocks/${blockId}`);
   }
 }

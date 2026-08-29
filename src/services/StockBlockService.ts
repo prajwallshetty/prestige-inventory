@@ -6,6 +6,7 @@ import {
   conflict,
   type Role,
   type BlockStatus,
+  isBlockStatus,
   EXPIRABLE_BLOCK_STATUSES,
   ACTIVE_BLOCK_STATUSES,
   assertPermission,
@@ -67,6 +68,11 @@ interface LockedBlock {
   remarks: string | null;
   approvalRoute: string;
   expiresAt: Date | null;
+  vehicleNumber: string | null;
+  driverName: string | null;
+  driverPhone: string | null;
+  transporter: string | null;
+  expectedDeliveryAt: Date | null;
 }
 
 const INVENTORY_COLUMNS = `id, "totalStock", "availableStock", "blockedStock", "allocatedStock",
@@ -113,7 +119,8 @@ async function lockBlock(tx: any, blockId: string): Promise<LockedBlock | null> 
   const rows = (await tx.$queryRawUnsafe(
     `SELECT id, block_number, status, quantity, "shippedQuantity", "deliveredQuantity",
             "productId", "inventoryId", "showroomId", "dealerId", "warehouseId",
-            "createdById", "createdRole", "requestedBy", remarks, "approvalRoute", "expiresAt"
+            "createdById", "createdRole", "requestedBy", remarks, "approvalRoute", "expiresAt",
+            "vehicleNumber", "driverName", "driverPhone", "transporter", "expectedDeliveryAt"
        FROM "StockBlock"
       WHERE id = $1
       FOR UPDATE`,
@@ -894,12 +901,23 @@ export async function markBlockReadyToShip({
 export async function shipBlock({
   blockId,
   quantity,
+  vehicleNumber,
+  driverName,
+  driverPhone,
+  transporter,
+  expectedDeliveryAt,
   performedBy,
   performedById,
   role,
 }: {
   blockId: string;
   quantity?: number;
+  /** Required — either passed here, or already on file from an earlier partial ship. */
+  vehicleNumber?: string;
+  driverName?: string;
+  driverPhone?: string;
+  transporter?: string;
+  expectedDeliveryAt?: Date;
   performedBy: string;
   performedById?: string | null;
   role: string;
@@ -913,6 +931,15 @@ export async function shipBlock({
         ? shipDenialMessage(block.status)
         : "Only a Manager or Super Admin can ship a block."
     );
+
+    // Vehicle number is mandatory for shipment confirmation (spec §24-26).
+    // A partial shipment already on file keeps its vehicle unless a new one
+    // is given — a second truck for the remainder is a real scenario.
+    const trimmedVehicle = vehicleNumber?.trim() || null;
+    const finalVehicle = trimmedVehicle || block.vehicleNumber;
+    if (!finalVehicle) {
+      throw new AppError("Vehicle number is required to ship this block.", 400, "VALIDATION");
+    }
 
     const outstanding = block.quantity - block.shippedQuantity;
     const shipQty = quantity ?? outstanding;
@@ -957,6 +984,12 @@ export async function shipBlock({
         status: nextStatus,
         shippedQuantity: totalShipped,
         shippedAt: new Date(),
+        shippedBy: performedBy,
+        vehicleNumber: finalVehicle,
+        driverName: driverName?.trim() || block.driverName || null,
+        driverPhone: driverPhone?.trim() || block.driverPhone || null,
+        transporter: transporter?.trim() || block.transporter || null,
+        expectedDeliveryAt: expectedDeliveryAt || block.expectedDeliveryAt || null,
       },
     });
 
@@ -968,7 +1001,15 @@ export async function shipBlock({
       role,
       fromStatus: block.status,
       toStatus: nextStatus,
-      meta: { shippedNow: shipQty, shippedTotal: totalShipped, physicalAfter: after.totalStock },
+      meta: {
+        shippedNow: shipQty,
+        shippedTotal: totalShipped,
+        physicalAfter: after.totalStock,
+        vehicleNumber: finalVehicle,
+        driverName: updated.driverName,
+        driverPhone: updated.driverPhone,
+        transporter: updated.transporter,
+      },
     });
 
     return updated;
@@ -978,7 +1019,7 @@ export async function shipBlock({
   await notifyBlockParties(result, {
     type: "BLOCK_SHIPPED",
     title: "Stock Shipped",
-    message: `Block ${result.block_number} has been shipped.`,
+    message: `Block ${result.block_number} has been shipped${result.vehicleNumber ? ` on vehicle ${result.vehicleNumber}` : ""}.`,
     priority: "HIGH",
     audiences: ["CREATOR", "SHOWROOM", "SUPER_ADMINS"],
   });
@@ -1595,3 +1636,343 @@ export async function reconcileInventory({ dryRun = false }: { dryRun?: boolean 
 
   return { checked: inventories.length, repaired: drifted.length, details: drifted.slice(0, 50) };
 }
+
+/** Super Admin Direct Creation of Incoming Product Transit */
+export async function createLogisticsTransitRecord({
+  productId,
+  quantity,
+  warehouseId,
+  dealerId,
+  showroomId,
+  vehicleNumber,
+  driverName,
+  driverPhone,
+  transporter,
+  expectedDeliveryAt,
+  remarks,
+  performedBy,
+  performedById,
+  role,
+}: {
+  productId: string;
+  quantity: number;
+  warehouseId?: string;
+  dealerId?: string;
+  showroomId?: string;
+  vehicleNumber: string;
+  driverName?: string;
+  driverPhone?: string;
+  transporter?: string;
+  expectedDeliveryAt?: Date;
+  remarks?: string;
+  performedBy: string;
+  performedById?: string | null;
+  role: string;
+}) {
+  assertPermission(role === "SUPER_ADMIN" || role === "MANAGER", "Only Super Admin or Manager can create transit dispatches.");
+  if (!productId) throw new AppError("Select a product for transit.", 400, "VALIDATION");
+  if (!quantity || quantity <= 0) throw new AppError("Quantity must be greater than zero.", 400, "VALIDATION");
+  if (!vehicleNumber?.trim()) throw new AppError("Vehicle number is required.", 400, "VALIDATION");
+
+  const result = await db.$transaction(async (tx) => {
+    const inv = await lockInventoryByProduct(tx, productId);
+    if (!inv) throw new AppError("Inventory record not found.", 404, "NOT_FOUND");
+
+    const block = await tx.stockBlock.create({
+      data: {
+        block_number: await nextBlockNumber(tx),
+        block_type: "CONFIRMED",
+        productId,
+        inventoryId: inv.id,
+        warehouseId: warehouseId || inv.warehouseId,
+        dealerId: dealerId || null,
+        showroomId: showroomId || null,
+        quantity,
+        shippedQuantity: quantity,
+        deliveredQuantity: 0,
+        requestedBy: performedBy,
+        createdById: performedById || null,
+        createdRole: role,
+        status: "SHIPPED",
+        approvalRoute: "DIRECT",
+        remarks: remarks || "Administrative Transit Dispatch",
+        vehicleNumber: vehicleNumber.trim(),
+        driverName: driverName?.trim() || null,
+        driverPhone: driverPhone?.trim() || null,
+        transporter: transporter?.trim() || null,
+        expectedDeliveryAt: expectedDeliveryAt || null,
+        shippedAt: new Date(),
+        shippedBy: performedBy,
+      },
+    });
+
+    const after = await writeInventory(tx, inv, {
+      totalStock: Math.max(0, inv.totalStock - quantity),
+      transitStock: inv.transitStock + quantity,
+    });
+
+    await recordMovement(tx, {
+      inv,
+      productId,
+      movementType: "STOCK_DISPATCHED",
+      quantity,
+      previousQuantity: inv.totalStock,
+      newQuantity: after.totalStock,
+      referenceId: block.id,
+      reason: remarks || `Transit Created: ${quantity} units on ${vehicleNumber}`,
+      performedBy,
+    });
+
+    await recordBlockAudit(tx, {
+      action: "CREATE_TRANSIT",
+      blockId: block.id,
+      userId: performedById,
+      userName: performedBy,
+      role,
+      toStatus: "SHIPPED",
+      meta: { vehicleNumber, quantity },
+    });
+
+    return block;
+  }, STOCK_TX_OPTIONS);
+
+  await invalidateStockCaches();
+  return result;
+}
+
+/** Super Admin Direct Creation of Delivered Shipment Record */
+export async function createLogisticsShipmentRecord({
+  productId,
+  quantity,
+  warehouseId,
+  dealerId,
+  showroomId,
+  vehicleNumber,
+  driverName,
+  driverPhone,
+  transporter,
+  deliveredAt,
+  remarks,
+  performedBy,
+  performedById,
+  role,
+}: {
+  productId: string;
+  quantity: number;
+  warehouseId?: string;
+  dealerId?: string;
+  showroomId?: string;
+  vehicleNumber?: string;
+  driverName?: string;
+  driverPhone?: string;
+  transporter?: string;
+  deliveredAt?: Date;
+  remarks?: string;
+  performedBy: string;
+  performedById?: string | null;
+  role: string;
+}) {
+  assertPermission(role === "SUPER_ADMIN" || role === "MANAGER", "Only Super Admin or Manager can record delivered shipments.");
+  if (!productId) throw new AppError("Select a product.", 400, "VALIDATION");
+  if (!quantity || quantity <= 0) throw new AppError("Quantity must be greater than zero.", 400, "VALIDATION");
+
+  const result = await db.$transaction(async (tx) => {
+    const inv = await lockInventoryByProduct(tx, productId);
+    if (!inv) throw new AppError("Inventory record not found.", 404, "NOT_FOUND");
+
+    const delDate = deliveredAt || new Date();
+
+    const block = await tx.stockBlock.create({
+      data: {
+        block_number: await nextBlockNumber(tx),
+        block_type: "CONFIRMED",
+        productId,
+        inventoryId: inv.id,
+        warehouseId: warehouseId || inv.warehouseId,
+        dealerId: dealerId || null,
+        showroomId: showroomId || null,
+        quantity,
+        shippedQuantity: quantity,
+        deliveredQuantity: quantity,
+        requestedBy: performedBy,
+        createdById: performedById || null,
+        createdRole: role,
+        status: "DELIVERED",
+        approvalRoute: "DIRECT",
+        remarks: remarks || "Direct Delivered Shipment Record",
+        vehicleNumber: vehicleNumber?.trim() || null,
+        driverName: driverName?.trim() || null,
+        driverPhone: driverPhone?.trim() || null,
+        transporter: transporter?.trim() || null,
+        shippedAt: delDate,
+        deliveredAt: delDate,
+        shippedBy: performedBy,
+      },
+    });
+
+    const after = await writeInventory(tx, inv, {
+      totalStock: Math.max(0, inv.totalStock - quantity),
+      deliveredStock: inv.deliveredStock + quantity,
+    });
+
+    await recordMovement(tx, {
+      inv,
+      productId,
+      movementType: "STOCK_DELIVERED",
+      quantity,
+      previousQuantity: inv.deliveredStock,
+      newQuantity: after.deliveredStock,
+      referenceId: block.id,
+      reason: remarks || `Direct Delivered Shipment: ${quantity} units`,
+      performedBy,
+    });
+
+    await recordBlockAudit(tx, {
+      action: "CREATE_SHIPMENT_DELIVERED",
+      blockId: block.id,
+      userId: performedById,
+      userName: performedBy,
+      role,
+      toStatus: "DELIVERED",
+      meta: { vehicleNumber, quantity },
+    });
+
+    return block;
+  }, STOCK_TX_OPTIONS);
+
+  await invalidateStockCaches();
+  return result;
+}
+
+/** Super Admin Update of Transit or Shipment Details */
+export async function updateLogisticsRecord({
+  blockId,
+  vehicleNumber,
+  driverName,
+  driverPhone,
+  transporter,
+  expectedDeliveryAt,
+  status,
+  remarks,
+  performedBy,
+  performedById,
+  role,
+}: {
+  blockId: string;
+  vehicleNumber?: string;
+  driverName?: string;
+  driverPhone?: string;
+  transporter?: string;
+  expectedDeliveryAt?: Date;
+  status?: string;
+  remarks?: string;
+  performedBy: string;
+  performedById?: string | null;
+  role: string;
+}) {
+  assertPermission(role === "SUPER_ADMIN" || role === "MANAGER", "Only Super Admin or Manager can edit logistics records.");
+
+  const result = await db.$transaction(async (tx) => {
+    const { block } = await loadBlockForMutation(tx, blockId);
+
+    const updateData: any = {};
+    if (vehicleNumber !== undefined) updateData.vehicleNumber = vehicleNumber.trim() || null;
+    if (driverName !== undefined) updateData.driverName = driverName.trim() || null;
+    if (driverPhone !== undefined) updateData.driverPhone = driverPhone.trim() || null;
+    if (transporter !== undefined) updateData.transporter = transporter.trim() || null;
+    if (expectedDeliveryAt !== undefined) updateData.expectedDeliveryAt = expectedDeliveryAt;
+    if (remarks !== undefined) updateData.remarks = remarks.trim() || null;
+    if (status && status !== block.status) {
+      if (isBlockStatus(status)) updateData.status = status;
+    }
+
+    const updated = await tx.stockBlock.update({
+      where: { id: blockId },
+      data: updateData,
+    });
+
+    await recordBlockAudit(tx, {
+      action: "UPDATE_LOGISTICS",
+      blockId,
+      userId: performedById,
+      userName: performedBy,
+      role,
+      fromStatus: block.status,
+      toStatus: updated.status,
+      meta: updateData,
+    });
+
+    return updated;
+  }, STOCK_TX_OPTIONS);
+
+  await invalidateStockCaches();
+  return result;
+}
+
+/** Super Admin Deletion / Cancellation of Logistics Record */
+export async function deleteLogisticsRecord({
+  blockId,
+  reason,
+  performedBy,
+  performedById,
+  role,
+}: {
+  blockId: string;
+  reason?: string;
+  performedBy: string;
+  performedById?: string | null;
+  role: string;
+}) {
+  assertPermission(role === "SUPER_ADMIN", "Only Super Admin can delete logistics records.");
+
+  const result = await db.$transaction(async (tx) => {
+    const { block, inv } = await loadBlockForMutation(tx, blockId);
+
+    // Roll back inventory metrics if applicable
+    if (block.status === "SHIPPED" || block.status === "PARTIALLY_SHIPPED") {
+      const shipQty = block.shippedQuantity || block.quantity;
+      await writeInventory(tx, inv, {
+        totalStock: inv.totalStock + shipQty,
+        transitStock: Math.max(0, inv.transitStock - shipQty),
+      });
+
+      await recordMovement(tx, {
+        inv,
+        productId: block.productId,
+        movementType: "ADJUSTMENT",
+        quantity: shipQty,
+        previousQuantity: inv.totalStock,
+        newQuantity: inv.totalStock + shipQty,
+        referenceId: block.id,
+        reason: `Logistics Record Deleted: Restored ${shipQty} units`,
+        performedBy,
+      });
+    }
+
+    const updated = await tx.stockBlock.update({
+      where: { id: blockId },
+      data: {
+        status: "CANCELLED",
+        cancelledAt: new Date(),
+        remarks: `[Deleted by Super Admin: ${reason || "No reason specified"}] ${block.remarks || ""}`.trim(),
+      },
+    });
+
+    await recordBlockAudit(tx, {
+      action: "DELETE_LOGISTICS_RECORD",
+      blockId,
+      userId: performedById,
+      userName: performedBy,
+      role,
+      fromStatus: block.status,
+      toStatus: "CANCELLED",
+      reason: reason || "Super Admin deleted record",
+    });
+
+    return updated;
+  }, STOCK_TX_OPTIONS);
+
+  await invalidateStockCaches();
+  return result;
+}
+

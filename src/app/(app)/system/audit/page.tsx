@@ -13,9 +13,17 @@ export default async function AuditLogPage() {
   const auditMovements = await db.inventoryMovement.findMany({
     take: 50,
     orderBy: { createdAt: "desc" },
-    include: {
+    select: {
+      id: true,
+      createdAt: true,
+      movementType: true,
+      quantity: true,
+      previousQuantity: true,
+      newQuantity: true,
+      reason: true,
+      performedBy: true,
       inventory: {
-        include: {
+        select: {
           product: { select: { name: true, sku: true, productCode: true } },
         },
       },

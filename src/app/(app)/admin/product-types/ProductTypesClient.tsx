@@ -14,7 +14,7 @@ import {
   Sparkles,
   Search,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 interface AttributeDef {
   id: string;
@@ -68,6 +68,11 @@ export default function ProductTypesClient({ initialProductTypes }: Props) {
   const [attrOptions, setAttrOptions] = useState("");
   const [attrIsRequired, setAttrIsRequired] = useState(false);
 
+  // Guards against double-submit on rapid/repeated clicks.
+  const [saving, setSaving] = useState(false);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [deletingAttrId, setDeletingAttrId] = useState<string | null>(null);
+
   const filteredTypes = types.filter(
     (t) =>
       t.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -98,7 +103,9 @@ export default function ProductTypesClient({ initialProductTypes }: Props) {
       toast.error("Product Type name is required");
       return;
     }
+    if (saving) return;
 
+    setSaving(true);
     try {
       if (editingType) {
         const res = await fetch(`/api/v1/product-types/${editingType.id}`, {
@@ -142,10 +149,14 @@ export default function ProductTypesClient({ initialProductTypes }: Props) {
       setIsTypeModalOpen(false);
     } catch (err: any) {
       toast.error(err.message || "Failed to save Product Type");
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleToggleStatus = async (pt: ProductTypeItem) => {
+    if (togglingId) return;
+    setTogglingId(pt.id);
     try {
       const res = await fetch(`/api/v1/product-types/${pt.id}`, {
         method: "PUT",
@@ -161,6 +172,8 @@ export default function ProductTypesClient({ initialProductTypes }: Props) {
       toast.success(`${pt.name} ${!pt.isActive ? "activated" : "deactivated"}`);
     } catch (err: any) {
       toast.error(err.message || "Action failed");
+    } finally {
+      setTogglingId(null);
     }
   };
 
@@ -170,12 +183,14 @@ export default function ProductTypesClient({ initialProductTypes }: Props) {
       toast.error("Attribute name is required");
       return;
     }
+    if (saving) return;
 
     const key = attrKey.trim() || attrName.toLowerCase().replace(/[^a-z0-9]/g, "_");
     const parsedOptions = attrOptions.trim()
       ? attrOptions.split(",").map((s) => s.trim()).filter(Boolean)
       : undefined;
 
+    setSaving(true);
     try {
       const res = await fetch(`/api/v1/product-types/${selectedType.id}/attributes`, {
         method: "POST",
@@ -193,7 +208,6 @@ export default function ProductTypesClient({ initialProductTypes }: Props) {
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || "Failed to save attribute");
 
-      // Update state
       const updatedAttr = json.data;
       setSelectedType((prev) => {
         if (!prev) return null;
@@ -223,11 +237,14 @@ export default function ProductTypesClient({ initialProductTypes }: Props) {
       setAttrOptions("");
     } catch (err: any) {
       toast.error(err.message || "Failed to save attribute definition");
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleDeleteAttribute = async (attrId: string) => {
-    if (!selectedType) return;
+    if (!selectedType || deletingAttrId) return;
+    setDeletingAttrId(attrId);
     try {
       const res = await fetch(
         `/api/v1/product-types/${selectedType.id}/attributes?attributeId=${attrId}`,
@@ -242,25 +259,27 @@ export default function ProductTypesClient({ initialProductTypes }: Props) {
       toast.success("Attribute removed");
     } catch (err: any) {
       toast.error(err.message || "Failed to delete attribute");
+    } finally {
+      setDeletingAttrId(null);
     }
   };
 
   return (
     <div className="space-y-6">
       {/* Page Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-slate-900 border border-slate-800 p-6 rounded-2xl">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-white border border-[#EAEAEA] p-6 rounded-2xl shadow-xs">
         <div>
-          <div className="flex items-center gap-2 text-indigo-400 font-semibold text-xs uppercase tracking-wider mb-1">
+          <div className="flex items-center gap-2 text-[#F2C202] font-black text-xs uppercase tracking-wider mb-1">
             <Layers className="w-4 h-4" /> Multi-Category ERP Configuration
           </div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">Product Types & Architecture</h1>
-          <p className="text-slate-400 text-sm mt-1">
+          <h1 className="text-xl font-black text-[#111111] tracking-tight">Product Types & Architecture</h1>
+          <p className="text-[#6B6B6B] text-xs mt-1">
             Manage product categories (Tiles, Sanitary, Paints, Adhesives, Bath Fittings) & dynamic EAV attributes.
           </p>
         </div>
         <button
           onClick={openCreateTypeModal}
-          className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm rounded-xl transition shadow-lg shadow-indigo-600/25"
+          className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-[#F2C202] hover:bg-[#D8AD02] text-white font-black text-xs rounded-xl transition shadow-xs"
         >
           <Plus className="w-4 h-4" /> Add Product Type
         </button>
@@ -271,19 +290,19 @@ export default function ProductTypesClient({ initialProductTypes }: Props) {
         {/* Left Column: Product Types List */}
         <div className="lg:col-span-5 space-y-4">
           <div className="relative">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+            <Search className="w-4 h-4 text-[#6B6B6B] absolute left-3.5 top-3" />
             <input
               type="text"
               placeholder="Search product types..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-800 text-slate-200 text-sm rounded-xl pl-10 pr-4 py-2.5 focus:outline-none focus:border-indigo-500 transition"
+              className="w-full bg-white border border-[#EAEAEA] text-[#111111] text-xs rounded-xl pl-10 pr-4 py-2.5 focus:outline-hidden focus:border-[#F2C202] transition"
             />
           </div>
 
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl divide-y divide-slate-800/60 overflow-hidden">
+          <div className="bg-white border border-[#EAEAEA] rounded-2xl divide-y divide-[#EAEAEA] overflow-hidden shadow-xs">
             {filteredTypes.length === 0 ? (
-              <div className="p-8 text-center text-slate-500 text-sm">No product types found.</div>
+              <div className="p-8 text-center text-[#6B6B6B] text-xs">No product types found.</div>
             ) : (
               filteredTypes.map((pt) => {
                 const isSelected = selectedType?.id === pt.id;
@@ -293,40 +312,40 @@ export default function ProductTypesClient({ initialProductTypes }: Props) {
                     onClick={() => setSelectedType(pt)}
                     className={`p-4 cursor-pointer transition flex items-center justify-between group ${
                       isSelected
-                        ? "bg-indigo-600/10 border-l-4 border-indigo-500"
-                        : "hover:bg-slate-800/50"
+                        ? "bg-[#F2C202]/10 border-l-4 border-[#F2C202]"
+                        : "hover:bg-[#F7F7F5]"
                     }`}
                   >
                     <div className="flex items-center gap-3">
                       <div className={`p-2.5 rounded-xl border ${
                         isSelected
-                          ? "bg-indigo-500/20 border-indigo-500/40 text-indigo-400"
-                          : "bg-slate-800 border-slate-700 text-slate-400"
+                          ? "bg-[#F2C202]/20 border-[#F2C202]/40 text-[#8A7300]"
+                          : "bg-[#F7F7F5] border-[#EAEAEA] text-[#6B6B6B]"
                       }`}>
                         <Boxes className="w-5 h-5" />
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <h3 className={`font-semibold text-sm ${isSelected ? "text-white" : "text-slate-200"}`}>
+                          <h3 className={`font-bold text-xs ${isSelected ? "text-[#111111]" : "text-[#111111]"}`}>
                             {pt.name}
                           </h3>
                           {!pt.isActive && (
-                            <span className="px-2 py-0.5 text-[10px] font-semibold bg-red-500/10 text-red-400 border border-red-500/20 rounded-full">
+                            <span className="px-2 py-0.5 text-[9.5px] font-black uppercase tracking-wider bg-rose-50 text-rose-600 border border-rose-200 rounded-full">
                               Disabled
                             </span>
                           )}
                         </div>
-                        <p className="text-xs text-slate-400 line-clamp-1 mt-0.5">
+                        <p className="text-[11px] text-[#6B6B6B] line-clamp-1 mt-0.5">
                           {pt.description || "No description specified"}
                         </p>
                       </div>
                     </div>
 
                     <div className="flex items-center gap-3">
-                      <span className="text-xs font-semibold px-2.5 py-1 bg-slate-800 text-slate-300 rounded-lg">
+                      <span className="text-[10px] font-bold px-2.5 py-1 bg-[#F7F7F5] text-[#111111] border border-[#EAEAEA] rounded-lg">
                         {pt._count.products} Products
                       </span>
-                      <ChevronRight className={`w-4 h-4 transition ${isSelected ? "text-indigo-400 translate-x-0.5" : "text-slate-600"}`} />
+                      <ChevronRight className={`w-4 h-4 transition ${isSelected ? "text-[#F2C202] translate-x-0.5" : "text-[#6B6B6B]"}`} />
                     </div>
                   </div>
                 );
@@ -338,34 +357,35 @@ export default function ProductTypesClient({ initialProductTypes }: Props) {
         {/* Right Column: Selected Product Type Details & Dynamic Attributes */}
         <div className="lg:col-span-7 space-y-6">
           {selectedType ? (
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-6">
+            <div className="bg-white border border-[#EAEAEA] rounded-2xl p-6 space-y-6 shadow-xs">
               {/* Header Info */}
-              <div className="flex items-start justify-between pb-6 border-b border-slate-800">
+              <div className="flex items-start justify-between pb-6 border-b border-[#EAEAEA]">
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
-                    <span className="px-2.5 py-0.5 text-xs font-semibold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 rounded-md">
+                    <span className="px-2.5 py-0.5 text-[10px] font-mono font-bold bg-[#F2C202]/10 text-[#8A7300] border border-[#F2C202]/20 rounded-md">
                       Slug: {selectedType.slug}
                     </span>
-                    <span className="text-xs text-slate-500">Order: #{selectedType.sortOrder}</span>
+                    <span className="text-[10px] text-[#6B6B6B] font-mono">Order: #{selectedType.sortOrder}</span>
                   </div>
-                  <h2 className="text-xl font-bold text-white">{selectedType.name}</h2>
-                  <p className="text-slate-400 text-sm">{selectedType.description || "No description"}</p>
+                  <h2 className="text-lg font-black text-[#111111]">{selectedType.name}</h2>
+                  <p className="text-[#6B6B6B] text-xs">{selectedType.description || "No description"}</p>
                 </div>
 
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => openEditTypeModal(selectedType)}
-                    className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition"
+                    className="p-2 bg-[#F7F7F5] border border-[#EAEAEA] hover:bg-[#EAEAEA] text-[#111111] rounded-xl transition"
                     title="Edit Product Type"
                   >
                     <Edit2 className="w-4 h-4" />
                   </button>
                   <button
                     onClick={() => handleToggleStatus(selectedType)}
-                    className={`p-2 rounded-xl transition ${
+                    disabled={togglingId === selectedType.id}
+                    className={`p-2 rounded-xl transition border disabled:opacity-50 disabled:cursor-not-allowed ${
                       selectedType.isActive
-                        ? "bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20"
-                        : "bg-red-500/10 text-red-400 hover:bg-red-500/20"
+                        ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
+                        : "bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100"
                     }`}
                     title={selectedType.isActive ? "Deactivate" : "Activate"}
                   >
@@ -377,16 +397,16 @@ export default function ProductTypesClient({ initialProductTypes }: Props) {
               {/* Attributes Section Header */}
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-base font-bold text-white flex items-center gap-2">
-                    <Settings2 className="w-4 h-4 text-indigo-400" /> Dynamic Attribute Definitions
+                  <h3 className="text-sm font-black text-[#111111] flex items-center gap-2">
+                    <Settings2 className="w-4 h-4 text-[#F2C202]" /> Dynamic Attribute Definitions
                   </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">
+                  <p className="text-[11px] text-[#6B6B6B] mt-0.5">
                     Fields automatically rendered on Product creation forms for {selectedType.name}.
                   </p>
                 </div>
                 <button
                   onClick={() => setIsAttrModalOpen(true)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-indigo-400 font-medium text-xs rounded-lg transition"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#F7F7F5] border border-[#EAEAEA] hover:bg-[#EAEAEA] text-[#111111] font-bold text-xs rounded-lg transition"
                 >
                   <Plus className="w-3.5 h-3.5" /> Add Attribute
                 </button>
@@ -395,10 +415,10 @@ export default function ProductTypesClient({ initialProductTypes }: Props) {
               {/* Attribute Definitions List */}
               <div className="space-y-3">
                 {selectedType.attributeDefinitions.length === 0 ? (
-                  <div className="p-6 bg-slate-950/50 border border-dashed border-slate-800 rounded-xl text-center">
-                    <Sparkles className="w-6 h-6 text-slate-600 mx-auto mb-2" />
-                    <p className="text-sm font-medium text-slate-400">No Custom Attributes Configured</p>
-                    <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                  <div className="p-6 bg-[#F7F7F5] border border-dashed border-[#EAEAEA] rounded-xl text-center">
+                    <Sparkles className="w-6 h-6 text-[#6B6B6B] mx-auto mb-2" />
+                    <p className="text-xs font-bold text-[#111111]">No Custom Attributes Configured</p>
+                    <p className="text-[10px] text-[#6B6B6B] mt-1 max-w-sm mx-auto">
                       For standard tiles, core fields (Size, Finish, Brand) are used. Click "Add Attribute" to add custom fields (e.g. Colour, Coverage, Setting Time).
                     </p>
                   </div>
@@ -406,23 +426,23 @@ export default function ProductTypesClient({ initialProductTypes }: Props) {
                   selectedType.attributeDefinitions.map((attr) => (
                     <div
                       key={attr.id}
-                      className="flex items-center justify-between p-3.5 bg-slate-950/60 border border-slate-800 rounded-xl"
+                      className="flex items-center justify-between p-3.5 bg-[#F7F7F5] border border-[#EAEAEA] rounded-xl"
                     >
                       <div className="space-y-0.5">
                         <div className="flex items-center gap-2">
-                          <span className="text-sm font-semibold text-white">{attr.name}</span>
-                          <code className="text-[11px] text-indigo-400 bg-indigo-950/60 px-1.5 py-0.5 rounded font-mono">
+                          <span className="text-xs font-bold text-[#111111]">{attr.name}</span>
+                          <code className="text-[10px] text-[#8A7300] bg-[#F2C202]/10 px-1.5 py-0.5 rounded font-mono">
                             {attr.key}
                           </code>
                           {attr.isRequired && (
-                            <span className="px-1.5 py-0.2 text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded">
+                            <span className="px-1.5 py-0.2 text-[9.5px] font-black uppercase tracking-wider bg-amber-50 text-amber-700 border border-amber-200 rounded">
                               Required
                             </span>
                           )}
                         </div>
-                        <div className="flex items-center gap-3 text-xs text-slate-400">
-                          <span>Type: <strong className="text-slate-300">{attr.dataType}</strong></span>
-                          {attr.unit && <span>Unit: <strong className="text-slate-300">{attr.unit}</strong></span>}
+                        <div className="flex items-center gap-3 text-[11px] text-[#6B6B6B]">
+                          <span>Type: <strong className="text-[#111111]">{attr.dataType}</strong></span>
+                          {attr.unit && <span>Unit: <strong className="text-[#111111]">{attr.unit}</strong></span>}
                           {attr.options && (
                             <span className="truncate max-w-[200px]">Options: {JSON.stringify(attr.options)}</span>
                           )}
@@ -431,7 +451,8 @@ export default function ProductTypesClient({ initialProductTypes }: Props) {
 
                       <button
                         onClick={() => handleDeleteAttribute(attr.id)}
-                        className="p-1.5 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition"
+                        disabled={deletingAttrId === attr.id}
+                        className="p-1.5 text-[#6B6B6B] hover:text-rose-600 hover:bg-rose-50 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -441,7 +462,7 @@ export default function ProductTypesClient({ initialProductTypes }: Props) {
               </div>
             </div>
           ) : (
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center text-slate-500">
+            <div className="bg-white border border-[#EAEAEA] rounded-2xl p-12 text-center text-[#6B6B6B] text-xs">
               Select a Product Type from the list to manage options.
             </div>
           )}
@@ -450,70 +471,71 @@ export default function ProductTypesClient({ initialProductTypes }: Props) {
 
       {/* Modal: Create/Edit Product Type */}
       {isTypeModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-2xl p-6 space-y-4 shadow-2xl">
-            <h3 className="text-lg font-bold text-white">
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-[#EAEAEA] w-full max-w-md rounded-2xl p-6 space-y-4 shadow-xl max-h-[90vh] overflow-y-auto">
+            <h3 className="text-sm font-black uppercase text-[#111111]">
               {editingType ? "Edit Product Type" : "Create Product Type"}
             </h3>
             <form onSubmit={handleSaveType} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Name</label>
+                <label className="block text-xs font-bold text-[#111111] mb-1">Name</label>
                 <input
                   type="text"
                   required
                   placeholder="e.g. Paints, Sanitary, Faucets"
                   value={typeName}
                   onChange={(e) => setTypeName(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                  className="w-full bg-white border border-[#EAEAEA] rounded-xl px-3.5 py-2 text-xs text-[#111111] focus:outline-hidden focus:border-[#F2C202]"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Description</label>
+                <label className="block text-xs font-bold text-[#111111] mb-1">Description</label>
                 <textarea
                   rows={3}
                   placeholder="Short summary of products under this category..."
                   value={typeDescription}
                   onChange={(e) => setTypeDescription(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                  className="w-full bg-white border border-[#EAEAEA] rounded-xl px-3.5 py-2 text-xs text-[#111111] focus:outline-hidden focus:border-[#F2C202]"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Icon Identifier</label>
+                  <label className="block text-xs font-bold text-[#111111] mb-1">Icon Identifier</label>
                   <input
                     type="text"
                     placeholder="Boxes, Paintbrush, Bath"
                     value={typeIcon}
                     onChange={(e) => setTypeIcon(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-white border border-[#EAEAEA] rounded-xl px-3.5 py-2 text-xs text-[#111111] focus:outline-hidden focus:border-[#F2C202]"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Sort Order</label>
+                  <label className="block text-xs font-bold text-[#111111] mb-1">Sort Order</label>
                   <input
                     type="number"
                     value={typeSortOrder}
                     onChange={(e) => setTypeSortOrder(Number(e.target.value))}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-white border border-[#EAEAEA] rounded-xl px-3.5 py-2 text-xs text-[#111111] focus:outline-hidden focus:border-[#F2C202]"
                   />
                 </div>
               </div>
 
-              <div className="flex justify-end gap-3 pt-2">
+              <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
                   onClick={() => setIsTypeModalOpen(false)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-400 hover:text-white"
+                  className="px-4 py-2 text-xs font-bold text-[#6B6B6B] hover:text-[#111111]"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs rounded-xl shadow-lg"
+                  disabled={saving}
+                  className="px-4 py-2 bg-[#F2C202] hover:bg-[#D8AD02] text-white font-black text-xs rounded-xl shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Save Product Type
+                  {saving ? "Saving..." : "Save Product Type"}
                 </button>
               </div>
             </form>
@@ -523,12 +545,12 @@ export default function ProductTypesClient({ initialProductTypes }: Props) {
 
       {/* Modal: Add Attribute Definition */}
       {isAttrModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-2xl p-6 space-y-4 shadow-2xl">
-            <h3 className="text-lg font-bold text-white">Add Attribute Definition</h3>
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-[#EAEAEA] w-full max-w-md rounded-2xl p-6 space-y-4 shadow-xl max-h-[90vh] overflow-y-auto">
+            <h3 className="text-sm font-black uppercase text-[#111111]">Add Attribute Definition</h3>
             <form onSubmit={handleSaveAttribute} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Attribute Name</label>
+                <label className="block text-xs font-bold text-[#111111] mb-1">Attribute Name</label>
                 <input
                   type="text"
                   required
@@ -538,28 +560,28 @@ export default function ProductTypesClient({ initialProductTypes }: Props) {
                     setAttrName(e.target.value);
                     setAttrKey(e.target.value.toLowerCase().replace(/[^a-z0-9]/g, "_"));
                   }}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                  className="w-full bg-white border border-[#EAEAEA] rounded-xl px-3.5 py-2 text-xs text-[#111111] focus:outline-hidden focus:border-[#F2C202]"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Key Identifier</label>
+                  <label className="block text-xs font-bold text-[#111111] mb-1">Key Identifier</label>
                   <input
                     type="text"
                     required
                     placeholder="colour"
                     value={attrKey}
                     onChange={(e) => setAttrKey(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:outline-none focus:border-indigo-500 font-mono"
+                    className="w-full bg-white border border-[#EAEAEA] rounded-xl px-3.5 py-2 text-xs text-[#111111] focus:outline-hidden focus:border-[#F2C202] font-mono"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Data Type</label>
+                  <label className="block text-xs font-bold text-[#111111] mb-1">Data Type</label>
                   <select
                     value={attrDataType}
                     onChange={(e) => setAttrDataType(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-white border border-[#EAEAEA] rounded-xl px-3.5 py-2 text-xs text-[#111111] focus:outline-hidden focus:border-[#F2C202]"
                   >
                     <option value="text">Text</option>
                     <option value="number">Number</option>
@@ -571,25 +593,25 @@ export default function ProductTypesClient({ initialProductTypes }: Props) {
 
               {attrDataType === "select" && (
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Select Options (comma-separated)</label>
+                  <label className="block text-xs font-bold text-[#111111] mb-1">Select Options (comma-separated)</label>
                   <input
                     type="text"
                     placeholder="Matt, Glossy, Silk, Satin"
                     value={attrOptions}
                     onChange={(e) => setAttrOptions(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-white border border-[#EAEAEA] rounded-xl px-3.5 py-2 text-xs text-[#111111] focus:outline-hidden focus:border-[#F2C202]"
                   />
                 </div>
               )}
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Measurement Unit (Optional)</label>
+                <label className="block text-xs font-bold text-[#111111] mb-1">Measurement Unit (Optional)</label>
                 <input
                   type="text"
                   placeholder="L, Kg, sq.ft/L, mm"
                   value={attrUnit}
                   onChange={(e) => setAttrUnit(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                  className="w-full bg-white border border-[#EAEAEA] rounded-xl px-3.5 py-2 text-xs text-[#111111] focus:outline-hidden focus:border-[#F2C202]"
                 />
               </div>
 
@@ -599,26 +621,27 @@ export default function ProductTypesClient({ initialProductTypes }: Props) {
                   id="attrRequired"
                   checked={attrIsRequired}
                   onChange={(e) => setAttrIsRequired(e.target.checked)}
-                  className="rounded border-slate-800 bg-slate-950 text-indigo-600 focus:ring-indigo-500"
+                  className="accent-[#F2C202]"
                 />
-                <label htmlFor="attrRequired" className="text-xs text-slate-300">
+                <label htmlFor="attrRequired" className="text-xs font-medium text-[#111111] cursor-pointer">
                   Required field during Product Creation
                 </label>
               </div>
 
-              <div className="flex justify-end gap-3 pt-2">
+              <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
                   onClick={() => setIsAttrModalOpen(false)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-400 hover:text-white"
+                  className="px-4 py-2 text-xs font-bold text-[#6B6B6B] hover:text-[#111111]"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs rounded-xl shadow-lg"
+                  disabled={saving}
+                  className="px-4 py-2 bg-[#F2C202] hover:bg-[#D8AD02] text-white font-black text-xs rounded-xl shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Save Attribute
+                  {saving ? "Saving..." : "Save Attribute"}
                 </button>
               </div>
             </form>

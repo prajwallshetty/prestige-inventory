@@ -15,24 +15,29 @@ export default async function NewBookingPage() {
     redirect("/viewer/dashboard");
   }
 
-  // Fetch available products, brands, and categories
-  const products = await db.product.findMany({
-    where: { published: true, deletedAt: null },
-    include: {
-      brand: { select: { name: true } },
-      category: { select: { name: true } },
-      inventory: {
-        include: {
-          warehouse: { select: { id: true, name: true } },
+  // Fetch available products, brands, categories, warehouses and dealers
+  const [products, warehouses, dealers] = await Promise.all([
+    db.product.findMany({
+      where: { published: true, deletedAt: null },
+      include: {
+        brand: { select: { name: true } },
+        category: { select: { name: true } },
+        inventory: {
+          include: {
+            warehouse: { select: { id: true, name: true } },
+          },
         },
       },
-    },
-    orderBy: { name: "asc" },
-  });
-
-  const warehouses = await db.warehouse.findMany({
-    where: { status: "ACTIVE" },
-  });
+      orderBy: { name: "asc" },
+    }),
+    db.warehouse.findMany({ where: { status: "ACTIVE" } }),
+    // A booking is always raised against a dealer/customer, unlike a Block.
+    db.dealer.findMany({
+      where: { status: "ACTIVE" },
+      select: { id: true, dealerId: true, name: true },
+      orderBy: { name: "asc" },
+    }),
+  ]);
 
   // Safe formatting for client
   const serializedProducts = products.map((p) => {
@@ -70,10 +75,11 @@ export default async function NewBookingPage() {
           </p>
         </div>
 
-        <NewBookingClient 
-          products={serializedProducts as any} 
-          warehouses={warehouses} 
-          session={session} 
+        <NewBookingClient
+          products={serializedProducts as any}
+          warehouses={warehouses}
+          dealers={dealers}
+          session={session}
         />
       </div>
     </>

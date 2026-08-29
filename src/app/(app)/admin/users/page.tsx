@@ -14,17 +14,15 @@ export default async function UsersPage() {
     redirect("/dashboard");
   }
 
-  // Fetch all users, dealers, warehouses, and showrooms
-  const [users, dealers, warehouses, showrooms] = await Promise.all([
+  // Fetch all users, warehouses, and showrooms
+  const [users, warehouses, showrooms] = await Promise.all([
     db.user.findMany({
       include: {
-        dealer: { select: { name: true } },
         warehouse: { select: { name: true, code: true } },
         showroom: { select: { name: true } },
       },
       orderBy: { createdAt: "desc" },
     }),
-    db.dealer.findMany({ select: { id: true, name: true } }),
     db.warehouse.findMany({ select: { id: true, name: true, code: true } }),
     db.showroom.findMany({ select: { id: true, name: true } }),
   ]);
@@ -35,10 +33,8 @@ export default async function UsersPage() {
     email: u.email,
     role: u.role,
     status: u.status,
-    dealer_id: u.dealer_id || undefined,
     warehouse_id: u.warehouse_id || undefined,
     showroomId: u.showroomId || undefined,
-    dealerName: u.dealer?.name,
     warehouseName: u.warehouse ? `${u.warehouse.name} (${u.warehouse.code})` : undefined,
     showroomName: u.showroom?.name,
     lastLogin: u.lastLogin ? u.lastLogin.toISOString() : null,
@@ -50,14 +46,13 @@ export default async function UsersPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-[#111111]">User Management Control</h1>
           <p className="text-xs text-[#6B6B6B]">
-            Create new team members, reset passwords, deactivate accounts, and map dealer/warehouse roles.
+            Create new team members, reset passwords, deactivate accounts, and map warehouse/showroom scope.
           </p>
         </div>
 
-        <UsersClient 
-          users={serializedUsers} 
-          dealers={dealers} 
-          warehouses={warehouses} 
+        <UsersClient
+          users={serializedUsers}
+          warehouses={warehouses}
           showrooms={showrooms}
         />
       </div>

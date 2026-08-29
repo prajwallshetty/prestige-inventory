@@ -24,7 +24,7 @@ import {
   RotateCcw,
   ArrowDown,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { useChatStream } from "@/hooks/useChatStream";
 
 function formatMessageTime(value: string | Date): string {
@@ -99,6 +99,12 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
     new Map()
   );
 
+  // Refs for request cancellation and double-click lock
+  const searchAbortControllerRef = useRef<AbortController | null>(null);
+  const messagesAbortControllerRef = useRef<AbortController | null>(null);
+  const sendInFlightRef = useRef(false);
+  const modalActionInFlightRef = useRef(false);
+
   // Sync activeIdRef
   useEffect(() => {
     activeIdRef.current = activeId;
@@ -116,18 +122,28 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
     return () => clearTimeout(handler);
   }, [searchQuery]);
 
-  // Fetch Conversations
+  // Fetch Conversations with AbortController
   const fetchConversations = useCallback(async () => {
+    if (searchAbortControllerRef.current) {
+      searchAbortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    searchAbortControllerRef.current = controller;
+
     try {
-      const res = await fetch(`/api/v1/chat/conversations?search=${encodeURIComponent(debouncedSearchQuery)}`);
+      const res = await fetch(`/api/v1/chat/conversations?search=${encodeURIComponent(debouncedSearchQuery)}`, {
+        signal: controller.signal,
+      });
       if (res.ok) {
         const json = await res.json();
         if (json.success) {
           setConversations(json.items || []);
         }
       }
-    } catch (err) {
-      console.error("Failed fetching conversations", err);
+    } catch (err: any) {
+      if (err.name !== "AbortError") {
+        console.error("Failed fetching conversations", err);
+      }
     }
   }, [debouncedSearchQuery]);
 
@@ -135,10 +151,14 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
     fetchConversations();
   }, [fetchConversations]);
 
-  // Fetch messages for a conversation — cache-first, then background revalidate.
-  // Switching back to an already-open conversation shows its cached state
-  // immediately instead of blanking behind a spinner while the network catches up.
+  // Fetch messages for a conversation with AbortController
   const fetchMessages = useCallback(async (convId: string) => {
+    if (messagesAbortControllerRef.current) {
+      messagesAbortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    messagesAbortControllerRef.current = controller;
+
     const cached = cacheRef.current.get(convId);
 
     if (cached) {
@@ -155,8 +175,8 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
 
     try {
       const [res, detailsRes] = await Promise.all([
-        fetch(`/api/v1/chat/conversations/${convId}/messages?limit=40`),
-        fetch(`/api/v1/chat/conversations/${convId}`),
+        fetch(`/api/v1/chat/conversations/${convId}/messages?limit=40`, { signal: controller.signal }),
+        fetch(`/api/v1/chat/conversations/${convId}`, { signal: controller.signal }),
       ]);
       fetch(`/api/v1/chat/conversations/${convId}/read`, { method: "POST" }).catch(() => {});
 
@@ -180,8 +200,6 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
 
       cacheRef.current.set(convId, { messages: nextMessages, hasMore: nextHasMore, nextBeforeId: nextBefore, conv: nextConv });
 
-      // The user may have switched away again while this was in flight —
-      // only touch visible state if they're still looking at this conversation.
       if (activeIdRef.current === convId) {
         setMessages(nextMessages);
         setHasMore(nextHasMore);
@@ -189,8 +207,10 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
         setActiveConv(nextConv);
         if (!cached) setTimeout(() => scrollToBottom("auto"), 50);
       }
-    } catch (err) {
-      if (!cached) toast.error("Failed loading messages");
+    } catch (err: any) {
+      if (err.name !== "AbortError" && !cached) {
+        toast.error("Failed loading messages", { id: `load-msgs-err-${convId}` });
+      }
     } finally {
       if (activeIdRef.current === convId) setLoadingMessages(false);
     }
@@ -216,7 +236,6 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
           setHasMore(!!json.hasMore);
           setNextBeforeId(json.nextBeforeId || null);
 
-          // Preserve exact scroll position
           requestAnimationFrame(() => {
             if (container) {
               container.scrollTop = container.scrollHeight - oldScrollHeight;
@@ -225,7 +244,7 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
         }
       }
     } catch (err) {
-      toast.error("Failed loading older messages");
+      toast.error("Failed loading older messages", { id: "older-msg-error" });
     } finally {
       setLoadingOlder(false);
     }
@@ -235,12 +254,10 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
     const container = messagesContainerRef.current;
     if (!container) return;
 
-    // Check if scrolled near top to load older messages
     if (container.scrollTop < 50 && hasMore && !loadingOlder) {
       loadOlderMessages();
     }
 
-    // Check if near bottom
     const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
     if (isNearBottom) {
       setShowNewMessageBadge(false);
@@ -252,9 +269,6 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
     setShowNewMessageBadge(false);
   };
 
-  // Fallback path only: used when a NEW_MESSAGE event arrives without its
-  // message payload attached (defensive — the server always includes one
-  // today). Refetches just the last page instead of the whole conversation.
   const fetchSingleNewMessage = async (convId: string, messageId?: string, clientMsgId?: string) => {
     try {
       const res = await fetch(`/api/v1/chat/conversations/${convId}/messages?limit=10`);
@@ -294,9 +308,6 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
     } catch {}
   };
 
-  // Patches the conversation list in place from a realtime message payload —
-  // no network round trip for the common case of "a message arrived for a
-  // conversation already in the loaded list".
   const patchConversationFromMessage = useCallback((conversationId: string, message: any, isActive: boolean) => {
     setConversations((prev) => {
       const idx = prev.findIndex((c) => c.id === conversationId);
@@ -322,10 +333,6 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
     });
   }, []);
 
-  // Single shared realtime handler — the underlying EventSource connection is
-  // shared across every mounted chat-aware component (see useChatStream), so
-  // this only ever runs once per event per tab regardless of how many
-  // components (this one, the sidebar's unread badge) are listening.
   const handleStreamMessage = useCallback(
     (data: any) => {
       if (data.action === "NEW_MESSAGE") {
@@ -335,8 +342,13 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
 
         if (message && isActive) {
           setMessages((prev) => {
-            if (prev.some((m) => m.id === message.id || (data.clientMessageId && m.id === data.clientMessageId))) {
-              return prev;
+            const isMatch = (m: any) =>
+              m.id === message.id ||
+              (message.clientMessageId && (m.clientMessageId === message.clientMessageId || m.id === message.clientMessageId)) ||
+              (data.clientMessageId && (m.id === data.clientMessageId || m.clientMessageId === data.clientMessageId));
+
+            if (prev.some(isMatch)) {
+              return prev.map((m) => (isMatch(m) ? { ...message, status: "sent", isOptimistic: false } : m));
             }
             const updated = [...prev, message];
             const cached = cacheRef.current.get(currentActiveId!);
@@ -365,8 +377,6 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
         if (inList && message) {
           patchConversationFromMessage(data.conversationId, message, isActive);
         } else {
-          // Unknown conversation (new, or list not loaded yet) — this is the
-          // only case that still needs a full refetch.
           fetchConversations();
         }
       } else if (data.action === "CONVERSATION_UPDATED" || data.action === "UNREAD_UPDATE") {
@@ -378,10 +388,6 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
 
   useChatStream(handleStreamMessage, setSseStatus);
 
-  // After a reconnect, resync rather than trust that every event fired while
-  // disconnected was delivered — refresh the conversation list and, if a
-  // conversation is open, replace its message state with the server's latest
-  // page (not appended, so nothing already-shown can be duplicated).
   const wasDisconnectedRef = useRef(false);
   useEffect(() => {
     if (sseStatus === "disconnected") {
@@ -399,9 +405,6 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
     }
   }, [sseStatus, fetchConversations, fetchMessages]);
 
-  // Long-interval safety net only — SSE (with its own reconnect) is now the
-  // primary channel; this used to be the only mechanism and ran every 20s
-  // regardless of connection health.
   useEffect(() => {
     const interval = setInterval(() => {
       fetchConversations();
@@ -409,7 +412,6 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
     return () => clearInterval(interval);
   }, [fetchConversations]);
 
-  // Change Active Conversation
   useEffect(() => {
     if (activeId) {
       fetchMessages(activeId);
@@ -427,16 +429,17 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
     setMobileShowThread(true);
   };
 
-  // Optimistic Send Flow
+  // Optimistic Send Flow with Double-Click Protection and Deduplication
   const doSend = async (content: string, att: any, replyId?: string, retryClientMsgId?: string) => {
-    if (!activeId) return;
+    if (!activeId || sendInFlightRef.current) return;
+    sendInFlightRef.current = true;
 
     const clientMsgId = retryClientMsgId || `opt_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
     const now = new Date();
 
-    // Create Optimistic Local Message
     const optimisticMessage = {
       id: clientMsgId,
+      clientMessageId: clientMsgId,
       conversationId: activeId,
       senderId: session.userId,
       senderName: session.name || "Me",
@@ -451,12 +454,16 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
       status: "sending",
     };
 
-    // Append optimistic message immediately
-    setMessages((prev) => [...prev, optimisticMessage]);
+    setMessages((prev) => {
+      const exists = prev.some((m) => m.id === clientMsgId || m.clientMessageId === clientMsgId);
+      if (exists) {
+        return prev.map((m) => (m.id === clientMsgId || m.clientMessageId === clientMsgId ? optimisticMessage : m));
+      }
+      return [...prev, optimisticMessage];
+    });
     setSendState("sending");
     setTimeout(() => scrollToBottom("smooth"), 50);
 
-    // Update conversation item list preview locally
     setConversations((prev) =>
       prev.map((c) =>
         c.id === activeId
@@ -495,9 +502,6 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
         throw new Error(json.error || "Failed to send message");
       }
 
-      // Replace optimistic message with confirmed server message. `sendMessage`
-      // returns the same flattened shape getMessages does, so this is a
-      // direct substitution rather than a field-by-field remap.
       const serverMsg = json.data;
       const confirmed = {
         ...serverMsg,
@@ -506,8 +510,9 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
         isOptimistic: false,
         status: "sent",
       };
+
       setMessages((prev) => {
-        const updated = prev.map((m) => (m.id === clientMsgId ? confirmed : m));
+        const updated = prev.map((m) => (m.id === clientMsgId || m.clientMessageId === clientMsgId ? confirmed : m));
         const cached = cacheRef.current.get(activeId);
         cacheRef.current.set(activeId, {
           messages: updated,
@@ -521,19 +526,20 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
       setSendState("idle");
       setLastFailedPayload(null);
     } catch (err: any) {
-      // Mark optimistic message as failed
       setMessages((prev) =>
-        prev.map((m) => (m.id === clientMsgId ? { ...m, status: "failed" } : m))
+        prev.map((m) => (m.id === clientMsgId || m.clientMessageId === clientMsgId ? { ...m, status: "failed" } : m))
       );
       setSendState("failed");
       setLastFailedPayload({ content, attachment: att, replyId, clientMsgId });
-      toast.error(err.message || "Message failed to send");
+      toast.error(err.message || "Message failed to send", { id: `send-err-${clientMsgId}` });
+    } finally {
+      sendInFlightRef.current = false;
     }
   };
 
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!activeId || sendState === "sending") return;
+    if (!activeId || sendState === "sending" || sendInFlightRef.current) return;
     if (!inputText.trim() && !attachment) return;
 
     const content = inputText;
@@ -548,7 +554,7 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
   };
 
   const handleRetry = async () => {
-    if (!lastFailedPayload) return;
+    if (!lastFailedPayload || sendInFlightRef.current) return;
     await doSend(
       lastFailedPayload.content,
       lastFailedPayload.attachment,
@@ -575,9 +581,9 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
       if (!res.ok || !json.success) throw new Error(json.error || "Upload failed");
 
       setAttachment(json.data);
-      toast.success(`Attached ${file.name}`);
+      toast.success(`Attached ${file.name}`, { id: "chat-file-upload-success" });
     } catch (err: any) {
-      toast.error(err.message || "File upload failed");
+      toast.error(err.message || "File upload failed", { id: "chat-file-upload-error" });
     } finally {
       setUploading(false);
     }
@@ -592,9 +598,9 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
       setMessages((prev) =>
         prev.map((m) => (m.id === msgId ? { ...m, content: "This message was deleted.", deletedAt: new Date() } : m))
       );
-      toast.success("Message deleted");
+      toast.success("Message deleted", { id: `del-msg-${msgId}` });
     } catch (err: any) {
-      toast.error(err.message || "Deletion failed");
+      toast.error(err.message || "Deletion failed", { id: `del-msg-err-${msgId}` });
     }
   };
 
@@ -612,6 +618,8 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
   };
 
   const startDirectChat = async (partnerId: string) => {
+    if (modalActionInFlightRef.current) return;
+    modalActionInFlightRef.current = true;
     try {
       const res = await fetch("/api/v1/chat/conversations", {
         method: "POST",
@@ -624,19 +632,22 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
       setIsNewDirectModalOpen(false);
       await fetchConversations();
       handleSelectConversation(json.data.id);
-      toast.success("Conversation opened");
+      toast.success("Conversation opened", { id: "start-direct-chat-success" });
     } catch (err: any) {
-      toast.error(err.message || "Failed to start direct chat");
+      toast.error(err.message || "Failed to start direct chat", { id: "start-direct-chat-error" });
+    } finally {
+      modalActionInFlightRef.current = false;
     }
   };
 
   const createGroup = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (modalActionInFlightRef.current) return;
     if (!groupName.trim()) {
-      toast.error("Group name is required");
+      toast.error("Group name is required", { id: "group-name-req" });
       return;
     }
-
+    modalActionInFlightRef.current = true;
     try {
       const res = await fetch("/api/v1/chat/conversations", {
         method: "POST",
@@ -658,9 +669,11 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
       setSelectedUserIds([]);
       await fetchConversations();
       handleSelectConversation(json.data.id);
-      toast.success(`Group "${groupName}" created`);
+      toast.success(`Group "${groupName}" created`, { id: "group-created-success" });
     } catch (err: any) {
-      toast.error(err.message || "Failed to create group");
+      toast.error(err.message || "Failed to create group", { id: "group-create-error" });
+    } finally {
+      modalActionInFlightRef.current = false;
     }
   };
 
@@ -671,7 +684,7 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
   });
 
   return (
-    <div className="flex h-[calc(100dvh-64px)] md:h-[calc(100vh-120px)] md:min-h-[560px] w-full overflow-hidden rounded-none md:rounded-2xl border-0 md:border md:border-[#EAEAEA] bg-white text-[#111111] md:shadow-sm">
+    <div className="flex h-full md:h-[calc(100vh-120px)] md:min-h-[560px] w-full overflow-hidden rounded-none md:rounded-2xl border-0 md:border md:border-[#EAEAEA] bg-white text-[#111111] md:shadow-sm">
       {/* LEFT PANEL: Conversation List */}
       <div
         className={`flex w-full flex-col border-r border-[#EAEAEA] bg-white md:w-80 md:min-w-[320px] lg:w-96 ${
@@ -952,8 +965,18 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
                           </div>
                         )}
 
-                        {m.status === "sending" && (
-                          <span className="mt-1 block text-[9px] text-[#8A7300] font-semibold">Sending...</span>
+                        {isMine && (
+                          <div className="mt-1 flex items-center justify-end gap-1 text-[9px]">
+                            {m.status === "sending" ? (
+                              <span className="text-[#8A7300] font-semibold animate-pulse">Sending...</span>
+                            ) : m.status === "failed" ? (
+                              <span className="text-rose-600 font-semibold">Failed</span>
+                            ) : (
+                              <span className="text-emerald-700 font-semibold flex items-center gap-0.5">
+                                <Check className="h-3 w-3 text-emerald-600" /> Sent
+                              </span>
+                            )}
+                          </div>
                         )}
 
                         <div

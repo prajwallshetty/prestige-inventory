@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { OFFLINE_MESSAGE } from "@/lib/offline";
 import { Search, Package, X, Loader2, AlertCircle, WifiOff } from "lucide-react";
 import {

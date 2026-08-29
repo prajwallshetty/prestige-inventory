@@ -2,7 +2,7 @@
 
 import React, { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { Plus, Pencil, Ban, CheckCircle2, X, Building2 } from "lucide-react";
 import {
   createDealerAction,

@@ -13,14 +13,16 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
 
   const { id } = await params;
 
-  let product;
-  try {
-    product = await getProductById(id, { includeDeleted: true });
-  } catch {
+  // Independent reads — parallel rather than sequential (each round trip to
+  // the database costs ~2s here, see docs/AUDIT.md J1).
+  const [product, options] = await Promise.all([
+    getProductById(id, { includeDeleted: true }).catch(() => null),
+    getProductFormOptions(),
+  ]);
+
+  if (!product) {
     notFound();
   }
-
-  const options = await getProductFormOptions();
 
   return <ProductForm mode="edit" product={JSON.parse(JSON.stringify(product))} options={options} />;
 }

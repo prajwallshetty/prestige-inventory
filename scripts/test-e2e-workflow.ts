@@ -254,12 +254,13 @@ async function main() {
       afterManager.status === "READY_TO_SHIP", `got ${afterManager.status}`);
     check("E13", "readyToShipAt stamped", !!afterManager.readyToShipAt);
 
-    // — Ship —
+    // — Ship — vehicle number is mandatory (spec §24-26).
     const shipped = await shipBlock({
       blockId: block.id,
       performedBy: actor.manager.name,
       performedById: actor.manager.id,
       role: "MANAGER",
+      vehicleNumber: "KA-19-E2E-0001",
     });
     check("E14", "Ship → SHIPPED", shipped.status === "SHIPPED", `got ${shipped.status}`);
 
@@ -430,9 +431,9 @@ async function main() {
 
     const beforeDoubleShip = await stockOf(product.id);
     const shipTwice = await Promise.all([
-      shipBlock({ blockId: shipRaceBlock.id, performedBy: actor.manager.name, performedById: actor.manager.id, role: "MANAGER" })
+      shipBlock({ blockId: shipRaceBlock.id, performedBy: actor.manager.name, performedById: actor.manager.id, role: "MANAGER", vehicleNumber: "KA-19-E2E-0002" })
         .then(() => ({ ok: true, error: "" })).catch((e: any) => ({ ok: false, error: e.message })),
-      shipBlock({ blockId: shipRaceBlock.id, performedBy: actor.admin.name, performedById: actor.admin.id, role: "SUPER_ADMIN" })
+      shipBlock({ blockId: shipRaceBlock.id, performedBy: actor.admin.name, performedById: actor.admin.id, role: "SUPER_ADMIN", vehicleNumber: "KA-19-E2E-0003" })
         .then(() => ({ ok: true, error: "" })).catch((e: any) => ({ ok: false, error: e.message })),
     ]);
     const shipSucceeded = shipTwice.filter((r) => r.ok).length;
@@ -913,6 +914,12 @@ async function main() {
     // ——————————————————————————————————————————————
     // Teardown
     // ——————————————————————————————————————————————
+    // No `process.exit()` in this block: calling it while an exception is
+    // propagating through `finally` swallows that exception outright (Node
+    // terminates immediately, never reaching `main().catch()` below), which
+    // silently truncated the suite and reported a false clean pass whenever a
+    // mid-run throw — e.g. a stale fixture tripping a validation the service
+    // added later — cut the run short before its `check()` calls ran.
     console.log("\nCleaning up fixtures…");
 
     const testProducts = await db.product.findMany({
@@ -956,11 +963,16 @@ async function main() {
 
     await db.$disconnect();
     await closeRedis();
-    process.exit(fail > 0 ? 1 : 0);
+    // Exit code is decided below, after this `finally` either completes
+    // normally or lets a real exception continue propagating.
+    exitCode = fail > 0 ? 1 : 0;
   }
 }
 
-main().catch(async (err) => {
+let exitCode = 1;
+main()
+  .then(() => process.exit(exitCode))
+  .catch(async (err) => {
   console.error("\nSUITE CRASHED:", err);
   await db.$disconnect();
   await closeRedis();

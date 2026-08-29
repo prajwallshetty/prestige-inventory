@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getInventoryList, getInventoryFacets } from "@/services/InventoryService";
 import { getSessionContext } from "@/lib/session";
 import { InventoryClientTable } from "@/components/inventory/InventoryClientTable";
+import { db } from "@/lib/db";
 
 export const revalidate = 0;
 
@@ -33,7 +34,7 @@ export default async function InventoryPage({
     limit: Math.min(100, Math.max(10, parseInt(first(params.limit) || "20", 10) || 20)),
   };
 
-  const [inventoryData, facets] = await Promise.all([
+  const [inventoryData, facets, warehouses] = await Promise.all([
     getInventoryList({
       ...filters,
       userRole: session.role,
@@ -41,6 +42,9 @@ export default async function InventoryPage({
       warehouseId: session.role === "MANAGER" ? session.warehouseId : undefined,
     }),
     getInventoryFacets(),
+    // Only feeds the Create/Edit stock item form's warehouse picker — fetched
+    // server-side so the client doesn't duplicate this round trip on mount.
+    db.warehouse.findMany({ select: { id: true, name: true, code: true }, orderBy: { name: "asc" } }),
   ]);
 
   return (
@@ -59,6 +63,7 @@ export default async function InventoryPage({
         productTypes={facets.productTypes}
         sizes={facets.sizes}
         collections={facets.collections}
+        warehouses={warehouses}
         session={session}
       />
     </div>

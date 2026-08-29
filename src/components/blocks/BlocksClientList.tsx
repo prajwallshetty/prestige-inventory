@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { isOffline, OFFLINE_MESSAGE } from "@/lib/offline";
 import {
   AlertTriangle,
@@ -59,6 +59,12 @@ interface BlockRow {
   createdAt: string | null;
   expiresAt: string | null;
   lastActivityAt: string | null;
+  vehicleNumber?: string | null;
+  driverName?: string | null;
+  driverPhone?: string | null;
+  transporter?: string | null;
+  expectedDeliveryAt?: string | null;
+  shippedBy?: string | null;
   dealer: { id: string; dealerId: string | null; name: string; company: string | null } | null;
   showroom: { id: string; name: string; city: string | null } | null;
   warehouse: { id: string; name: string; code: string } | null;
@@ -183,7 +189,17 @@ export function BlocksClientList({ result, filters, dealers, showrooms, session 
   const runAction = async (
     block: BlockRow,
     type: ActionType,
-    opts: { quantity?: number; reason?: string } = {}
+    opts: {
+      quantity?: number;
+      reason?: string;
+      vehicle?: {
+        vehicleNumber?: string;
+        driverName?: string;
+        driverPhone?: string;
+        transporter?: string;
+        expectedDeliveryAt?: string;
+      };
+    } = {}
   ) => {
     if (busyId) return; // one mutation at a time per list
 
@@ -204,7 +220,7 @@ export function BlocksClientList({ result, filters, dealers, showrooms, session 
       const res =
         type === "APPROVE" ? await approveBlockAction(block.id, opts.quantity)
         : type === "REJECT" ? await rejectBlockAction(block.id, opts.reason)
-        : type === "SHIP" ? await shipBlockAction(block.id, opts.quantity)
+        : type === "SHIP" ? await shipBlockAction(block.id, opts.quantity, opts.vehicle)
         : type === "DELIVER" ? await deliverBlockAction(block.id, opts.quantity)
         : type === "RELEASE" ? await releaseBlockAction(block.id, opts.reason)
         : await cancelBlockAction(block.id, opts.reason);
@@ -582,7 +598,7 @@ export function BlocksClientList({ result, filters, dealers, showrooms, session 
                                 busy={busy}
                                 pendingLabel="Releasing…"
                                 onClick={() => setActiveAction({ block, type: "RELEASE" })}
-                                className="border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"
+                                className="border border-[#EAEAEA] bg-[#F7F7F5] text-[#111111] hover:bg-[#EAEAEA]"
                               >
                                 Release
                               </RowButton>
@@ -873,7 +889,17 @@ function ActionDialog({
   type: ActionType;
   busy: boolean;
   onClose: () => void;
-  onConfirm: (opts: { quantity?: number; reason?: string }) => void;
+  onConfirm: (opts: {
+    quantity?: number;
+    reason?: string;
+    vehicle?: {
+      vehicleNumber?: string;
+      driverName?: string;
+      driverPhone?: string;
+      transporter?: string;
+      expectedDeliveryAt?: string;
+    };
+  }) => void;
 }) {
   const outstandingToShip = block.quantity - block.shippedQuantity;
   const outstandingToDeliver = block.shippedQuantity - block.deliveredQuantity;
@@ -887,14 +913,26 @@ function ActionDialog({
   );
   const [reason, setReason] = useState("");
 
+  // A block already carries a vehicle from an earlier partial shipment —
+  // only demand a new one when there isn't one on file yet.
+  const [vehicleNumber, setVehicleNumber] = useState(block.vehicleNumber || "");
+  const [driverName, setDriverName] = useState(block.driverName || "");
+  const [driverPhone, setDriverPhone] = useState(block.driverPhone || "");
+  const [transporter, setTransporter] = useState(block.transporter || "");
+  const [expectedDelivery, setExpectedDelivery] = useState(
+    block.expectedDeliveryAt ? block.expectedDeliveryAt.slice(0, 10) : ""
+  );
+
   const needsReason = type === "REJECT" || type === "RELEASE" || type === "CANCEL";
   const needsQuantity = type === "APPROVE" || type === "SHIP" || type === "DELIVER";
+  const needsVehicle = type === "SHIP";
   const reasonRequired = type === "REJECT";
+  const vehicleValid = !needsVehicle || vehicleNumber.trim().length > 0;
 
   const maxQty = type === "SHIP" ? outstandingToShip : type === "DELIVER" ? outstandingToDeliver : block.quantity;
   const qtyNum = Number(quantity);
   const qtyValid = !needsQuantity || (Number.isFinite(qtyNum) && qtyNum > 0 && qtyNum <= maxQty);
-  const canSubmit = qtyValid && (!reasonRequired || reason.trim().length > 0) && !busy;
+  const canSubmit = qtyValid && vehicleValid && (!reasonRequired || reason.trim().length > 0) && !busy;
 
   const title =
     type === "APPROVE" ? "Approve block"
@@ -995,6 +1033,73 @@ function ActionDialog({
             </label>
           )}
 
+          {needsVehicle && (
+            <div className="space-y-3 rounded-xl border border-[#EAEAEA] p-3">
+              <label className="block space-y-1">
+                <span className="text-[10px] font-black uppercase tracking-wider text-[#6B6B6B]">
+                  Vehicle number (required)
+                </span>
+                <input
+                  type="text"
+                  placeholder="KA19AB1234"
+                  value={vehicleNumber}
+                  onChange={(e) => setVehicleNumber(e.target.value.toUpperCase())}
+                  aria-invalid={!vehicleValid}
+                  className={`min-h-[48px] w-full rounded-xl border bg-white px-3 text-sm uppercase outline-hidden ${
+                    vehicleValid ? "border-[#EAEAEA] focus:border-[#F2C202]" : "border-rose-300"
+                  }`}
+                />
+                {!vehicleValid && (
+                  <span className="text-[10px] font-bold text-rose-700">Vehicle number is required to ship.</span>
+                )}
+              </label>
+
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block space-y-1">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-[#6B6B6B]">Driver name</span>
+                  <input
+                    type="text"
+                    value={driverName}
+                    onChange={(e) => setDriverName(e.target.value)}
+                    className="min-h-[44px] w-full rounded-xl border border-[#EAEAEA] bg-white px-3 text-sm outline-hidden focus:border-[#F2C202]"
+                  />
+                </label>
+                <label className="block space-y-1">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-[#6B6B6B]">Driver phone</span>
+                  <input
+                    type="tel"
+                    value={driverPhone}
+                    onChange={(e) => setDriverPhone(e.target.value)}
+                    className="min-h-[44px] w-full rounded-xl border border-[#EAEAEA] bg-white px-3 text-sm outline-hidden focus:border-[#F2C202]"
+                  />
+                </label>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block space-y-1">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-[#6B6B6B]">Transporter</span>
+                  <input
+                    type="text"
+                    value={transporter}
+                    onChange={(e) => setTransporter(e.target.value)}
+                    className="min-h-[44px] w-full rounded-xl border border-[#EAEAEA] bg-white px-3 text-sm outline-hidden focus:border-[#F2C202]"
+                  />
+                </label>
+                <label className="block space-y-1">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-[#6B6B6B]">
+                    Expected delivery
+                  </span>
+                  <input
+                    type="date"
+                    value={expectedDelivery}
+                    onChange={(e) => setExpectedDelivery(e.target.value)}
+                    className="min-h-[44px] w-full rounded-xl border border-[#EAEAEA] bg-white px-3 text-sm outline-hidden focus:border-[#F2C202]"
+                  />
+                </label>
+              </div>
+            </div>
+          )}
+
           {needsReason && (
             <label className="block space-y-1">
               <span className="text-[10px] font-black uppercase tracking-wider text-[#6B6B6B]">
@@ -1033,6 +1138,15 @@ function ActionDialog({
               onConfirm({
                 quantity: needsQuantity ? qtyNum : undefined,
                 reason: needsReason ? reason.trim() : undefined,
+                vehicle: needsVehicle
+                  ? {
+                      vehicleNumber: vehicleNumber.trim(),
+                      driverName: driverName.trim() || undefined,
+                      driverPhone: driverPhone.trim() || undefined,
+                      transporter: transporter.trim() || undefined,
+                      expectedDeliveryAt: expectedDelivery || undefined,
+                    }
+                  : undefined,
               })
             }
             className={`min-h-[48px] flex-1 rounded-xl text-xs font-black text-white transition-all active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 ${

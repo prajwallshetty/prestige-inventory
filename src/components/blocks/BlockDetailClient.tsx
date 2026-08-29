@@ -2,7 +2,7 @@
 
 import React, { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { isOffline, OFFLINE_MESSAGE } from "@/lib/offline";
 import { Check, Loader2, Truck, X, AlertCircle } from "lucide-react";
 import {
@@ -53,6 +53,14 @@ export function BlockDetailClient({ session, block, audit }: Props) {
   const [rejectOpen, setRejectOpen] = useState(false);
   const [shipOpen, setShipOpen] = useState(false);
   const [reason, setReason] = useState("");
+  const [vehicleNumber, setVehicleNumber] = useState(block.vehicleNumber || "");
+  const [driverName, setDriverName] = useState(block.driverName || "");
+  const [driverPhone, setDriverPhone] = useState(block.driverPhone || "");
+  const [transporter, setTransporter] = useState(block.transporter || "");
+  const [expectedDelivery, setExpectedDelivery] = useState(
+    block.expectedDeliveryAt ? String(block.expectedDeliveryAt).slice(0, 10) : ""
+  );
+  const vehicleValid = vehicleNumber.trim().length > 0;
   const [error, setError] = useState<string | null>(null);
   const inFlight = useRef(false);
 
@@ -138,7 +146,9 @@ export function BlockDetailClient({ session, block, audit }: Props) {
     {
       label: block.status === "PARTIALLY_SHIPPED" ? "Partially Shipped" : "Shipped",
       done: !!block.shippedAt,
-      sub: block.shippedQuantity ? `${block.shippedQuantity} boxes · ${fmt(block.shippedAt)}` : "—",
+      sub: block.shippedQuantity
+        ? `${block.shippedQuantity} boxes · ${fmt(block.shippedAt)}${block.vehicleNumber ? ` · ${block.vehicleNumber}` : ""}`
+        : "—",
     },
     {
       label: "Delivered",
@@ -237,6 +247,38 @@ export function BlockDetailClient({ session, block, audit }: Props) {
             )}
           </dl>
         </section>
+
+        {block.vehicleNumber && (
+          <section className="rounded-2xl border border-[#EAEAEA] bg-white p-4 sm:p-5 shadow-xs sm:col-span-2">
+            <h2 className="mb-3 text-[10px] font-black uppercase tracking-wider text-[#6B6B6B]">Vehicle & Delivery</h2>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs sm:grid-cols-4">
+              <div>
+                <dt className="text-[#6B6B6B]">Vehicle number</dt>
+                <dd className="font-mono font-bold text-[#111111]">{block.vehicleNumber}</dd>
+              </div>
+              <div>
+                <dt className="text-[#6B6B6B]">Driver</dt>
+                <dd className="font-bold text-[#111111]">{block.driverName || "—"}</dd>
+              </div>
+              <div>
+                <dt className="text-[#6B6B6B]">Driver phone</dt>
+                <dd className="font-bold text-[#111111]">{block.driverPhone || "—"}</dd>
+              </div>
+              <div>
+                <dt className="text-[#6B6B6B]">Transporter</dt>
+                <dd className="font-bold text-[#111111]">{block.transporter || "—"}</dd>
+              </div>
+              <div>
+                <dt className="text-[#6B6B6B]">Shipped by</dt>
+                <dd className="font-bold text-[#111111]">{block.shippedBy || "—"}</dd>
+              </div>
+              <div>
+                <dt className="text-[#6B6B6B]">Expected delivery</dt>
+                <dd className="font-bold text-[#111111]">{fmt(block.expectedDeliveryAt) || "—"}</dd>
+              </div>
+            </dl>
+          </section>
+        )}
       </div>
 
       {/* TIMELINE */}
@@ -415,11 +457,11 @@ export function BlockDetailClient({ session, block, audit }: Props) {
         </div>
       )}
 
-      {/* SHIP CONFIRMATION (spec §18) */}
+      {/* SHIP CONFIRMATION (spec §18, §26) */}
       {shipOpen && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
           <div className="fixed inset-0 bg-black/40 backdrop-blur-xs" onClick={() => setShipOpen(false)} />
-          <div className="relative z-10 w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl border border-[#EAEAEA] bg-white p-5 shadow-lg">
+          <div className="relative z-10 w-full sm:max-w-md max-h-[92vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl border border-[#EAEAEA] bg-white p-5 shadow-lg">
             <h2 className="text-sm font-black uppercase text-[#111111]">Ship Block</h2>
             <dl className="mt-3 space-y-1.5 rounded-xl bg-[#F7F7F5] p-3 text-xs">
               <div className="flex justify-between"><dt className="text-[#6B6B6B]">Block</dt><dd className="font-mono font-bold">{block.blockNumber}</dd></div>
@@ -428,6 +470,70 @@ export function BlockDetailClient({ session, block, audit }: Props) {
               <div className="flex justify-between"><dt className="text-[#6B6B6B]">Quantity</dt><dd className="font-bold">{block.quantity} boxes</dd></div>
               <div className="flex justify-between"><dt className="text-[#6B6B6B]">Destination</dt><dd className="font-bold">{block.showroom?.name || block.warehouse?.name || "—"}</dd></div>
             </dl>
+
+            <div className="mt-4 space-y-3">
+              <label className="block space-y-1">
+                <span className="text-[10px] font-black uppercase tracking-wider text-[#6B6B6B]">
+                  Vehicle number (required)
+                </span>
+                <input
+                  type="text"
+                  placeholder="KA19AB1234"
+                  value={vehicleNumber}
+                  onChange={(e) => setVehicleNumber(e.target.value.toUpperCase())}
+                  aria-invalid={!vehicleValid}
+                  className={`min-h-[48px] w-full rounded-xl border bg-white px-3 text-sm uppercase outline-hidden ${
+                    vehicleValid ? "border-[#EAEAEA] focus:border-[#F2C202]" : "border-rose-300"
+                  }`}
+                />
+                {!vehicleValid && (
+                  <span className="text-[10px] font-bold text-rose-700">Vehicle number is required to ship.</span>
+                )}
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block space-y-1">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-[#6B6B6B]">Driver name</span>
+                  <input
+                    type="text"
+                    value={driverName}
+                    onChange={(e) => setDriverName(e.target.value)}
+                    className="min-h-[44px] w-full rounded-xl border border-[#EAEAEA] bg-white px-3 text-sm outline-hidden focus:border-[#F2C202]"
+                  />
+                </label>
+                <label className="block space-y-1">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-[#6B6B6B]">Driver phone</span>
+                  <input
+                    type="tel"
+                    value={driverPhone}
+                    onChange={(e) => setDriverPhone(e.target.value)}
+                    className="min-h-[44px] w-full rounded-xl border border-[#EAEAEA] bg-white px-3 text-sm outline-hidden focus:border-[#F2C202]"
+                  />
+                </label>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block space-y-1">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-[#6B6B6B]">Transporter</span>
+                  <input
+                    type="text"
+                    value={transporter}
+                    onChange={(e) => setTransporter(e.target.value)}
+                    className="min-h-[44px] w-full rounded-xl border border-[#EAEAEA] bg-white px-3 text-sm outline-hidden focus:border-[#F2C202]"
+                  />
+                </label>
+                <label className="block space-y-1">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-[#6B6B6B]">
+                    Expected delivery
+                  </span>
+                  <input
+                    type="date"
+                    value={expectedDelivery}
+                    onChange={(e) => setExpectedDelivery(e.target.value)}
+                    className="min-h-[44px] w-full rounded-xl border border-[#EAEAEA] bg-white px-3 text-sm outline-hidden focus:border-[#F2C202]"
+                  />
+                </label>
+              </div>
+            </div>
+
             <p className="mt-3 text-[10px] text-[#6B6B6B]">
               Shipping reduces physical stock and consumes the reservation.
             </p>
@@ -439,8 +545,21 @@ export function BlockDetailClient({ session, block, audit }: Props) {
                 Cancel
               </button>
               <button
-                onClick={() => run("SHIP", () => shipBlockAction(block.id), "Block shipped.")}
-                disabled={!!busy}
+                onClick={() =>
+                  run(
+                    "SHIP",
+                    () =>
+                      shipBlockAction(block.id, undefined, {
+                        vehicleNumber: vehicleNumber.trim(),
+                        driverName: driverName.trim() || undefined,
+                        driverPhone: driverPhone.trim() || undefined,
+                        transporter: transporter.trim() || undefined,
+                        expectedDeliveryAt: expectedDelivery || undefined,
+                      }),
+                    "Block shipped."
+                  )
+                }
+                disabled={!!busy || !vehicleValid}
                 aria-busy={busy === "SHIP"}
                 className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-xs font-black text-white hover:bg-blue-500 disabled:opacity-50 min-h-[44px]"
               >

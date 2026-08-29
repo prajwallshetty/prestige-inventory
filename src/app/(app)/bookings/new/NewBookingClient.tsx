@@ -45,14 +45,16 @@ interface CartItem {
 interface NewBookingClientProps {
   products: ProductItem[];
   warehouses: Array<{ id: string; name: string; code: string }>;
+  dealers: Array<{ id: string; dealerId: string | null; name: string }>;
   session: SessionContext;
 }
 
-export function NewBookingClient({ products, warehouses, session }: NewBookingClientProps) {
+export function NewBookingClient({ products, warehouses, dealers, session }: NewBookingClientProps) {
   const router = useRouter();
   const [cart, setCart] = useState<CartItem[]>([]);
   const [search, setSearch] = useState("");
   const [selectedWarehouseId, setSelectedWarehouseId] = useState(session.warehouseId || warehouses[0]?.id || "");
+  const [dealerId, setDealerId] = useState("");
   const [priority, setPriority] = useState<"NORMAL" | "HIGH" | "URGENT">("NORMAL");
   const [notes, setNotes] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -130,13 +132,17 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (cart.length === 0) return;
+    if (!dealerId) {
+      setErrorMessage("Select a dealer for this booking.");
+      return;
+    }
 
     setIsSubmitting(true);
     try {
       const hasWaitlistedItems = cart.some((item) => item.isWaitlist);
 
       const payload = {
-        dealerId: session.dealerId || "abc-dealer-id-placeholder",
+        dealerId,
         warehouseId: selectedWarehouseId,
         // The server records the acting user from the session; this is display only.
         requestedBy: session.name || session.role,
@@ -314,7 +320,7 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
                       <button
                         type="button"
                         onClick={() => removeFromCart(item.product.id)}
-                        className="text-[#6B6B6B] hover:text-rose-600 transition-colors"
+                        className="flex items-center justify-center rounded p-2 text-[#6B6B6B] hover:text-rose-600 hover:bg-rose-50 transition-colors"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
@@ -326,7 +332,7 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
                         <button
                           type="button"
                           onClick={() => updateQuantity(item.product.id, item.quantity - 1)}
-                          className="rounded p-1 text-[#6B6B6B] hover:bg-[#F7F7F5]"
+                          className="rounded p-2.5 text-[#6B6B6B] hover:bg-[#F7F7F5]"
                         >
                           <Minus className="h-3 w-3" />
                         </button>
@@ -339,7 +345,7 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
                         <button
                           type="button"
                           onClick={() => updateQuantity(item.product.id, item.quantity + 1)}
-                          className="rounded p-1 text-[#6B6B6B] hover:bg-[#F7F7F5]"
+                          className="rounded p-2.5 text-[#6B6B6B] hover:bg-[#F7F7F5]"
                         >
                           <Plus className="h-3 w-3" />
                         </button>
@@ -399,6 +405,26 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
           {/* Booking Options */}
           {cart.length > 0 && (
             <div className="space-y-4 pt-3 border-t border-[#EAEAEA]">
+              {/* Dealer / Customer — every booking is raised against one */}
+              <div className="space-y-1.5">
+                <label htmlFor="booking-dealer" className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
+                  Dealer / Customer
+                </label>
+                <select
+                  id="booking-dealer"
+                  value={dealerId}
+                  onChange={(e) => setDealerId(e.target.value)}
+                  className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2 text-xs text-[#111111] focus:border-[#F2C202] focus:outline-hidden"
+                >
+                  <option value="">Select a dealer…</option>
+                  {dealers.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.dealerId ? `${d.dealerId} — ${d.name}` : d.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               {/* Target Warehouse */}
               <div className="space-y-1.5">
                 <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider flex items-center gap-1">
@@ -467,7 +493,7 @@ export function NewBookingClient({ products, warehouses, session }: NewBookingCl
               {/* Submit Buttons */}
               <button
                 type="submit"
-                disabled={isSubmitting || cart.length === 0}
+                disabled={isSubmitting || cart.length === 0 || !dealerId}
                 className="w-full flex items-center justify-center gap-2 rounded-lg bg-[#F2C202] py-2.5 text-xs font-black text-white hover:bg-[#D8AD02] transition-all shadow-sm disabled:bg-[#F7F7F5] disabled:text-[#6B6B6B]/40 disabled:border-[#EAEAEA] disabled:shadow-none cursor-pointer"
               >
                 {isSubmitting ? "Creating Booking Request..." : "Submit Booking Request"}

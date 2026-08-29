@@ -11,7 +11,7 @@ import {
   ChevronDown
 } from "lucide-react";
 import { SessionContext } from "@/lib/session";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { bulkApproveBookingsAction } from "@/app/actions";
 
 interface BookingItem {

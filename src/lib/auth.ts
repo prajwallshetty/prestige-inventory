@@ -19,7 +19,7 @@ if (!JWT_SECRET) {
 const SECRET: string = JWT_SECRET;
 
 export const SESSION_COOKIE_NAME = "prestige_session";
-const SESSION_MAX_AGE = 60 * 60 * 24 * 7; // 7 days
+export const SESSION_MAX_AGE = 60 * 60 * 24 * 7; // 7 days
 
 export interface SessionPayload {
   userId: string;

@@ -486,6 +486,7 @@ function formatMessageForClient(m: any) {
           senderName: m.replyTo.sender?.name || "User",
         }
       : null,
+    clientMessageId: m.clientMessageId || null,
     editedAt: m.editedAt,
     deletedAt: m.deletedAt,
     createdAt: m.createdAt,

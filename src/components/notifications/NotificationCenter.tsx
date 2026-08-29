@@ -32,6 +32,9 @@ export function NotificationCenter({ session }: NotificationCenterProps) {
   const [notifications, setNotifications] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<"ALL" | "UNREAD" | "BOOKINGS" | "INVENTORY" | "ANNOUNCEMENTS">("ALL");
   const [loading, setLoading] = useState(false);
+  const [markingId, setMarkingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [markingAll, setMarkingAll] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const fetchCount = async () => {
@@ -82,13 +85,14 @@ export function NotificationCenter({ session }: NotificationCenterProps) {
       }
     }
 
-    // Polling fallback every 12 seconds
+    // Safety net for a dropped SSE event, not the primary update path — same
+    // shape and interval as ChatHeaderBadge's poll.
     const timer = setInterval(() => {
       fetchCount();
       if (isOpen) {
         getNotificationsAction(20).then(setNotifications);
       }
-    }, 12000);
+    }, 60000);
 
     return () => {
       clearInterval(timer);
@@ -118,6 +122,8 @@ export function NotificationCenter({ session }: NotificationCenterProps) {
   // These actions report failure in their return value rather than throwing, so
   // the local list is only updated once the server has actually confirmed.
   const handleMarkRead = async (id: string) => {
+    if (markingId) return;
+    setMarkingId(id);
     try {
       const res = await markNotificationAsReadAction(id);
       if (!res.ok) {
@@ -130,10 +136,14 @@ export function NotificationCenter({ session }: NotificationCenterProps) {
       fetchCount();
     } catch {
       toast.error("Could not update the notification. Please try again.");
+    } finally {
+      setMarkingId(null);
     }
   };
 
   const handleMarkAllRead = async () => {
+    if (markingAll) return;
+    setMarkingAll(true);
     try {
       const res = await markAllNotificationsAsReadAction();
       if (!res.ok) {
@@ -144,10 +154,14 @@ export function NotificationCenter({ session }: NotificationCenterProps) {
       fetchCount();
     } catch {
       toast.error("Could not update your notifications. Please try again.");
+    } finally {
+      setMarkingAll(false);
     }
   };
 
   const handleDelete = async (id: string) => {
+    if (deletingId) return;
+    setDeletingId(id);
     try {
       const res = await deleteNotificationAction(id);
       if (!res.ok) {
@@ -158,6 +172,8 @@ export function NotificationCenter({ session }: NotificationCenterProps) {
       fetchCount();
     } catch {
       toast.error("Could not remove the notification. Please try again.");
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -241,11 +257,12 @@ export function NotificationCenter({ session }: NotificationCenterProps) {
               )}
             </div>
             {unreadCount > 0 && (
-              <button 
+              <button
                 onClick={handleMarkAllRead}
-                className="text-[10px] font-black text-[#8A7300] hover:underline"
+                disabled={markingAll}
+                className="text-[10px] font-black text-[#8A7300] hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Mark all read
+                {markingAll ? "Marking..." : "Mark all read"}
               </button>
             )}
           </div>
@@ -291,9 +308,10 @@ export function NotificationCenter({ session }: NotificationCenterProps) {
                     <div className="flex justify-between items-center pt-1.5 border-t border-[#F7F7F5]/50">
                       <div className="flex gap-2">
                         {!n.isRead && (
-                          <button 
+                          <button
                             onClick={() => handleMarkRead(n.id)}
-                            className="flex items-center gap-0.5 text-[9px] font-bold text-emerald-700 hover:underline cursor-pointer"
+                            disabled={markingId === n.id}
+                            className="flex items-center gap-0.5 text-[9px] font-bold text-emerald-700 hover:underline cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <Check className="h-2.5 w-2.5" /> Read
                           </button>
@@ -308,9 +326,10 @@ export function NotificationCenter({ session }: NotificationCenterProps) {
                           </Link>
                         )}
                       </div>
-                      <button 
+                      <button
                         onClick={() => handleDelete(n.id)}
-                        className="text-[#6B6B6B] hover:text-rose-600 transition-colors cursor-pointer"
+                        disabled={deletingId === n.id}
+                        className="text-[#6B6B6B] hover:text-rose-600 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <Trash2 className="h-3 w-3" />
                       </button>
@@ -338,11 +357,12 @@ export function NotificationCenter({ session }: NotificationCenterProps) {
             </div>
             <div className="flex items-center gap-3">
               {unreadCount > 0 && (
-                <button 
+                <button
                   onClick={handleMarkAllRead}
-                  className="text-[10px] font-bold text-[#8A7300] hover:underline"
+                  disabled={markingAll}
+                  className="text-[10px] font-bold text-[#8A7300] hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Mark all read
+                  {markingAll ? "Marking..." : "Mark all read"}
                 </button>
               )}
               <button 
@@ -394,9 +414,10 @@ export function NotificationCenter({ session }: NotificationCenterProps) {
                     <div className="flex justify-between items-center pt-2 border-t border-[#EAEAEA]/80">
                       <div className="flex gap-3">
                         {!n.isRead && (
-                          <button 
+                          <button
                             onClick={() => handleMarkRead(n.id)}
-                            className="flex items-center gap-0.5 text-[9px] font-bold text-emerald-700"
+                            disabled={markingId === n.id}
+                            className="flex items-center gap-0.5 text-[9px] font-bold text-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <Check className="h-3 w-3" /> Mark Read
                           </button>
@@ -413,7 +434,8 @@ export function NotificationCenter({ session }: NotificationCenterProps) {
                       </div>
                       <button 
                         onClick={() => handleDelete(n.id)}
-                        className="text-[#6B6B6B] hover:text-rose-600"
+                        disabled={deletingId === n.id}
+                        className="text-[#6B6B6B] hover:text-rose-600 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>

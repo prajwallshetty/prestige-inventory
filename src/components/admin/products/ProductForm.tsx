@@ -3,14 +3,16 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, X, Save, ImageOff, Upload, Loader2 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
+import { NImagesManager } from "@/components/common/NImagesManager";
 
 interface Option {
   id: string;
   name: string;
+  symbol?: string;
 }
 
-interface ProductRecord {
+export interface ProductRecord {
   id: string;
   name: string;
   sku: string | null;
@@ -31,6 +33,7 @@ interface ProductRecord {
   image_key: string | null;
   thumbnail_key: string | null;
   lifestyleImage: string | null;
+  images?: string[] | null;
   price: string | number | null;
   mrp: string | number | null;
   coverage: string | null;
@@ -95,7 +98,7 @@ function TaxonomyPicker({
 
   return (
     <div>
-      <label className="block text-xs font-semibold text-slate-300 mb-1">{label}</label>
+      <label className="block text-xs font-bold text-[#111111] mb-1">{label}</label>
       {adding ? (
         <div className="flex items-center gap-2">
           <input
@@ -105,20 +108,20 @@ function TaxonomyPicker({
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), handleCreate())}
-            className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+            className="flex-1 bg-white border border-[#EAEAEA] rounded-xl px-3 py-2 text-xs text-[#111111] focus:outline-hidden focus:border-[#F2C202]"
           />
           <button
             type="button"
             disabled={saving}
             onClick={handleCreate}
-            className="p-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition disabled:opacity-50"
+            className="p-2 bg-[#F2C202] hover:bg-[#D8AD02] text-white rounded-lg transition disabled:opacity-50"
           >
             <Save className="w-3.5 h-3.5" />
           </button>
           <button
             type="button"
             onClick={() => setAdding(false)}
-            className="p-2 text-slate-400 hover:text-white rounded-lg transition"
+            className="p-2 text-[#6B6B6B] hover:text-[#111111] rounded-lg transition"
           >
             <X className="w-3.5 h-3.5" />
           </button>
@@ -128,7 +131,7 @@ function TaxonomyPicker({
           <select
             value={value}
             onChange={(e) => onChange(e.target.value)}
-            className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+            className="flex-1 bg-white border border-[#EAEAEA] rounded-xl px-3 py-2 text-xs text-[#111111] focus:outline-hidden focus:border-[#F2C202]"
           >
             <option value="">— None —</option>
             {optionList.map((o) => (
@@ -139,7 +142,7 @@ function TaxonomyPicker({
             type="button"
             onClick={() => setAdding(true)}
             title={`Add new ${label.toLowerCase()}`}
-            className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800 rounded-lg transition shrink-0"
+            className="p-2 text-[#6B6B6B] hover:text-[#111111] hover:bg-[#F7F7F5] border border-[#EAEAEA] rounded-lg transition shrink-0"
           >
             <Plus className="w-3.5 h-3.5" />
           </button>
@@ -164,15 +167,15 @@ function Field({
 }) {
   return (
     <div>
-      <label className="block text-xs font-semibold text-slate-300 mb-1">
-        {label} {required && <span className="text-red-400">*</span>}
+      <label className="block text-xs font-bold text-[#111111] mb-1">
+        {label} {required && <span className="text-rose-500">*</span>}
       </label>
       <input
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition"
+        className="w-full bg-white border border-[#EAEAEA] rounded-xl px-3 py-2 text-xs text-[#111111] placeholder-[#9A9A9A] focus:outline-hidden focus:border-[#F2C202] transition"
       />
     </div>
   );
@@ -221,16 +224,16 @@ function ImageUploadField({
 
   return (
     <div>
-      <label className="block text-xs font-semibold text-slate-300 mb-1">{label}</label>
+      <label className="block text-xs font-bold text-[#111111] mb-1">{label}</label>
       <div className="flex items-center gap-2">
         <input
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
-          className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition"
+          className="flex-1 bg-white border border-[#EAEAEA] rounded-xl px-3 py-2 text-xs text-[#111111] placeholder-[#9A9A9A] focus:outline-hidden focus:border-[#F2C202] transition"
         />
-        <label className="relative shrink-0 p-2 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800 rounded-lg transition cursor-pointer">
+        <label className="relative shrink-0 p-2 text-[#6B6B6B] hover:text-[#111111] hover:bg-[#F7F7F5] border border-[#EAEAEA] rounded-lg transition cursor-pointer">
           {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
           <input type="file" accept="image/jpeg,image/png,image/webp,image/gif" onChange={handleFile} disabled={uploading} className="hidden" />
         </label>
@@ -241,8 +244,8 @@ function ImageUploadField({
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
-      <h3 className="text-xs font-bold uppercase tracking-wider text-indigo-400">{title}</h3>
+    <div className="bg-white border border-[#EAEAEA] rounded-2xl p-5 space-y-4 shadow-xs">
+      <h3 className="text-xs font-black uppercase tracking-wider text-[#F2C202]">{title}</h3>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">{children}</div>
     </div>
   );
@@ -275,6 +278,7 @@ export function ProductForm({ mode, product, options }: Props) {
     image_key: product?.image_key || "",
     thumbnail_key: product?.thumbnail_key || "",
     lifestyleImage: product?.lifestyleImage || "",
+    images: Array.isArray(product?.images) ? (product.images as string[]) : [],
     price: product?.price != null ? String(product.price) : "",
     mrp: product?.mrp != null ? String(product.mrp) : "",
     coverage: product?.coverage || "",
@@ -326,12 +330,12 @@ export function ProductForm({ mode, product, options }: Props) {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-slate-900 border border-slate-800 p-6 rounded-2xl">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-white border border-[#EAEAEA] p-6 rounded-2xl shadow-xs">
         <div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">
+          <h1 className="text-xl font-black text-[#111111] tracking-tight">
             {mode === "create" ? "Add Product" : `Edit ${product?.name}`}
           </h1>
-          <p className="text-slate-400 text-sm mt-1">
+          <p className="text-[#6B6B6B] text-xs mt-1">
             {mode === "create"
               ? "Creates the product and a zero-stock inventory record. Enter opening stock afterward via Inventory."
               : "Changes apply immediately and are recorded in the audit trail."}
@@ -340,7 +344,7 @@ export function ProductForm({ mode, product, options }: Props) {
         <button
           type="submit"
           disabled={saving}
-          className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium text-sm rounded-xl transition shadow-lg shadow-indigo-600/25 shrink-0"
+          className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-[#F2C202] hover:bg-[#D8AD02] disabled:opacity-50 text-white font-black text-xs rounded-xl transition shadow-xs shrink-0"
         >
           <Save className="w-4 h-4" /> {saving ? "Saving…" : mode === "create" ? "Create Product" : "Save Changes"}
         </button>
@@ -378,11 +382,11 @@ export function ProductForm({ mode, product, options }: Props) {
           onOptionCreated={(o) => setCollections((prev) => [...prev, o])}
         />
         <div>
-          <label className="block text-xs font-semibold text-slate-300 mb-1">Product Type</label>
+          <label className="block text-xs font-bold text-[#111111] mb-1">Product Type</label>
           <select
             value={form.productTypeId}
             onChange={(e) => set("productTypeId")(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+            className="w-full bg-white border border-[#EAEAEA] rounded-xl px-3 py-2 text-xs text-[#111111] focus:outline-hidden focus:border-[#F2C202]"
           >
             <option value="">— None —</option>
             {options.productTypes.map((o) => (
@@ -391,11 +395,11 @@ export function ProductForm({ mode, product, options }: Props) {
           </select>
         </div>
         <div>
-          <label className="block text-xs font-semibold text-slate-300 mb-1">Unit</label>
+          <label className="block text-xs font-bold text-[#111111] mb-1">Unit</label>
           <select
             value={form.unitId}
             onChange={(e) => set("unitId")(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+            className="w-full bg-white border border-[#EAEAEA] rounded-xl px-3 py-2 text-xs text-[#111111] focus:outline-hidden focus:border-[#F2C202]"
           >
             <option value="">— None —</option>
             {options.units.map((o: any) => (
@@ -414,41 +418,44 @@ export function ProductForm({ mode, product, options }: Props) {
         <Field label="Material" value={form.material} onChange={set("material")} />
       </Section>
 
-      <Section title="Media">
-        <div className="sm:col-span-2 lg:col-span-3 flex items-start gap-4">
-          <div className="w-20 h-20 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center overflow-hidden shrink-0">
-            {thumb ? (
-              <img src={mediaPreviewUrl(thumb) || undefined} alt="" className="w-full h-full object-cover" onError={(e) => (e.currentTarget.style.display = "none")} />
-            ) : (
-              <ImageOff className="w-6 h-6 text-slate-600" />
-            )}
-          </div>
-          <p className="flex-1 text-[11px] text-slate-500 self-center">
-            Upload a file with the button next to each field, or paste an existing S3 key/URL directly.
-          </p>
+      <Section title="Media & Product Gallery (N Images)">
+        <div className="sm:col-span-2 lg:col-span-3">
+          <NImagesManager
+            images={form.images}
+            onChange={(newImgs) =>
+              setForm((f) => ({
+                ...f,
+                images: newImgs,
+                image_key: f.image_key || newImgs[0] || "",
+                thumbnail_key: f.thumbnail_key || newImgs[0] || "",
+              }))
+            }
+            primaryImage={form.image_key}
+            onSetPrimary={(url) => setForm((f) => ({ ...f, image_key: url, thumbnail_key: url }))}
+          />
         </div>
-        <ImageUploadField label="Primary Image" value={form.image_key} onChange={set("image_key")} placeholder="products/acron-beige/hero.jpg" />
-        <ImageUploadField label="Thumbnail" value={form.thumbnail_key} onChange={set("thumbnail_key")} placeholder="products/acron-beige/thumb.jpg" />
+        <ImageUploadField label="Primary Hero Image" value={form.image_key} onChange={set("image_key")} placeholder="products/acron-beige/hero.jpg" />
+        <ImageUploadField label="Thumbnail Image" value={form.thumbnail_key} onChange={set("thumbnail_key")} placeholder="products/acron-beige/thumb.jpg" />
         <ImageUploadField label="Lifestyle Image" value={form.lifestyleImage} onChange={set("lifestyleImage")} />
       </Section>
 
       <Section title="Description">
         <div className="sm:col-span-2 lg:col-span-3">
-          <label className="block text-xs font-semibold text-slate-300 mb-1">Short Description</label>
+          <label className="block text-xs font-bold text-[#111111] mb-1">Short Description</label>
           <input
             type="text"
             value={form.shortDescription}
             onChange={(e) => set("shortDescription")(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+            className="w-full bg-white border border-[#EAEAEA] rounded-xl px-3 py-2 text-xs text-[#111111] focus:outline-hidden focus:border-[#F2C202]"
           />
         </div>
         <div className="sm:col-span-2 lg:col-span-3">
-          <label className="block text-xs font-semibold text-slate-300 mb-1">Full Description</label>
+          <label className="block text-xs font-bold text-[#111111] mb-1">Full Description</label>
           <textarea
             value={form.description}
             onChange={(e) => set("description")(e.target.value)}
             rows={4}
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+            className="w-full bg-white border border-[#EAEAEA] rounded-xl px-3 py-2 text-xs text-[#111111] focus:outline-hidden focus:border-[#F2C202]"
           />
         </div>
       </Section>
@@ -463,34 +470,34 @@ export function ProductForm({ mode, product, options }: Props) {
 
       <Section title="Status">
         <div>
-          <label className="block text-xs font-semibold text-slate-300 mb-1">Lifecycle Status</label>
+          <label className="block text-xs font-bold text-[#111111] mb-1">Lifecycle Status</label>
           <select
             value={form.status}
             onChange={(e) => set("status")(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+            className="w-full bg-white border border-[#EAEAEA] rounded-xl px-3 py-2 text-xs text-[#111111] focus:outline-hidden focus:border-[#F2C202]"
           >
             <option value="ACTIVE">Active</option>
             <option value="DRAFT">Draft</option>
             <option value="ARCHIVED">Archived</option>
           </select>
         </div>
-        <div className="flex flex-col justify-end gap-2 text-xs text-slate-300">
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={form.published} onChange={(e) => set("published")(e.target.checked)} className="accent-indigo-600" />
+        <div className="flex flex-col justify-end gap-2 text-xs text-[#111111]">
+          <label className="flex items-center gap-2 cursor-pointer font-medium">
+            <input type="checkbox" checked={form.published} onChange={(e) => set("published")(e.target.checked)} className="accent-[#F2C202]" />
             Published (visible to dealers/showrooms)
           </label>
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={form.featured} onChange={(e) => set("featured")(e.target.checked)} className="accent-indigo-600" />
+          <label className="flex items-center gap-2 cursor-pointer font-medium">
+            <input type="checkbox" checked={form.featured} onChange={(e) => set("featured")(e.target.checked)} className="accent-[#F2C202]" />
             Featured
           </label>
         </div>
-        <div className="flex flex-col justify-end gap-2 text-xs text-slate-300">
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={form.designerPick} onChange={(e) => set("designerPick")(e.target.checked)} className="accent-indigo-600" />
+        <div className="flex flex-col justify-end gap-2 text-xs text-[#111111]">
+          <label className="flex items-center gap-2 cursor-pointer font-medium">
+            <input type="checkbox" checked={form.designerPick} onChange={(e) => set("designerPick")(e.target.checked)} className="accent-[#F2C202]" />
             Designer Pick
           </label>
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={form.newArrival} onChange={(e) => set("newArrival")(e.target.checked)} className="accent-indigo-600" />
+          <label className="flex items-center gap-2 cursor-pointer font-medium">
+            <input type="checkbox" checked={form.newArrival} onChange={(e) => set("newArrival")(e.target.checked)} className="accent-[#F2C202]" />
             New Arrival
           </label>
         </div>

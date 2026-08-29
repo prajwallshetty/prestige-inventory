@@ -1,5 +1,6 @@
 import { db, STOCK_TX_OPTIONS } from "../lib/db";
 import { Decimal } from "@prisma/client/runtime/library";
+import { AppError } from "../lib/permissions";
 
 /**
  * Locks an inventory row for the rest of the transaction and returns its
@@ -67,7 +68,24 @@ function generateBookingNumber(): string {
 
 export async function createBooking(input: CreateBookingInput) {
   if (input.items.length === 0) {
-    throw new Error("A booking request must contain at least one product.");
+    throw new AppError("A booking request must contain at least one product.", 400, "VALIDATION");
+  }
+
+  // A booking is always raised against a dealer/customer — unlike a Block,
+  // which may be an internal hold. Validated outside the transaction so the
+  // inventory rows below are never locked for longer than necessary.
+  if (!input.dealerId) {
+    throw new AppError("Please select a dealer for this booking.", 400, "VALIDATION");
+  }
+  const dealer = await db.dealer.findUnique({
+    where: { id: input.dealerId },
+    select: { id: true, status: true, name: true },
+  });
+  if (!dealer) {
+    throw new AppError("That dealer no longer exists.", 404, "NOT_FOUND");
+  }
+  if (dealer.status !== "ACTIVE") {
+    throw new AppError(`Dealer "${dealer.name}" is inactive.`, 400, "VALIDATION");
   }
 
   return await db.$transaction(async (tx) => {
@@ -923,11 +941,11 @@ export async function getBookingList(filters: {
   return await db.stockBooking.findMany({
     where,
     include: {
-      dealer: true,
-      warehouse: true,
+      dealer: { select: { name: true, company: true } },
+      warehouse: { select: { name: true, code: true } },
       items: {
         include: {
-          product: true,
+          product: { select: { name: true, sku: true } },
         },
       },
     },
@@ -939,13 +957,24 @@ export async function getBookingById(id: string) {
   return await db.stockBooking.findUnique({
     where: { id },
     include: {
-      dealer: true,
-      warehouse: true,
+      dealer: { select: { id: true, name: true, company: true, email: true, phone: true } },
+      warehouse: { select: { id: true, name: true, code: true } },
       items: {
         include: {
           product: {
-            include: {
-              inventory: true,
+            select: {
+              id: true,
+              name: true,
+              sku: true,
+              productCode: true,
+              importKey: true,
+              size: true,
+              brandId: true,
+              image_key: true,
+              thumbnail_key: true,
+              lifestyleImage: true,
+              textureImage: true,
+              inventory: { select: { availableStock: true } },
             },
           },
         },

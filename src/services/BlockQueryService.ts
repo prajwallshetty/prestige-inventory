@@ -161,6 +161,12 @@ const BLOCK_LIST_SELECT = {
   cancelledAt: true,
   releasedAt: true,
   showroomId: true,
+  vehicleNumber: true,
+  driverName: true,
+  driverPhone: true,
+  transporter: true,
+  expectedDeliveryAt: true,
+  shippedBy: true,
   dealer: { select: { id: true, dealerId: true, name: true, company: true } },
   showroom: { select: { id: true, name: true, city: true } },
   warehouse: { select: { id: true, name: true, code: true } },
@@ -185,13 +191,21 @@ const BLOCK_LIST_SELECT = {
 
 export type BlockListItem = Awaited<ReturnType<typeof getBlockList>>["items"][number];
 
-export async function getBlockList(filters: BlockListFilters, viewer: BlockViewer) {
+export async function getBlockList(
+  filters: BlockListFilters,
+  viewer: BlockViewer,
+  opts?: { baseStatuses?: readonly string[] }
+) {
   const limit = Math.min(Math.max(filters.limit || 20, 1), 100);
   const page = Math.max(filters.page || 1, 1);
   const skip = (page - 1) * limit;
 
+  // `baseStatuses` restricts the whole view (e.g. Shipments to the
+  // post-approval lifecycle, Transit to shipped-but-undelivered) before the
+  // tab filter narrows further within it.
   const and: any[] = [
     blockScopeClause(viewer),
+    opts?.baseStatuses ? { status: { in: [...opts.baseStatuses] } } : {},
     statusClause(filters.status),
     searchClause(filters.search),
   ];
@@ -228,14 +242,17 @@ export async function getBlockList(filters: BlockListFilters, viewer: BlockViewe
       take: limit,
     }),
     db.stockBlock.count({ where }),
-    // Tab counts respect scope but ignore the current status filter, so the
-    // tab bar keeps showing where the work is.
+    // Tab counts respect scope (and the base status restriction) but ignore
+    // the current tab's own status filter, so the tab bar keeps showing
+    // where the work is instead of collapsing to whichever tab is active.
     db.stockBlock.groupBy({
       by: ["status"],
       where: {
-        AND: [blockScopeClause(viewer), searchClause(filters.search)].filter(
-          (c) => Object.keys(c).length > 0
-        ),
+        AND: [
+          blockScopeClause(viewer),
+          opts?.baseStatuses ? { status: { in: [...opts.baseStatuses] } } : {},
+          searchClause(filters.search),
+        ].filter((c) => Object.keys(c).length > 0),
       },
       _count: { _all: true },
     }),
@@ -258,6 +275,7 @@ export async function getBlockList(filters: BlockListFilters, viewer: BlockViewe
       readyToShip: countFor(["READY_TO_SHIP"]),
       shipped: countFor(["SHIPPED", "PARTIALLY_SHIPPED"]),
       delivered: countFor(["DELIVERED", "PARTIALLY_DELIVERED"]),
+      cancelled: countFor(["CANCELLED"]),
       closed: countFor(["REJECTED", "CANCELLED", "EXPIRED", "RELEASED"]),
     },
   };
@@ -314,6 +332,12 @@ function serialiseBlock(b: any) {
     // StockBlock carries a timestamp per stage rather than one updatedAt, so
     // "last activity" is the most recent of them (§25's Updated column).
     lastActivityAt: lastActivityOf(b),
+    vehicleNumber: b.vehicleNumber ?? null,
+    driverName: b.driverName ?? null,
+    driverPhone: b.driverPhone ?? null,
+    transporter: b.transporter ?? null,
+    expectedDeliveryAt: b.expectedDeliveryAt?.toISOString() ?? null,
+    shippedBy: b.shippedBy ?? null,
     dealer: b.dealer ?? null,
     showroom: b.showroom ?? null,
     warehouse: b.warehouse ?? null,
