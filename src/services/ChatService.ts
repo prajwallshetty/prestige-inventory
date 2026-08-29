@@ -446,8 +446,62 @@ export async function getConversationDetails(
   };
 }
 
+/** Shared by getMessages and sendMessage so both send the client the same shape. */
+const MESSAGE_INCLUDE = {
+  sender: {
+    select: { id: true, name: true, email: true, role: true, avatar: true },
+  },
+  replyTo: {
+    select: {
+      id: true,
+      content: true,
+      senderId: true,
+      type: true,
+      deletedAt: true,
+      sender: { select: { name: true } },
+    },
+  },
+} as const;
+
+/** Flattens a Prisma message row (with MESSAGE_INCLUDE) into the shape the client renders. */
+function formatMessageForClient(m: any) {
+  const isDeleted = !!m.deletedAt;
+  return {
+    id: m.id,
+    conversationId: m.conversationId,
+    senderId: m.senderId,
+    senderName: m.sender?.name || "System",
+    senderRole: m.sender?.role || "SYSTEM",
+    senderAvatar: m.sender?.avatar || null,
+    type: m.type,
+    content: isDeleted ? "This message was deleted." : m.content,
+    attachmentUrl: isDeleted ? null : m.attachmentUrl,
+    attachmentKey: isDeleted ? null : m.attachmentKey,
+    attachmentName: isDeleted ? null : m.attachmentName,
+    metadata: isDeleted ? null : m.metadata ? JSON.parse(m.metadata) : null,
+    replyTo: m.replyTo
+      ? {
+          id: m.replyTo.id,
+          content: m.replyTo.deletedAt ? "This message was deleted." : m.replyTo.content,
+          senderName: m.replyTo.sender?.name || "User",
+        }
+      : null,
+    editedAt: m.editedAt,
+    deletedAt: m.deletedAt,
+    createdAt: m.createdAt,
+  };
+}
+
 /**
  * Fetches messages in a conversation (paginated, latest first).
+ *
+ * The access check and the cursor lookup run in parallel rather than serially
+ * before the messages query — the previous version called the heavy
+ * `getConversationDetails` (full participants/user/showroom include) purely to
+ * check membership, then the cursor lookup, then the messages query: up to 3
+ * serial round trips to a database ~1.5s away. A single-row membership lookup
+ * run alongside the cursor lookup, followed by the messages query, cuts that
+ * to at most 2.
  */
 export async function getMessages(
   conversationId: string,
@@ -457,18 +511,25 @@ export async function getMessages(
 ) {
   const { limit = 50, beforeId, search } = options;
 
-  // Verify access
-  await getConversationDetails(conversationId, userId, userRole);
+  const [participant, beforeMsg] = await Promise.all([
+    db.conversationParticipant.findUnique({
+      where: { conversationId_userId: { conversationId, userId } },
+      select: { id: true },
+    }),
+    beforeId
+      ? db.message.findUnique({ where: { id: beforeId }, select: { createdAt: true } })
+      : Promise.resolve(null),
+  ]);
 
-  const whereClause: any = { conversationId };
-
-  if (beforeId) {
-    const beforeMsg = await db.message.findUnique({ where: { id: beforeId }, select: { createdAt: true } });
-    if (beforeMsg) {
-      whereClause.createdAt = { lt: beforeMsg.createdAt };
-    }
+  const isSuperAdmin = userRole === "SUPER_ADMIN";
+  if (!participant && !isSuperAdmin) {
+    throw new Error("Unauthorized to access this conversation");
   }
 
+  const whereClause: any = { conversationId };
+  if (beforeMsg) {
+    whereClause.createdAt = { lt: beforeMsg.createdAt };
+  }
   if (search && search.trim().length > 0) {
     whereClause.content = { contains: search.trim(), mode: "insensitive" };
   }
@@ -477,54 +538,27 @@ export async function getMessages(
     where: whereClause,
     orderBy: { createdAt: "desc" },
     take: limit + 1, // +1 to check hasMore
-    include: {
-      sender: {
-        select: { id: true, name: true, email: true, role: true, avatar: true },
-      },
-      replyTo: {
-        select: {
-          id: true,
-          content: true,
-          senderId: true,
-          type: true,
-          deletedAt: true,
-          sender: { select: { name: true } },
-        },
-      },
-    },
+    include: MESSAGE_INCLUDE,
   });
 
   const hasMore = messages.length > limit;
   const resultMessages = hasMore ? messages.slice(0, limit) : messages;
+  const formatted = resultMessages.map(formatMessageForClient);
 
-  // Format messages (mask soft-deleted content for non-admins)
-  const formatted = resultMessages.map((m) => {
-    const isDeleted = !!m.deletedAt;
-    return {
-      id: m.id,
-      conversationId: m.conversationId,
-      senderId: m.senderId,
-      senderName: m.sender?.name || "System",
-      senderRole: m.sender?.role || "SYSTEM",
-      senderAvatar: m.sender?.avatar || null,
-      type: m.type,
-      content: isDeleted ? "This message was deleted." : m.content,
-      attachmentUrl: isDeleted ? null : m.attachmentUrl,
-      attachmentKey: isDeleted ? null : m.attachmentKey,
-      attachmentName: isDeleted ? null : m.attachmentName,
-      metadata: isDeleted ? null : m.metadata ? JSON.parse(m.metadata) : null,
-      replyTo: m.replyTo
-        ? {
-            id: m.replyTo.id,
-            content: m.replyTo.deletedAt ? "This message was deleted." : m.replyTo.content,
-            senderName: m.replyTo.sender?.name || "User",
-          }
-        : null,
-      editedAt: m.editedAt,
-      deletedAt: m.deletedAt,
-      createdAt: m.createdAt,
-    };
-  });
+  // Administrative (non-participant) view — fire-and-forget, must not block
+  // the response the way a serial pre-check did.
+  if (isSuperAdmin && !participant) {
+    db.chatAudit
+      .create({
+        data: {
+          conversationId,
+          actingUserId: userId,
+          action: "ADMINISTRATIVE_VIEW",
+          details: JSON.stringify({ note: "Super Admin accessed non-participant conversation" }),
+        },
+      })
+      .catch(() => {});
+  }
 
   // Return chronologically for renderer (oldest at top, newest at bottom)
   return {
@@ -536,6 +570,13 @@ export async function getMessages(
 
 /**
  * Sends a message in a conversation.
+ *
+ * Idempotent on `clientMessageId`: a retried send (double-click, network
+ * retry, reconnect replay) reuses the same key, and this returns the row that
+ * already exists instead of inserting a second one. That check — plus the
+ * `client_message_id` unique index catching a same-instant race — is what
+ * actually prevents duplicates; client-side dedup only hides the problem in
+ * the sender's own tab.
  */
 export async function sendMessage(input: SendMessageInput) {
   const {
@@ -549,12 +590,21 @@ export async function sendMessage(input: SendMessageInput) {
     replyToId,
     metadata,
     userRole,
+    clientMessageId,
   } = input;
 
   if (!content || content.trim().length === 0) {
     if (!attachmentUrl) {
       throw new Error("Message content or attachment is required");
     }
+  }
+
+  if (clientMessageId) {
+    const existing = await db.message.findUnique({
+      where: { clientMessageId },
+      include: MESSAGE_INCLUDE,
+    });
+    if (existing) return formatMessageForClient(existing);
   }
 
   // Check authorization
@@ -570,58 +620,64 @@ export async function sendMessage(input: SendMessageInput) {
     throw new Error("You are not a participant in this conversation");
   }
 
-  // Create message
   const now = new Date();
-  const message = await db.message.create({
-    data: {
-      conversationId,
-      senderId,
-      type,
-      content: content ? content.trim() : attachmentName || "Attachment",
-      attachmentUrl: attachmentUrl || null,
-      attachmentKey: attachmentKey || null,
-      attachmentName: attachmentName || null,
-      replyToId: replyToId || null,
-      metadata: metadata || null,
-    },
-    include: {
-      sender: { select: { id: true, name: true, email: true, role: true, avatar: true } },
-      replyTo: {
-        select: {
-          id: true,
-          content: true,
-          sender: { select: { name: true } },
-        },
+  let message;
+  try {
+    message = await db.message.create({
+      data: {
+        conversationId,
+        senderId,
+        type,
+        content: content ? content.trim() : attachmentName || "Attachment",
+        attachmentUrl: attachmentUrl || null,
+        attachmentKey: attachmentKey || null,
+        attachmentName: attachmentName || null,
+        replyToId: replyToId || null,
+        metadata: metadata || null,
+        clientMessageId: clientMessageId || null,
       },
-    },
-  });
-
-  // Update conversation lastMessageAt
-  await db.conversation.update({
-    where: { id: conversationId },
-    data: { lastMessageAt: now, updatedAt: now },
-  });
-
-  // Update sender's lastReadAt
-  if (isParticipant) {
-    await db.conversationParticipant.update({
-      where: { conversationId_userId: { conversationId, userId: senderId } },
-      data: { lastReadAt: now },
+      include: MESSAGE_INCLUDE,
     });
+  } catch (err: any) {
+    // Another request for the same clientMessageId won the unique-constraint
+    // race between our pre-check and this insert — return that row.
+    if (err?.code === "P2002" && clientMessageId) {
+      const existing = await db.message.findUnique({ where: { clientMessageId }, include: MESSAGE_INCLUDE });
+      if (existing) return formatMessageForClient(existing);
+    }
+    throw err;
   }
 
-  // Log audit
-  await db.chatAudit.create({
-    data: {
-      conversationId,
-      actingUserId: senderId,
-      action: "MESSAGE_SENT",
-      details: JSON.stringify({ messageId: message.id, type }),
-    },
-  });
+  // Conversation bump, sender's read receipt and the audit log touch
+  // independent rows — running them together instead of three serial awaits
+  // cuts ~2 round trips off every send on a database this far away.
+  await Promise.all([
+    db.conversation.update({
+      where: { id: conversationId },
+      data: { lastMessageAt: now, updatedAt: now },
+    }),
+    isParticipant
+      ? db.conversationParticipant.update({
+          where: { conversationId_userId: { conversationId, userId: senderId } },
+          data: { lastReadAt: now },
+        })
+      : Promise.resolve(),
+    db.chatAudit.create({
+      data: {
+        conversationId,
+        actingUserId: senderId,
+        action: "MESSAGE_SENT",
+        details: JSON.stringify({ messageId: message.id, type }),
+      },
+    }),
+  ]);
+
+  const formatted = formatMessageForClient(message);
 
   // Realtime fan-out to every other participant (best-effort; Postgres remains
-  // the source of truth and the client polls as a fallback when Redis is absent).
+  // the source of truth and the client falls back to a fetch if this payload
+  // never arrives). The full formatted message rides along so subscribers can
+  // append it directly instead of a follow-up fetch.
   await Promise.all(
     conv.participants
       .filter((p) => p.userId !== senderId)
@@ -630,12 +686,13 @@ export async function sendMessage(input: SendMessageInput) {
           action: "NEW_MESSAGE",
           conversationId,
           messageId: message.id,
-          clientMessageId: input.clientMessageId,
+          clientMessageId,
+          message: formatted,
         })
       )
   );
 
-  return message;
+  return formatted;
 }
 
 /**

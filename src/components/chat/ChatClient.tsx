@@ -25,6 +25,7 @@ import {
   ArrowDown,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useChatStream } from "@/hooks/useChatStream";
 
 function formatMessageTime(value: string | Date): string {
   return new Date(value).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" });
@@ -81,17 +82,31 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
   const [groupName, setGroupName] = useState("");
   const [groupDescription, setGroupDescription] = useState("");
 
+  // Realtime connection status, surfaced as a "Reconnecting..." indicator.
+  const [sseStatus, setSseStatus] = useState<"connecting" | "connected" | "disconnected">("connecting");
+
   // Refs
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activeIdRef = useRef<string | null>(activeId);
   const isInitialMount = useRef(true);
+  const conversationsRef = useRef<any[]>(conversations);
+  // Per-conversation cache: switching back to an already-open conversation
+  // renders instantly from here while a background fetch revalidates it,
+  // instead of always blocking on the network.
+  const cacheRef = useRef<Map<string, { messages: any[]; hasMore: boolean; nextBeforeId: string | null; conv: any }>>(
+    new Map()
+  );
 
   // Sync activeIdRef
   useEffect(() => {
     activeIdRef.current = activeId;
   }, [activeId]);
+
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
 
   // Debounce search query
   useEffect(() => {
@@ -120,10 +135,24 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
     fetchConversations();
   }, [fetchConversations]);
 
-  // Fetch initial messages for active conversation
+  // Fetch messages for a conversation — cache-first, then background revalidate.
+  // Switching back to an already-open conversation shows its cached state
+  // immediately instead of blanking behind a spinner while the network catches up.
   const fetchMessages = useCallback(async (convId: string) => {
-    setLoadingMessages(true);
-    setShowNewMessageBadge(false);
+    const cached = cacheRef.current.get(convId);
+
+    if (cached) {
+      setMessages(cached.messages);
+      setHasMore(cached.hasMore);
+      setNextBeforeId(cached.nextBeforeId);
+      setActiveConv(cached.conv);
+      setShowNewMessageBadge(false);
+      setTimeout(() => scrollToBottom("auto"), 0);
+    } else {
+      setLoadingMessages(true);
+      setShowNewMessageBadge(false);
+    }
+
     try {
       const [res, detailsRes] = await Promise.all([
         fetch(`/api/v1/chat/conversations/${convId}/messages?limit=40`),
@@ -131,25 +160,39 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
       ]);
       fetch(`/api/v1/chat/conversations/${convId}/read`, { method: "POST" }).catch(() => {});
 
+      let nextMessages = cached?.messages ?? [];
+      let nextHasMore = cached?.hasMore ?? false;
+      let nextBefore = cached?.nextBeforeId ?? null;
+      let nextConv = cached?.conv ?? null;
+
       if (res.ok) {
         const json = await res.json();
         if (json.success) {
-          setMessages(json.messages || []);
-          setHasMore(!!json.hasMore);
-          setNextBeforeId(json.nextBeforeId || null);
+          nextMessages = json.messages || [];
+          nextHasMore = !!json.hasMore;
+          nextBefore = json.nextBeforeId || null;
         }
       }
       if (detailsRes.ok) {
         const dJson = await detailsRes.json();
-        if (dJson.success) {
-          setActiveConv(dJson.data);
-        }
+        if (dJson.success) nextConv = dJson.data;
+      }
+
+      cacheRef.current.set(convId, { messages: nextMessages, hasMore: nextHasMore, nextBeforeId: nextBefore, conv: nextConv });
+
+      // The user may have switched away again while this was in flight —
+      // only touch visible state if they're still looking at this conversation.
+      if (activeIdRef.current === convId) {
+        setMessages(nextMessages);
+        setHasMore(nextHasMore);
+        setNextBeforeId(nextBefore);
+        setActiveConv(nextConv);
+        if (!cached) setTimeout(() => scrollToBottom("auto"), 50);
       }
     } catch (err) {
-      toast.error("Failed loading messages");
+      if (!cached) toast.error("Failed loading messages");
     } finally {
-      setLoadingMessages(false);
-      setTimeout(() => scrollToBottom("auto"), 50);
+      if (activeIdRef.current === convId) setLoadingMessages(false);
     }
   }, []);
 
@@ -209,55 +252,9 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
     setShowNewMessageBadge(false);
   };
 
-  // Single persistent Realtime SSE stream setup
-  useEffect(() => {
-    let es: EventSource | null = null;
-    let reconnectTimer: NodeJS.Timeout | null = null;
-
-    const connectSSE = () => {
-      try {
-        es = new EventSource("/api/v1/chat/stream");
-        es.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-
-            if (data.action === "NEW_MESSAGE") {
-              fetchConversations();
-              const currentActiveId = activeIdRef.current;
-
-              if (currentActiveId && data.conversationId === currentActiveId) {
-                // If message event arrives, fetch fresh message list or append if missing
-                fetchSingleNewMessage(currentActiveId, data.messageId, data.clientMessageId);
-              }
-            } else if (data.action === "CONVERSATION_UPDATED" || data.action === "UNREAD_UPDATE") {
-              fetchConversations();
-            }
-          } catch {}
-        };
-
-        es.onerror = () => {
-          if (es) es.close();
-          // Automatic silent reconnect after 5s if disconnected
-          reconnectTimer = setTimeout(connectSSE, 5000);
-        };
-      } catch {}
-    };
-
-    connectSSE();
-
-    // Secondary background polling fallback (every 20s)
-    const interval = setInterval(() => {
-      fetchConversations();
-    }, 20000);
-
-    return () => {
-      clearInterval(interval);
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (es) es.close();
-    };
-  }, [fetchConversations]);
-
-  // Fetch single new message or update messages feed incrementally
+  // Fallback path only: used when a NEW_MESSAGE event arrives without its
+  // message payload attached (defensive — the server always includes one
+  // today). Refetches just the last page instead of the whole conversation.
   const fetchSingleNewMessage = async (convId: string, messageId?: string, clientMsgId?: string) => {
     try {
       const res = await fetch(`/api/v1/chat/conversations/${convId}/messages?limit=10`);
@@ -272,15 +269,18 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
         : true;
 
       setMessages((prev) => {
-        // Merge without duplicating IDs or clientMessageIds
         const existingIds = new Set(prev.map((m) => m.id));
         const newToAdd = freshMessages.filter(
           (m) => !existingIds.has(m.id) && (!clientMsgId || m.clientMessageId !== clientMsgId)
         );
-
         if (newToAdd.length === 0) return prev;
-
         const updated = [...prev, ...newToAdd];
+        cacheRef.current.set(convId, {
+          messages: updated,
+          hasMore: cacheRef.current.get(convId)?.hasMore ?? false,
+          nextBeforeId: cacheRef.current.get(convId)?.nextBeforeId ?? null,
+          conv: cacheRef.current.get(convId)?.conv ?? null,
+        });
         return updated;
       });
 
@@ -293,6 +293,121 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
       }
     } catch {}
   };
+
+  // Patches the conversation list in place from a realtime message payload —
+  // no network round trip for the common case of "a message arrived for a
+  // conversation already in the loaded list".
+  const patchConversationFromMessage = useCallback((conversationId: string, message: any, isActive: boolean) => {
+    setConversations((prev) => {
+      const idx = prev.findIndex((c) => c.id === conversationId);
+      if (idx === -1) return prev;
+      const existing = prev[idx];
+      const updated = {
+        ...existing,
+        lastMessageAt: message.createdAt,
+        lastMessage: {
+          id: message.id,
+          content: message.content,
+          type: message.type,
+          senderId: message.senderId,
+          senderName: message.senderName,
+          createdAt: message.createdAt,
+        },
+        unreadCount: isActive ? existing.unreadCount || 0 : (existing.unreadCount || 0) + 1,
+      };
+      const next = prev.slice();
+      next.splice(idx, 1);
+      next.unshift(updated);
+      return next;
+    });
+  }, []);
+
+  // Single shared realtime handler — the underlying EventSource connection is
+  // shared across every mounted chat-aware component (see useChatStream), so
+  // this only ever runs once per event per tab regardless of how many
+  // components (this one, the sidebar's unread badge) are listening.
+  const handleStreamMessage = useCallback(
+    (data: any) => {
+      if (data.action === "NEW_MESSAGE") {
+        const currentActiveId = activeIdRef.current;
+        const isActive = !!currentActiveId && data.conversationId === currentActiveId;
+        const message = data.message;
+
+        if (message && isActive) {
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === message.id || (data.clientMessageId && m.id === data.clientMessageId))) {
+              return prev;
+            }
+            const updated = [...prev, message];
+            const cached = cacheRef.current.get(currentActiveId!);
+            cacheRef.current.set(currentActiveId!, {
+              messages: updated,
+              hasMore: cached?.hasMore ?? false,
+              nextBeforeId: cached?.nextBeforeId ?? null,
+              conv: cached?.conv ?? null,
+            });
+            return updated;
+          });
+
+          const container = messagesContainerRef.current;
+          const isNearBottom = container
+            ? container.scrollHeight - container.scrollTop - container.clientHeight < 150
+            : true;
+          if (isNearBottom) setTimeout(() => scrollToBottom("smooth"), 80);
+          else setShowNewMessageBadge(true);
+
+          fetch(`/api/v1/chat/conversations/${currentActiveId}/read`, { method: "POST" }).catch(() => {});
+        } else if (!message && isActive && currentActiveId) {
+          fetchSingleNewMessage(currentActiveId, data.messageId, data.clientMessageId);
+        }
+
+        const inList = conversationsRef.current.some((c) => c.id === data.conversationId);
+        if (inList && message) {
+          patchConversationFromMessage(data.conversationId, message, isActive);
+        } else {
+          // Unknown conversation (new, or list not loaded yet) — this is the
+          // only case that still needs a full refetch.
+          fetchConversations();
+        }
+      } else if (data.action === "CONVERSATION_UPDATED" || data.action === "UNREAD_UPDATE") {
+        fetchConversations();
+      }
+    },
+    [fetchConversations, patchConversationFromMessage]
+  );
+
+  useChatStream(handleStreamMessage, setSseStatus);
+
+  // After a reconnect, resync rather than trust that every event fired while
+  // disconnected was delivered — refresh the conversation list and, if a
+  // conversation is open, replace its message state with the server's latest
+  // page (not appended, so nothing already-shown can be duplicated).
+  const wasDisconnectedRef = useRef(false);
+  useEffect(() => {
+    if (sseStatus === "disconnected") {
+      wasDisconnectedRef.current = true;
+      return;
+    }
+    if (sseStatus === "connected" && wasDisconnectedRef.current) {
+      wasDisconnectedRef.current = false;
+      fetchConversations();
+      const openId = activeIdRef.current;
+      if (openId) {
+        cacheRef.current.delete(openId);
+        fetchMessages(openId);
+      }
+    }
+  }, [sseStatus, fetchConversations, fetchMessages]);
+
+  // Long-interval safety net only — SSE (with its own reconnect) is now the
+  // primary channel; this used to be the only mechanism and ran every 20s
+  // regardless of connection health.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchConversations();
+    }, 90000);
+    return () => clearInterval(interval);
+  }, [fetchConversations]);
 
   // Change Active Conversation
   useEffect(() => {
@@ -380,31 +495,28 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
         throw new Error(json.error || "Failed to send message");
       }
 
-      // Replace optimistic message with confirmed server message
+      // Replace optimistic message with confirmed server message. `sendMessage`
+      // returns the same flattened shape getMessages does, so this is a
+      // direct substitution rather than a field-by-field remap.
       const serverMsg = json.data;
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === clientMsgId
-            ? {
-                id: serverMsg.id,
-                conversationId: serverMsg.conversationId,
-                senderId: serverMsg.senderId,
-                senderName: serverMsg.sender?.name || session.name || "Me",
-                senderRole: serverMsg.sender?.role || session.role,
-                type: serverMsg.type,
-                content: serverMsg.content,
-                attachmentUrl: serverMsg.attachmentUrl,
-                attachmentName: serverMsg.attachmentName,
-                replyTo: serverMsg.replyTo
-                  ? { id: serverMsg.replyTo.id, content: serverMsg.replyTo.content, senderName: serverMsg.replyTo.sender?.name }
-                  : null,
-                createdAt: serverMsg.createdAt,
-                isOptimistic: false,
-                status: "sent",
-              }
-            : m
-        )
-      );
+      const confirmed = {
+        ...serverMsg,
+        senderName: serverMsg.senderName || session.name || "Me",
+        senderRole: serverMsg.senderRole || session.role,
+        isOptimistic: false,
+        status: "sent",
+      };
+      setMessages((prev) => {
+        const updated = prev.map((m) => (m.id === clientMsgId ? confirmed : m));
+        const cached = cacheRef.current.get(activeId);
+        cacheRef.current.set(activeId, {
+          messages: updated,
+          hasMore: cached?.hasMore ?? false,
+          nextBeforeId: cached?.nextBeforeId ?? null,
+          conv: cached?.conv ?? null,
+        });
+        return updated;
+      });
 
       setSendState("idle");
       setLastFailedPayload(null);
@@ -599,6 +711,14 @@ export function ChatClient({ session, initialConversations = [], initialActiveId
             )}
           </div>
         </div>
+
+        {/* Realtime connection status */}
+        {sseStatus === "disconnected" && (
+          <div className="flex items-center gap-2 bg-amber-50 border-b border-amber-200 px-4 py-1.5 text-[11px] font-semibold text-amber-800">
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
+            Reconnecting...
+          </div>
+        )}
 
         {/* Search & Filter */}
         <div className="p-3 space-y-2 border-b border-[#EAEAEA]">

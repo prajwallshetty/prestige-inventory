@@ -1441,6 +1441,18 @@ model StockBlock {
   cancelledAt   DateTime?
   deliveredAt   DateTime?
 
+  /// Captured on the ship action. Vehicle number is mandatory in the ship
+  /// form; the rest are optional logistics detail.
+  vehicleNumber      String?
+  driverName         String?
+  driverPhone        String?
+  transporter        String?
+  expectedDeliveryAt DateTime?
+  /// Display name of whoever performed the ship action — mirrors
+  /// approvedBy/requestedBy so the shipment list can render it without an
+  /// extra join to AuditLog.
+  shippedBy          String?
+
   @@index([inventoryId])
   @@index([productId])
   @@index([dealerId])
@@ -1453,6 +1465,7 @@ model StockBlock {
   @@index([status, createdAt])
   @@index([showroomId, status])
   @@index([status, expiresAt])
+  @@index([vehicleNumber])
 }
 
 model InventoryMovement {
@@ -1735,7 +1748,12 @@ model Message {
   attachmentUrl  String?      @map("attachment_url")
   attachmentKey  String?      @map("attachment_key")
   attachmentName String?      @map("attachment_name")
-  
+
+  /// Client-generated idempotency key. A retried send (double-click, network
+  /// retry, reconnect replay) reuses the same key, so `sendMessage` can look
+  /// it up and return the existing row instead of inserting a duplicate.
+  clientMessageId String?     @unique @map("client_message_id")
+
   replyToId      String?      @map("reply_to_id")
   replyTo        Message?     @relation("MessageReplies", fields: [replyToId], references: [id], onDelete: SetNull)
   replies        Message[]    @relation("MessageReplies")

@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { MessageSquare } from "lucide-react";
+import { useChatStream } from "@/hooks/useChatStream";
 
 interface Props {
   role?: string;
@@ -12,7 +13,7 @@ interface Props {
 export function ChatHeaderBadge({ initialUnreadCount = 0 }: Props) {
   const [unreadCount, setUnreadCount] = useState(initialUnreadCount);
 
-  const fetchUnread = async () => {
+  const fetchUnread = useCallback(async () => {
     try {
       const res = await fetch("/api/v1/chat/unread-count");
       if (res.ok) {
@@ -24,30 +25,28 @@ export function ChatHeaderBadge({ initialUnreadCount = 0 }: Props) {
     } catch {
       // Ignore network errors silently for badge
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchUnread();
-    const interval = setInterval(fetchUnread, 12000);
+    // Long-interval safety net — the shared SSE stream below is the primary
+    // signal now, this just covers a dropped/undelivered event.
+    const interval = setInterval(fetchUnread, 60000);
+    return () => clearInterval(interval);
+  }, [fetchUnread]);
 
-    let es: EventSource | null = null;
-    try {
-      es = new EventSource("/api/v1/chat/stream");
-      es.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.action === "NEW_MESSAGE" || data.action === "UNREAD_UPDATE") {
-            fetchUnread();
-          }
-        } catch {}
-      };
-    } catch {}
-
-    return () => {
-      clearInterval(interval);
-      if (es) es.close();
-    };
-  }, []);
+  // Shares one EventSource connection with ChatClient (when the chat page is
+  // also mounted) instead of opening a second one — see useChatStream.
+  useChatStream(
+    useCallback(
+      (data) => {
+        if (data.action === "NEW_MESSAGE" || data.action === "UNREAD_UPDATE") {
+          fetchUnread();
+        }
+      },
+      [fetchUnread]
+    )
+  );
 
   return (
     <Link
