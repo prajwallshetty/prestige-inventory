@@ -873,10 +873,14 @@ export async function fulfillBookingStock({
 
 // Queries for dashboards
 
-export async function getBookingSummary(filters: { dealerId?: string; warehouseId?: string } = {}) {
+export async function getBookingSummary(filters: { dealerId?: string; warehouseId?: string; requestedBy?: string } = {}) {
   const where: any = {};
   if (filters.dealerId) where.dealerId = filters.dealerId;
   if (filters.warehouseId) where.warehouseId = filters.warehouseId;
+  // Route audit finding: a showroom role's summary counts must match the
+  // scoping already applied to the list below it (requestedBy is the only
+  // scoping key available — StockBooking carries no showroomId column).
+  if (filters.requestedBy) where.requestedBy = filters.requestedBy;
 
   const [activeCount, pendingCount, expiringCount, confirmedCount, cancelledCount, rejectedCount] = await Promise.all([
     db.stockBooking.count({ where: { ...where, status: "APPROVED" } }),

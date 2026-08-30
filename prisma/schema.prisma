@@ -711,6 +711,7 @@ model Showroom {
   googlePosts  GooglePost[]
   users        User[]
   stockBlocks  StockBlock[]
+  blockOrders  BlockOrder[]
   dealers      Dealer[]
 
   createdById String?
@@ -1236,6 +1237,7 @@ model Warehouse {
   inventories        Inventory[]
   inventoryMovements InventoryMovement[]
   stockBlocks        StockBlock[]
+  blockOrders        BlockOrder[]
   shipments          Shipment[]
   stockBookings      StockBooking[]
   users              User[]
@@ -1277,6 +1279,7 @@ model Dealer {
   updatedAt   DateTime @updatedAt
 
   stockBlocks StockBlock[]
+  blockOrders BlockOrder[]
   stockBookings StockBooking[]
   users         User[]
 
@@ -1394,6 +1397,46 @@ model BlockNumberSequence {
   updatedAt DateTime @updatedAt
 }
 
+/// A multi-product order (spec: "multi-product blocking"). One BlockOrder
+/// groups several StockBlock rows — one per product/quantity line — so a
+/// showroom can submit "50 boxes of Tile A + 100 of Tile B" as a single
+/// submission that moves through approval as one unit, while every existing
+/// per-item mechanic (stock reservation, shortage, procurement link,
+/// shipping, delivery) stays exactly what it already is on StockBlock.
+/// Nullable `StockBlock.blockOrderId` keeps every historical single-product
+/// block (and any block created through the older single-item action) fully
+/// backward compatible — they simply have no parent order.
+model BlockOrder {
+  id          String @id @default(cuid())
+  /// Same format/sequence as StockBlock.block_number (BLK-YYYY-NNNNNN) — one
+  /// numbering scheme whether an order has one item or ten.
+  orderNumber String @unique
+
+  dealerId    String?
+  dealer      Dealer?    @relation(fields: [dealerId], references: [id], onDelete: SetNull)
+  showroomId  String?
+  showroom    Showroom?  @relation(fields: [showroomId], references: [id], onDelete: SetNull)
+  warehouseId String?
+  warehouse   Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+
+  requestedBy   String
+  createdById   String?
+  createdRole   String?
+  approvalRoute String  @default("DIRECT") // DIRECT | INCHARGE
+  remarks       String?
+
+  createdAt DateTime  @default(now())
+  expiresAt DateTime?
+
+  items StockBlock[]
+
+  @@index([showroomId])
+  @@index([dealerId])
+  @@index([warehouseId])
+  @@index([createdById])
+  @@index([createdAt])
+}
+
 model StockBlock {
   id            String    @id @default(cuid())
   block_number  String?   @unique
@@ -1401,6 +1444,10 @@ model StockBlock {
   productId     String
   inventoryId   String
   inventory     Inventory @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+  /// Set when this item is a line of a multi-product BlockOrder; null for a
+  /// standalone single-product block (spec — existing blocks unaffected).
+  blockOrderId  String?
+  blockOrder    BlockOrder? @relation(fields: [blockOrderId], references: [id], onDelete: Cascade)
   warehouseId   String?
   warehouse     Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
   dealerId      String?
@@ -1483,6 +1530,7 @@ model StockBlock {
   @@index([vehicleNumber])
   @@index([shortageQuantity])
   @@index([procurementShipmentItemId])
+  @@index([blockOrderId])
 }
 
 model InventoryMovement {

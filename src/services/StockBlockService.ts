@@ -276,7 +276,7 @@ export async function recordMovement(
  * Runs inside the caller's transaction and relies on an atomic upsert+increment,
  * so two concurrent creations can never receive the same number.
  */
-async function nextBlockNumber(tx: any): Promise<string> {
+export async function nextBlockNumber(tx: any): Promise<string> {
   const year = new Date().getFullYear();
   const row = await tx.blockNumberSequence.upsert({
     where: { year },

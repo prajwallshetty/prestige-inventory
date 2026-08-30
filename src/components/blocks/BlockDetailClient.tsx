@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useRef, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "@/lib/toast";
 import { isOffline, OFFLINE_MESSAGE } from "@/lib/offline";
@@ -191,6 +192,14 @@ export function BlockDetailClient({ session, block, audit }: Props) {
               {block.shortageQuantity > 0 && ` · ${block.shortageQuantity} need procurement`}
               {block.expiresAt && ` · expires ${fmt(block.expiresAt)}`}
             </p>
+            {block.blockOrder && (
+              <Link
+                href={`/blocks/order/${block.blockOrder.id}`}
+                className="mt-1 inline-block text-[10px] font-bold text-indigo-600 hover:underline"
+              >
+                Part of order {block.blockOrder.orderNumber} — view all products →
+              </Link>
+            )}
           </div>
           <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase ${statusStyle(status)}`}>
             {status.replace(/_/g, " ")}

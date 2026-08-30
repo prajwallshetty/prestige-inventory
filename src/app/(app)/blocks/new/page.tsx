@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { getEffectiveSession } from "@/lib/auth";
 import { canCreateBlock, type Role } from "@/lib/permissions";
-import { CreateBlockForm } from "@/components/blocks/CreateBlockForm";
+import { MultiProductBlockForm } from "@/components/blocks/MultiProductBlockForm";
 
 export const revalidate = 0;
 
@@ -39,11 +39,11 @@ export default async function NewBlockPage() {
       <div>
         <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-[#111111]">Create Stock Block</h1>
         <p className="text-xs text-[#6B6B6B]">
-          Reserve stock against a product. Physical stock is not reduced until shipment.
+          Reserve stock for one or more products in a single submission. Physical stock is not reduced until shipment.
         </p>
       </div>
 
-      <CreateBlockForm
+      <MultiProductBlockForm
         dealers={dealers}
         showroomName={showroom?.name ?? null}
         createdByName={session.name}

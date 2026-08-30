@@ -147,6 +147,10 @@ const BLOCK_LIST_SELECT = {
   procurementShipmentItem: {
     select: { id: true, status: true, shipment: { select: { id: true, shipmentNumber: true, status: true } } },
   },
+  // Multi-product order this line belongs to, if any (spec — multi-product
+  // blocking). Null for a standalone single-product block.
+  blockOrderId: true,
+  blockOrder: { select: { id: true, orderNumber: true } },
   requestedBy: true,
   createdById: true,
   createdRole: true,
@@ -326,6 +330,7 @@ function serialiseBlock(b: any) {
         : null,
     }),
     procurementShipment: b.procurementShipmentItem?.shipment ?? null,
+    blockOrder: b.blockOrder ?? null,
     requestedBy: b.requestedBy,
     createdById: b.createdById,
     createdRole: b.createdRole,

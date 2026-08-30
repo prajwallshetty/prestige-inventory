@@ -37,6 +37,7 @@ export default async function BlockDetailPage({
           product: { select: { id: true, name: true, sku: true, productCode: true, importKey: true, size: true, brand: { select: { name: true } } } },
         },
       },
+      blockOrder: { select: { id: true, orderNumber: true } },
       procurementShipmentItem: {
         select: {
           id: true,
@@ -110,6 +111,7 @@ export default async function BlockDetailPage({
               : null,
           }),
           procurementShipment: block.procurementShipmentItem?.shipment ?? null,
+          blockOrder: block.blockOrder ?? null,
           remarks: block.remarks,
           approvalRoute: block.approvalRoute,
           requestedBy: block.requestedBy,

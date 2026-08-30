@@ -49,6 +49,7 @@ import {
   canReviewBooking,
   canViewAuditLogs,
   isRole,
+  isShowroomScoped,
   ROLES,
   type Role,
 } from "@/lib/permissions";
@@ -315,6 +316,105 @@ export async function createBlockFromFormAction(input: {
       status: block.status,
       quantity: block.quantity,
     };
+  });
+}
+
+/**
+ * Multi-product order creation — one submission, many product/quantity
+ * lines, created atomically as a BlockOrder + its StockBlock line items.
+ */
+export async function createMultiProductBlockAction(input: {
+  items: Array<{ productId: string; quantity: number }>;
+  dealerId?: string;
+  remarks?: string;
+  durationHours?: number;
+}): Promise<ActionResult<{ orderId: string; orderNumber: string; itemCount: number }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    assertPermission(canCreateBlock(user.role), "Your role cannot create stock blocks.");
+
+    const { createMultiProductBlockRequest } = await import("@/services/BlockOrderService");
+    const result = await createMultiProductBlockRequest({
+      items: input.items,
+      dealerId: input.dealerId || undefined,
+      showroomId: scopedShowroomId(user),
+      remarks: input.remarks,
+      durationHours: input.durationHours ?? 48,
+      requestedBy: user.name,
+      createdById: user.userId,
+      userRole: user.role,
+    });
+
+    revalidateBlockViews();
+    return { orderId: result.order.id, orderNumber: result.order.orderNumber, itemCount: result.items.length };
+  });
+}
+
+export interface OrderItemActionOutcome {
+  blockId: string;
+  blockNumber: string | null;
+  ok: boolean;
+  error?: string;
+}
+
+export async function approveBlockOrderAction(
+  orderId: string
+): Promise<ActionResult<{ orderNumber: string; results: OrderItemActionOutcome[] }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const { approveBlockOrder } = await import("@/services/BlockOrderService");
+    const { order, results } = await approveBlockOrder({
+      orderId,
+      approvedBy: user.name,
+      approvedById: user.userId,
+      role: user.role,
+      actorShowroomId: user.showroomId,
+    });
+
+    revalidateBlockViews();
+    return { orderNumber: order.orderNumber, results };
+  });
+}
+
+export async function rejectBlockOrderAction(
+  orderId: string,
+  reason: string
+): Promise<ActionResult<{ orderNumber: string; results: OrderItemActionOutcome[] }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const { rejectBlockOrder } = await import("@/services/BlockOrderService");
+    const { order, results } = await rejectBlockOrder({
+      orderId,
+      rejectedBy: user.name,
+      rejectedById: user.userId,
+      role: user.role,
+      actorShowroomId: user.showroomId,
+      reason,
+    });
+
+    revalidateBlockViews();
+    return { orderNumber: order.orderNumber, results };
+  });
+}
+
+export async function cancelBlockOrderAction(
+  orderId: string,
+  reason?: string
+): Promise<ActionResult<{ orderNumber: string; results: OrderItemActionOutcome[] }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const { cancelBlockOrder } = await import("@/services/BlockOrderService");
+    const { order, results } = await cancelBlockOrder({
+      orderId,
+      performedBy: user.name,
+      performedById: user.userId,
+      role: user.role,
+      actorShowroomId: user.showroomId,
+      reason,
+    });
+
+    revalidateBlockViews();
+    return { orderNumber: order.orderNumber, results };
   });
 }
 
@@ -886,8 +986,14 @@ export async function getInventoryReportDataAction() {
 }
 
 export async function getBlocksReportDataAction() {
-  await requireReportAccess();
+  const session = await requireReportAccess();
+  // Route audit finding: this export bypassed the showroom scoping every
+  // other block view enforces (blockScopeClause), letting a showroom
+  // role CSV-export blocks from every showroom. Same scope rule as the
+  // /blocks list.
+  const where = isShowroomScoped(session.role as Role) ? { showroomId: session.showroomId ?? "__none__" } : {};
   return db.stockBlock.findMany({
+    where,
     select: {
       id: true,
       block_number: true,
@@ -908,8 +1014,12 @@ export async function getBlocksReportDataAction() {
 }
 
 export async function getBookingsReportDataAction() {
-  await requireReportAccess();
+  const session = await requireReportAccess();
+  // Same scope rule the /bookings list uses (BookingService keys showroom
+  // roles off requestedBy, since StockBooking has no showroomId column).
+  const where = isShowroomScoped(session.role as Role) ? { requestedBy: session.name } : {};
   return db.stockBooking.findMany({
+    where,
     include: {
       dealer: { select: { name: true } },
       warehouse: { select: { name: true } },
@@ -921,7 +1031,12 @@ export async function getBookingsReportDataAction() {
 }
 
 export async function getMovementsReportDataAction() {
-  await requireReportAccess();
+  const session = await requireReportAccess();
+  // Raw stock movements aren't shown per-showroom anywhere in the app (they
+  // carry no showroomId), so rather than a partial/approximate scope this
+  // export is restricted to the same roles that can already see the audit
+  // trail — a showroom role has no scoped view to fall back to here.
+  assertPermission(canViewAuditLogs(session.role as Role), "Only a Manager or Super Admin can export stock movements.");
   return db.inventoryMovement.findMany({
     select: {
       id: true,

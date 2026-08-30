@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getInventorySummary } from "@/services/InventoryService";
 import { getSessionContext } from "@/lib/session";
-import { PENDING_BLOCK_STATUSES } from "@/lib/permissions";
+import { PENDING_BLOCK_STATUSES, isShowroomScoped } from "@/lib/permissions";
 import { db } from "@/lib/db";
 import { DashboardClient } from "@/app/(app)/dashboard/DashboardClient";
 
@@ -13,31 +13,44 @@ export default async function DashboardPage() {
   const session = await getSessionContext();
   if (!session.authenticated) redirect("/login");
 
+  // Route audit finding: this page previously showed every showroom's
+  // pending blocks (and a system-wide movement feed) to Showroom Staff/
+  // In-Charge — the same scope rule /blocks already enforces belongs here
+  // too. Movements carry no showroomId at all, so there's no scoped view to
+  // fall back to for a showroom role — the feed is simply omitted for them
+  // rather than shown unscoped.
+  const scoped = isShowroomScoped(session.role);
+
   // Every independent read goes out in ONE parallel batch. The database is
   // geographically remote (~1.5s per round trip), so awaiting these in
   // sequence costs seconds of pure network wait — parallel is ~7x faster.
   const [summary, recentMovements, pendingBlocks] = await Promise.all([
     getInventorySummary(),
-    db.inventoryMovement.findMany({
-      take: 8,
-      orderBy: { createdAt: "desc" },
-      select: {
-        id: true,
-        quantity: true,
-        movementType: true,
-        reason: true,
-        performedBy: true,
-        createdAt: true,
-        inventory: {
+    scoped
+      ? Promise.resolve([])
+      : db.inventoryMovement.findMany({
+          take: 8,
+          orderBy: { createdAt: "desc" },
           select: {
-            productId: true,
-            product: { select: { name: true, sku: true, size: true } },
+            id: true,
+            quantity: true,
+            movementType: true,
+            reason: true,
+            performedBy: true,
+            createdAt: true,
+            inventory: {
+              select: {
+                productId: true,
+                product: { select: { name: true, sku: true, size: true } },
+              },
+            },
           },
-        },
-      },
-    }),
+        }),
     db.stockBlock.findMany({
-      where: { status: { in: [...PENDING_BLOCK_STATUSES] } },
+      where: {
+        status: { in: [...PENDING_BLOCK_STATUSES] },
+        ...(scoped ? { showroomId: session.showroomId ?? "__none__" } : {}),
+      },
       orderBy: { createdAt: "desc" },
       take: 5,
       select: {
