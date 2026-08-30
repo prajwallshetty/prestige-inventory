@@ -102,12 +102,17 @@ export function DashboardClient({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Link
-            href="/admin/product-types"
-            className="rounded-lg border border-[#EAEAEA] bg-white px-3 py-2 text-xs font-bold text-[#111111] hover:bg-[#F7F7F5] transition-all flex items-center gap-1.5 touch-target shadow-xs"
-          >
-            <Boxes className="h-3.5 w-3.5 text-indigo-600" /> Categories & Types
-          </Link>
+          {/* Only Super Admin may open /admin/product-types (middleware
+              SECTION_ACCESS) — showing this to every role always 403'd for
+              everyone else (route audit finding). */}
+          {session.role === "SUPER_ADMIN" && (
+            <Link
+              href="/admin/product-types"
+              className="rounded-lg border border-[#EAEAEA] bg-white px-3 py-2 text-xs font-bold text-[#111111] hover:bg-[#F7F7F5] transition-all flex items-center gap-1.5 touch-target shadow-xs"
+            >
+              <Boxes className="h-3.5 w-3.5 text-indigo-600" /> Categories & Types
+            </Link>
+          )}
           <Link
             href="/bookings"
             className="rounded-lg bg-[#F2C202] px-4 py-2 text-xs font-black text-white shadow-xs hover:bg-[#D8AD02] transition-all flex items-center gap-1.5 touch-target"

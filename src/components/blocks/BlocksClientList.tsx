@@ -49,6 +49,10 @@ interface BlockRow {
   quantity: number;
   shippedQuantity: number;
   deliveredQuantity: number;
+  /** Overstock spec §8 — portion of `quantity` still awaiting procurement. */
+  shortageQuantity?: number;
+  /** Set when this row is one line of a multi-product order. */
+  blockOrder?: { id: string; orderNumber: string } | null;
   requestedBy: string;
   createdById: string | null;
   createdRole: string | null;
@@ -483,6 +487,14 @@ export function BlocksClientList({ result, filters, dealers, showrooms, session 
                             {block.blockNumber || block.id.slice(-8).toUpperCase()}
                           </Link>
                           <p className="mt-0.5 text-[10px] text-[#6B6B6B]">{formatDate(block.createdAt)}</p>
+                          {block.blockOrder && (
+                            <Link
+                              href={`/blocks/order/${block.blockOrder.id}`}
+                              className="mt-0.5 block text-[9px] font-bold text-indigo-600 hover:underline"
+                            >
+                              Order {block.blockOrder.orderNumber} →
+                            </Link>
+                          )}
                         </td>
 
                         <td className="px-4 py-3.5 align-top">
@@ -507,6 +519,11 @@ export function BlocksClientList({ result, filters, dealers, showrooms, session 
                           {block.quantity}
                           {block.shippedQuantity > 0 && block.shippedQuantity < block.quantity && (
                             <p className="text-[9px] font-bold text-[#6B6B6B]">{block.shippedQuantity} shipped</p>
+                          )}
+                          {!!block.shortageQuantity && block.shortageQuantity > 0 && (
+                            <p className="text-[9px] font-black uppercase text-amber-700">
+                              {block.shortageQuantity} to order
+                            </p>
                           )}
                         </td>
 
@@ -637,6 +654,15 @@ export function BlocksClientList({ result, filters, dealers, showrooms, session 
                     <BlockStatusBadge status={block.status} />
                   </div>
 
+                  {block.blockOrder && (
+                    <Link
+                      href={`/blocks/order/${block.blockOrder.id}`}
+                      className="-mt-1 block text-[10px] font-bold text-indigo-600"
+                    >
+                      Part of order {block.blockOrder.orderNumber} →
+                    </Link>
+                  )}
+
                   <div className="flex items-start gap-3">
                     <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-[#EAEAEA] bg-[#F7F7F5]">
                       <Package className="h-5 w-5 text-[#6B6B6B]" />
@@ -655,7 +681,14 @@ export function BlocksClientList({ result, filters, dealers, showrooms, session 
                   <dl className="grid grid-cols-2 gap-2 rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] p-2.5 text-center">
                     <div>
                       <dt className="text-[8.5px] font-bold uppercase text-[#6B6B6B]">Quantity</dt>
-                      <dd className="mt-0.5 font-mono text-sm font-black text-[#8A7300]">{block.quantity}</dd>
+                      <dd className="mt-0.5 font-mono text-sm font-black text-[#8A7300]">
+                        {block.quantity}
+                        {!!block.shortageQuantity && block.shortageQuantity > 0 && (
+                          <span className="ml-1 text-[9px] font-black uppercase text-amber-700">
+                            ({block.shortageQuantity} to order)
+                          </span>
+                        )}
+                      </dd>
                     </div>
                     <div>
                       <dt className="text-[8.5px] font-bold uppercase text-[#6B6B6B]">Expiry</dt>

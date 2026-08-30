@@ -593,8 +593,7 @@ export function InventoryClientTable({
                       {canBlock && (
                         <button
                           onClick={() => setBlockingProduct(item)}
-                          disabled={item.availableStock <= 0}
-                          className="rounded-lg border border-blue-500/25 bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-600 transition-all hover:bg-blue-600 hover:text-white disabled:opacity-40"
+                          className="rounded-lg border border-blue-500/25 bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-600 transition-all hover:bg-blue-600 hover:text-white"
                         >
                           Hold
                         </button>

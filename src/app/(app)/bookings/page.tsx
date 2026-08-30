@@ -36,7 +36,7 @@ export default async function BookingsPage({
 
   const [bookings, summary, allDealers, allWarehouses] = await Promise.all([
     getBookingList(filters),
-    getBookingSummary({ dealerId: filters.dealerId, warehouseId: filters.warehouseId }),
+    getBookingSummary({ dealerId: filters.dealerId, warehouseId: filters.warehouseId, requestedBy: filters.requestedBy }),
     db.dealer.findMany({ select: { id: true, name: true } }),
     db.warehouse.findMany({ select: { id: true, name: true, code: true } }),
   ]);

@@ -34,7 +34,7 @@ import {
  * transaction holds a pooled connection for its whole life, so a generous
  * timeout under load turns into pool exhaustion for everybody else (spec §41).
  */
-interface LockedInventory {
+export interface LockedInventory {
   id: string;
   totalStock: number;
   availableStock: number;
@@ -57,6 +57,7 @@ interface LockedBlock {
   quantity: number;
   shippedQuantity: number;
   deliveredQuantity: number;
+  shortageQuantity: number;
   productId: string;
   inventoryId: string;
   showroomId: string | null;
@@ -87,7 +88,7 @@ const INVENTORY_COLUMNS = `id, "totalStock", "availableStock", "blockedStock", "
  * check, and both write — which double-reserves stock and loses one update.
  * Every path that changes reserved quantities must go through this first.
  */
-async function lockInventoryByProduct(tx: any, productId: string): Promise<LockedInventory | null> {
+export async function lockInventoryByProduct(tx: any, productId: string): Promise<LockedInventory | null> {
   const rows = (await tx.$queryRawUnsafe(
     `SELECT ${INVENTORY_COLUMNS} FROM "Inventory" WHERE "productId" = $1 FOR UPDATE`,
     productId
@@ -117,7 +118,7 @@ async function lockInventoryById(tx: any, inventoryId: string): Promise<LockedIn
  */
 async function lockBlock(tx: any, blockId: string): Promise<LockedBlock | null> {
   const rows = (await tx.$queryRawUnsafe(
-    `SELECT id, block_number, status, quantity, "shippedQuantity", "deliveredQuantity",
+    `SELECT id, block_number, status, quantity, "shippedQuantity", "deliveredQuantity", "shortageQuantity",
             "productId", "inventoryId", "showroomId", "dealerId", "warehouseId",
             "createdById", "createdRole", "requestedBy", remarks, "approvalRoute", "expiresAt",
             "vehicleNumber", "driverName", "driverPhone", "transporter", "expectedDeliveryAt"
@@ -150,7 +151,7 @@ async function loadBlockForMutation(tx: any, blockId: string) {
  * stock, which silently discarded the booking's reservation (spec §6:
  * available = physical − active blocks − OTHER VALID RESERVATIONS).
  */
-function availableFrom(inv: {
+export function availableFrom(inv: {
   totalStock: number;
   blockedStock: number;
   allocatedStock: number;
@@ -163,7 +164,7 @@ function availableFrom(inv: {
   );
 }
 
-function deriveStockStatus(inv: {
+export function deriveStockStatus(inv: {
   totalStock: number;
   blockedStock: number;
   allocatedStock: number;
@@ -190,7 +191,7 @@ function deriveStockStatus(inv: {
  * (an older code path, a manual edit), the next mutation puts it right instead
  * of carrying the error forward for ever.
  */
-async function writeInventory(
+export async function writeInventory(
   tx: any,
   inv: LockedInventory,
   delta: Partial<Pick<LockedInventory, "totalStock" | "blockedStock" | "allocatedStock" | "damagedStock" | "transitStock" | "deliveredStock">>
@@ -225,7 +226,7 @@ async function writeInventory(
   return { ...next, availableStock, stockStatus };
 }
 
-async function recordMovement(
+export async function recordMovement(
   tx: any,
   {
     inv,
@@ -235,6 +236,7 @@ async function recordMovement(
     previousQuantity,
     newQuantity,
     referenceId,
+    referenceType = "BLOCK",
     reason,
     performedBy,
   }: {
@@ -245,6 +247,8 @@ async function recordMovement(
     previousQuantity: number;
     newQuantity: number;
     referenceId: string;
+    /** BLOCK | SHIPMENT | ADJUSTMENT | ORDER — defaults to BLOCK for existing callers. */
+    referenceType?: string;
     reason: string;
     performedBy: string;
   }
@@ -258,7 +262,7 @@ async function recordMovement(
       quantity,
       previousQuantity,
       newQuantity,
-      referenceType: "BLOCK",
+      referenceType,
       referenceId,
       reason,
       performedBy,
@@ -272,7 +276,7 @@ async function recordMovement(
  * Runs inside the caller's transaction and relies on an atomic upsert+increment,
  * so two concurrent creations can never receive the same number.
  */
-async function nextBlockNumber(tx: any): Promise<string> {
+export async function nextBlockNumber(tx: any): Promise<string> {
   const year = new Date().getFullYear();
   const row = await tx.blockNumberSequence.upsert({
     where: { year },
@@ -287,7 +291,7 @@ async function nextBlockNumber(tx: any): Promise<string> {
  * history table — AuditLog already has an indexed (entity, entityId) lookup
  * and Json old/new columns, which is exactly what the timeline needs).
  */
-async function recordBlockAudit(
+export async function recordBlockAudit(
   tx: any,
   {
     action,
@@ -363,7 +367,7 @@ function assertScope(
 }
 
 /** Caches touched by any stock or block mutation. */
-async function invalidateStockCaches() {
+export async function invalidateStockCaches() {
   await Promise.all([
     invalidateCache("inventory:*"),
     invalidateCache("dashboard:*"),
@@ -453,14 +457,15 @@ export async function createBlockRequest({
       throw new AppError("No inventory record exists for this product.", 404, "NOT_FOUND");
     }
 
+    // Physical stock is not a ceiling on the requested quantity (overstock
+    // spec §1/§FINAL): a request for more than is currently available is
+    // still a valid block. The gap becomes a procurement requirement rather
+    // than a rejection. `available` is read under the row lock above, so a
+    // concurrent request against the same product sees this one's reservation
+    // already applied and computes its own shortage against what's left
+    // (spec §26 — no double-counting of the same physical stock).
     const available = availableFrom(inventory);
-    if (available < quantity) {
-      throw new AppError(
-        `Insufficient available stock — only ${available} ${available === 1 ? "box is" : "boxes are"} available to block (you asked for ${quantity}).`,
-        409,
-        "INSUFFICIENT_STOCK"
-      );
-    }
+    const shortage = Math.max(0, quantity - available);
 
     // Approval route is derived from the creator's role, never from the
     // client: staff blocks must clear the In-Charge first, everyone else
@@ -481,6 +486,7 @@ export async function createBlockRequest({
         dealerId: dealerId || null,
         showroomId: showroomId || null,
         quantity,
+        shortageQuantity: shortage,
         requestedBy,
         createdById: createdById || null,
         createdRole: userRole || null,
@@ -518,7 +524,13 @@ export async function createBlockRequest({
       role: userRole,
       toStatus: status,
       reason: remarks,
-      meta: { blockNumber: block.block_number, quantity, productName: product.name },
+      meta: {
+        blockNumber: block.block_number,
+        quantity,
+        productName: product.name,
+        availableAtCreation: available,
+        shortageQuantity: shortage,
+      },
     });
 
     return block;
@@ -543,6 +555,23 @@ export async function createBlockRequest({
       type: "BLOCK_SENT_FOR_APPROVAL",
       title: "New Block Awaiting Final Approval",
       message: `Block ${result.block_number} for ${quantity} boxes is waiting for final approval.`,
+      audiences: ["MANAGERS", "SUPER_ADMINS"],
+    });
+  }
+
+  // §9/§28 — a shortage always reaches the Manager, independent of the
+  // approval route: procurement lead time doesn't wait for the In-Charge to
+  // sign off, and this is a distinct notification from the approval-queue
+  // one above (which deliberately stays silent to the Manager on a staff
+  // block until the In-Charge has acted). One notification per block covers
+  // it — the shortage is fixed at creation and never recalculated, so there
+  // is nothing to re-notify about later.
+  if (result.shortageQuantity > 0) {
+    await notifyBlockParties(result, {
+      type: "PROCUREMENT_REQUIRED",
+      title: "Procurement Required",
+      message: `Block ${result.block_number}: ${result.shortageQuantity} of ${quantity} boxes of "${product.name}" need to be procured.`,
+      priority: "HIGH",
       audiences: ["MANAGERS", "SUPER_ADMINS"],
     });
   }
@@ -668,7 +697,13 @@ export async function approveBlock({
       );
     }
 
-    // Partial approval returns the unapproved remainder to available stock.
+    // Partial approval returns the unapproved remainder to available stock,
+    // and shrinks the shortage in step: the portion of the original request
+    // that was fulfillable from physical stock (quantity - shortageQuantity)
+    // shrinks the approved quantity first, so shortage only stays if the
+    // approved amount still exceeds what was available at creation.
+    const fulfillableAtCreation = block.quantity - block.shortageQuantity;
+    let nextShortage = block.shortageQuantity;
     if (finalQty < block.quantity) {
       const difference = block.quantity - finalQty;
       const previousAvailable = availableFrom(inv);
@@ -687,6 +722,8 @@ export async function approveBlock({
         reason: `Partial approval — released ${difference} boxes.`,
         performedBy: approvedBy,
       });
+
+      nextShortage = Math.max(0, finalQty - fulfillableAtCreation);
     }
 
     const now = new Date();
@@ -695,6 +732,7 @@ export async function approveBlock({
       data: {
         status: "READY_TO_SHIP",
         quantity: finalQty,
+        shortageQuantity: nextShortage,
         approvedBy,
         approvedAt: now,
         managerApprovedBy: approvedBy,
@@ -951,6 +989,20 @@ export async function shipBlock({
         `Cannot ship ${shipQty} boxes — only ${outstanding} remain on this block.`,
         400,
         "VALIDATION"
+      );
+    }
+    // A block may carry a reservation larger than physical stock (overstock
+    // spec §22/§FINAL): the shortage portion is not real inventory until
+    // procurement is RECEIVED. Shipping must never take totalStock negative —
+    // that check used to be implied by "block quantity <= available at
+    // creation", which no longer holds once overstock blocks are allowed.
+    if (shipQty > inv.totalStock) {
+      const stillAwaitingProcurement = Math.max(0, shipQty - inv.totalStock);
+      throw new AppError(
+        `Only ${inv.totalStock} ${inv.totalStock === 1 ? "box is" : "boxes are"} physically in stock — ` +
+          `${stillAwaitingProcurement} of the ${shipQty} requested still ${stillAwaitingProcurement === 1 ? "is" : "are"} awaiting procurement.`,
+        409,
+        "PROCUREMENT_PENDING"
       );
     }
 
