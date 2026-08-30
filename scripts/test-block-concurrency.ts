@@ -1,9 +1,18 @@
 /**
- * Proves (or disproves) that concurrent block creation can over-reserve stock.
+ * Proves (or disproves) that concurrent overstock block creation still
+ * computes shortage correctly and never over-reserves or negatives physical
+ * stock (overstock/procurement spec §26/§42).
  *
- * Spec requirement: with available = 10, two simultaneous requests for 7 must
- * result in exactly one success and one "insufficient stock" failure. If both
- * succeed, the system has double-reserved the same physical stock.
+ * With available = 10, two SIMULTANEOUS requests for 7 boxes each must BOTH
+ * succeed (a block may exceed available stock — that's the whole point of
+ * the overstock workflow) with:
+ *   - totalStock unchanged at 10 (never negative, never invented)
+ *   - blockedStock = 14 (both full requests reserved)
+ *   - availableStock = 0 (floored, not negative)
+ *   - combined shortageQuantity across both blocks = 4 (14 requested - 10 physical)
+ *   - no block's own shortage double-counts the other's reservation — the row
+ *     lock on Inventory serialises the two transactions, so whichever commits
+ *     second computes its shortage against what the first already reserved.
  *
  * Creates its own throwaway product/inventory and removes it afterwards.
  * Run: npx tsx scripts/test-block-concurrency.ts
@@ -39,7 +48,7 @@ async function main() {
   });
 
   console.log("Setup: totalStock=10, availableStock=10, blockedStock=0");
-  console.log("Firing two SIMULTANEOUS requests for 7 boxes each...\n");
+  console.log("Firing two SIMULTANEOUS requests for 7 boxes each (demand=14 > physical=10)...\n");
 
   const attempt = (label: string) =>
     createBlockRequest({
@@ -49,32 +58,45 @@ async function main() {
       userRole: "MANAGER",
       remarks: MARKER,
     })
-      .then(() => ({ label, ok: true, error: null as string | null }))
-      .catch((e: any) => ({ label, ok: false, error: e.message }));
+      .then((block) => ({ label, ok: true, error: null as string | null, shortage: block.shortageQuantity }))
+      .catch((e: any) => ({ label, ok: false, error: e.message, shortage: null as number | null }));
 
   const results = await Promise.all([attempt("User A"), attempt("User B")]);
   results.forEach((r) =>
-    console.log(`  ${r.label}: ${r.ok ? "SUCCEEDED" : "rejected — " + r.error}`)
+    console.log(
+      `  ${r.label}: ${r.ok ? `SUCCEEDED — shortage=${r.shortage}` : "rejected — " + r.error}`
+    )
   );
 
   const after = await db.inventory.findUniqueOrThrow({ where: { id: inventory.id } });
   const successes = results.filter((r) => r.ok).length;
+  const totalShortage = results.reduce((sum, r) => sum + (r.shortage ?? 0), 0);
 
   console.log("\nResulting inventory:");
   console.log(`  totalStock     = ${after.totalStock}`);
   console.log(`  blockedStock   = ${after.blockedStock}`);
   console.log(`  availableStock = ${after.availableStock}`);
+  console.log(`  combined shortage across both blocks = ${totalShortage}`);
 
-  const overReserved = after.blockedStock > after.totalStock || after.availableStock < 0;
-  console.log("\n" + "=".repeat(52));
-  if (successes === 1 && !overReserved) {
-    console.log("PASS — exactly one reservation succeeded. Stock is safe.");
+  const physicalStockCorrupted = after.totalStock !== 10;
+  const availableNegative = after.availableStock < 0;
+  const blockedAsExpected = after.blockedStock === 14;
+  const shortageAsExpected = totalShortage === 4;
+
+  console.log("\n" + "=".repeat(60));
+  const pass = successes === 2 && !physicalStockCorrupted && !availableNegative && blockedAsExpected && shortageAsExpected;
+  if (pass) {
+    console.log("PASS — both overstock requests succeeded; physical stock untouched;");
+    console.log("       shortage correctly split across the two blocks; nothing went negative.");
   } else {
-    console.log(`FAIL — ${successes} reservations succeeded (expected 1).`);
-    console.log(`       blocked=${after.blockedStock} of total=${after.totalStock}` +
-      (overReserved ? "  ** STOCK OVER-RESERVED **" : ""));
+    console.log("FAIL:");
+    if (successes !== 2) console.log(`  expected both requests to succeed, got ${successes}`);
+    if (physicalStockCorrupted) console.log(`  totalStock changed from 10 to ${after.totalStock} — should never move here`);
+    if (availableNegative) console.log(`  availableStock is negative: ${after.availableStock}`);
+    if (!blockedAsExpected) console.log(`  blockedStock = ${after.blockedStock}, expected 14`);
+    if (!shortageAsExpected) console.log(`  combined shortage = ${totalShortage}, expected 4`);
   }
-  console.log("=".repeat(52));
+  console.log("=".repeat(60));
 
   // Cleanup
   await db.inventoryMovement.deleteMany({ where: { inventoryId: inventory.id } });
@@ -84,7 +106,7 @@ async function main() {
   await db.product.delete({ where: { id: product.id } });
   console.log("\nTest data cleaned up.");
 
-  process.exit(successes === 1 && !overReserved ? 0 : 1);
+  process.exit(pass ? 0 : 1);
 }
 
 main().catch((e) => {

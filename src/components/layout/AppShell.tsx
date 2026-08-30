@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { db } from "@/lib/db";
 import { getEffectiveSession } from "@/lib/auth";
 import { getPendingApprovalCount } from "@/services/BlockQueryService";
+import { getNeedToOrderCount } from "@/services/ProcurementService";
 import { SidebarLayout } from "@/components/layout/SidebarLayout";
 import type { Role } from "@/lib/permissions";
 
@@ -22,7 +23,9 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
   // cost extra round trips that nobody else could see.
   const isSuperAdmin = session?.role === "SUPER_ADMIN";
 
-  const [warehouses, showrooms, pendingApprovalCount] = await Promise.all([
+  const canSeeProcurement = session?.role === "MANAGER" || session?.role === "SUPER_ADMIN";
+
+  const [warehouses, showrooms, pendingApprovalCount, needToOrderCount] = await Promise.all([
     isSuperAdmin
       ? db.warehouse.findMany({ select: { id: true, name: true, code: true }, orderBy: { name: "asc" } })
       : Promise.resolve([]),
@@ -33,6 +36,16 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
     // open the queue to find out.
     session
       ? getPendingApprovalCount({
+          role: session.role as Role,
+          userId: session.userId,
+          showroomId: session.showroomId ?? null,
+          warehouseId: session.warehouseId ?? null,
+        }).catch(() => 0)
+      : Promise.resolve(0),
+    // Same idea for procurement — a Manager/Super Admin sees at a glance
+    // whether anything is waiting to be ordered (overstock spec §9/§28).
+    session && canSeeProcurement
+      ? getNeedToOrderCount({
           role: session.role as Role,
           userId: session.userId,
           showroomId: session.showroomId ?? null,
@@ -50,6 +63,7 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
         warehouses={warehouses}
         showrooms={showrooms}
         pendingApprovalCount={pendingApprovalCount}
+        needToOrderCount={needToOrderCount}
       >
         {children}
       </SidebarLayout>

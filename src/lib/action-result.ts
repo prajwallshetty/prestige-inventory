@@ -105,6 +105,18 @@ export function revalidateBlockViews(blockId?: string) {
   }
 }
 
+export function revalidateProcurementViews(shipmentId?: string) {
+  for (const prefix of ROLE_PREFIXES) {
+    revalidatePath(`${prefix}/procurement`);
+    revalidatePath(`${prefix}/procurement/need-to-order`);
+    revalidatePath(`${prefix}/procurement/orders`);
+    revalidatePath(`${prefix}/blocks`);
+    revalidatePath(`${prefix}/inventory`);
+    revalidatePath(`${prefix}/dashboard`);
+    if (shipmentId) revalidatePath(`${prefix}/procurement/orders/${shipmentId}`);
+  }
+}
+
 export function revalidateBookingViews(bookingId?: string) {
   for (const prefix of ROLE_PREFIXES) {
     revalidatePath(`${prefix}/bookings`);
