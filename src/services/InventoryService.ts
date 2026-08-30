@@ -446,9 +446,11 @@ export async function searchBlockableProducts({
       productCode: true,
       importKey: true,
       size: true,
+      finish: true,
       thumbnail_key: true,
       image_key: true,
       brand: { select: { name: true } },
+      category: { select: { name: true } },
       inventory: {
         select: {
           totalStock: true,
@@ -468,7 +470,9 @@ export async function searchBlockableProducts({
     name: p.name,
     productNumber: p.sku || p.productCode || p.importKey || "—",
     size: p.size,
+    finish: p.finish,
     brand: p.brand?.name ?? null,
+    category: p.category?.name ?? null,
     thumbnailKey: p.thumbnail_key || p.image_key || null,
     availableToBlock: p.inventory ? computeAvailableToBlock(p.inventory) : 0,
   }));

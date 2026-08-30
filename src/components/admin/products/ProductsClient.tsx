@@ -223,60 +223,57 @@ export function ProductsClient({ initialData, options }: Props) {
           <table className="w-full text-xs text-left">
             <thead className="border-b border-[#EAEAEA] bg-[#F7F7F5] text-[10px] font-black uppercase tracking-wider text-[#6B6B6B]">
               <tr>
+                <th className="p-4 w-16 text-center">Image</th>
+                <th className="p-4">Brand</th>
                 <th className="p-4">Product</th>
-                <th className="p-4">Brand / Category</th>
-                <th className="p-4">Size / Finish</th>
-                <th className="p-4">Stock</th>
-                <th className="p-4">Status</th>
+                <th className="p-4">Surface</th>
+                <th className="p-4">Size</th>
+                <th className="p-4 text-right font-mono">Stock</th>
+                <th className="p-4 text-right font-mono">Blocked</th>
+                <th className="p-4 text-right font-mono">Available</th>
                 <th className="p-4 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#EAEAEA] font-medium text-[#111111]">
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-[#6B6B6B] text-xs">Loading…</td>
+                  <td colSpan={9} className="p-8 text-center text-[#6B6B6B] text-xs">Loading catalogue...</td>
                 </tr>
               ) : data.items.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-[#6B6B6B] text-xs">
-                    No products found. Try clearing filters or add a new product.
+                  <td colSpan={9} className="p-8 text-center text-[#6B6B6B] text-xs">
+                    Product catalog is empty. Upload a new catalog to view products.
                   </td>
                 </tr>
               ) : (
                 data.items.map((p) => {
                   const thumb = thumbnailUrl(p);
                   const isArchived = p.status === "ARCHIVED" || !p.published;
+                  const surface = p.surface || p.finish || "—";
+                  const totalStock = p.inventory?.totalStock ?? 0;
+                  const availableStock = p.inventory?.availableStock ?? 0;
+                  const blockedStock = Math.max(0, totalStock - availableStock);
+
                   return (
                     <tr key={p.id} className="hover:bg-[#F7F7F5]/50 transition">
-                      <td className="p-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-lg bg-[#F7F7F5] border border-[#EAEAEA] flex items-center justify-center overflow-hidden shrink-0">
-                            {thumb ? (
-                              <img src={thumb} alt={p.name} className="w-full h-full object-cover" />
-                            ) : (
-                              <ImageOff className="w-4 h-4 text-[#6B6B6B]" />
-                            )}
-                          </div>
-                          <div className="min-w-0">
-                            <p className="text-[#111111] font-bold truncate max-w-[220px]">{p.name}</p>
-                            <p className="text-[10px] text-[#6B6B6B] font-mono">
-                              {p.sku || p.productCode || "No SKU"}
-                            </p>
-                          </div>
+                      <td className="p-2">
+                        <div className="w-10 h-10 rounded-lg bg-[#F7F7F5] border border-[#EAEAEA] flex items-center justify-center overflow-hidden shrink-0 mx-auto">
+                          {thumb ? (
+                            <img src={thumb} alt={p.name} className="w-full h-full object-cover" />
+                          ) : (
+                            <ImageOff className="w-4 h-4 text-[#6B6B6B]" />
+                          )}
                         </div>
                       </td>
-                      <td className="p-4 text-xs">
-                        <p className="font-bold text-[#111111]">{p.brand?.name || "—"}</p>
-                        <p className="text-[#6B6B6B]">{p.category?.name || "—"}</p>
+                      <td className="p-4 font-bold text-[#111111]">{p.brand?.name || "—"}</td>
+                      <td className="p-4">
+                        <p className="text-[#111111] font-black">{p.name}</p>
                       </td>
-                      <td className="p-4 text-xs">
-                        <p className="font-mono text-[#111111]">{p.size || "—"}</p>
-                        <p className="text-[#6B6B6B]">{[p.finish, p.surface].filter(Boolean).join(" · ") || "—"}</p>
-                      </td>
-                      <td className="p-4 text-xs font-mono">
-                        <span className="text-emerald-600 font-black">{p.inventory?.availableStock ?? 0}</span>
-                        <span className="text-[#6B6B6B]"> / {p.inventory?.totalStock ?? 0}</span>
-                      </td>
+                      <td className="p-4 text-[#6B6B6B] font-semibold">{surface}</td>
+                      <td className="p-4 font-mono text-[#6B6B6B]">{p.size || "—"}</td>
+                      <td className="p-4 text-right font-mono font-bold text-[#111111]">{totalStock}</td>
+                      <td className="p-4 text-right font-mono text-amber-600 font-bold">{blockedStock}</td>
+                      <td className="p-4 text-right font-mono text-emerald-600 font-black">{availableStock}</td>
                       <td className="p-4">
                         <span
                           className={`px-2 py-0.5 rounded-full text-[9.5px] font-black uppercase tracking-wider border ${

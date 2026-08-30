@@ -12,7 +12,7 @@ import {
   cancelBlock,
   availableFrom,
 } from "@/services/StockBlockService";
-import { AppError, type BlockStatus } from "@/lib/permissions";
+import { AppError, isShowroomScoped, type Role, type BlockStatus } from "@/lib/permissions";
 
 /**
  * Multi-product orders.
@@ -324,10 +324,14 @@ export async function approveBlockOrder({
 }): Promise<{ order: { id: string; orderNumber: string }; results: ItemActionResult[] }> {
   const order = await db.blockOrder.findUnique({
     where: { id: orderId },
-    select: { id: true, orderNumber: true, items: { select: { id: true, block_number: true } } },
+    select: { id: true, orderNumber: true, showroomId: true, items: { select: { id: true, block_number: true } } },
   });
   if (!order) throw new AppError("Order not found.", 404, "NOT_FOUND");
   if (order.items.length === 0) throw new AppError("This order has no items.", 400, "VALIDATION");
+
+  if (isShowroomScoped(role as Role) && order.showroomId !== (actorShowroomId ?? null)) {
+    throw new AppError("This block order belongs to a different showroom.", 403, "FORBIDDEN");
+  }
 
   const results: ItemActionResult[] = [];
   for (const item of order.items) {
@@ -359,9 +363,13 @@ export async function rejectBlockOrder({
 }): Promise<{ order: { id: string; orderNumber: string }; results: ItemActionResult[] }> {
   const order = await db.blockOrder.findUnique({
     where: { id: orderId },
-    select: { id: true, orderNumber: true, items: { select: { id: true, block_number: true } } },
+    select: { id: true, orderNumber: true, showroomId: true, items: { select: { id: true, block_number: true } } },
   });
   if (!order) throw new AppError("Order not found.", 404, "NOT_FOUND");
+
+  if (isShowroomScoped(role as Role) && order.showroomId !== (actorShowroomId ?? null)) {
+    throw new AppError("This block order belongs to a different showroom.", 403, "FORBIDDEN");
+  }
 
   const results: ItemActionResult[] = [];
   for (const item of order.items) {
@@ -393,9 +401,13 @@ export async function cancelBlockOrder({
 }): Promise<{ order: { id: string; orderNumber: string }; results: ItemActionResult[] }> {
   const order = await db.blockOrder.findUnique({
     where: { id: orderId },
-    select: { id: true, orderNumber: true, items: { select: { id: true, block_number: true } } },
+    select: { id: true, orderNumber: true, showroomId: true, items: { select: { id: true, block_number: true } } },
   });
   if (!order) throw new AppError("Order not found.", 404, "NOT_FOUND");
+
+  if (isShowroomScoped(role as Role) && order.showroomId !== (actorShowroomId ?? null)) {
+    throw new AppError("This block order belongs to a different showroom.", 403, "FORBIDDEN");
+  }
 
   const results: ItemActionResult[] = [];
   for (const item of order.items) {

@@ -3,13 +3,31 @@
 import React, { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/lib/toast";
-import { createUserAction, updateUserAction, deactivateUserAction } from "@/app/actions";
-import { Plus, Search, Edit2, ShieldAlert, KeyRound, Ban, UserCheck, X } from "lucide-react";
+import {
+  createUserAction,
+  updateUserAction,
+  deactivateUserAction,
+  regenerateLoginCodeAction,
+} from "@/app/actions";
+import {
+  Plus,
+  Search,
+  Edit2,
+  ShieldAlert,
+  KeyRound,
+  Ban,
+  UserCheck,
+  X,
+  RefreshCw,
+  Copy,
+  Check,
+} from "lucide-react";
 
 interface UserItem {
   id: string;
   name: string;
   email: string;
+  loginCode?: string;
   role: string;
   status: string;
   warehouse_id?: string;
@@ -33,14 +51,17 @@ export function UsersClient({ users, warehouses, showrooms }: Props) {
   // Form Fields
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [role, setRole] = useState("WEAVER");
+  const [loginCode, setLoginCode] = useState("");
+  const [role, setRole] = useState("SHOWROOM_STAFF");
   const [warehouseId, setWarehouseId] = useState("");
   const [showroomId, setShowroomId] = useState("");
   const [status, setStatus] = useState("ACTIVE");
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
+  const [copiedCode, setCopiedCode] = useState<string | null>(null);
+
   const router = useRouter();
   const [, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -50,6 +71,7 @@ export function UsersClient({ users, warehouses, showrooms }: Props) {
     return (
       u.name.toLowerCase().includes(terms) ||
       u.email.toLowerCase().includes(terms) ||
+      (u.loginCode && u.loginCode.toLowerCase().includes(terms)) ||
       u.role.toLowerCase().includes(terms)
     );
   });
@@ -58,8 +80,8 @@ export function UsersClient({ users, warehouses, showrooms }: Props) {
     setEditingUser(null);
     setName("");
     setEmail("");
-    setPassword("");
-    setRole("WEAVER");
+    setLoginCode("");
+    setRole("SHOWROOM_STAFF");
     setWarehouseId(warehouses[0]?.id || "");
     setShowroomId(showrooms[0]?.id || "");
     setStatus("ACTIVE");
@@ -71,7 +93,7 @@ export function UsersClient({ users, warehouses, showrooms }: Props) {
     setEditingUser(u);
     setName(u.name);
     setEmail(u.email);
-    setPassword(""); // Clear password field
+    setLoginCode(u.loginCode || "");
     setRole(u.role);
     setWarehouseId(u.warehouse_id || warehouses[0]?.id || "");
     setShowroomId(u.showroomId || showrooms[0]?.id || "");
@@ -87,12 +109,11 @@ export function UsersClient({ users, warehouses, showrooms }: Props) {
 
     const payload = {
       name,
-      email,
-      password: password || undefined,
+      email: email || undefined,
+      loginCode: loginCode || undefined,
       role,
-      dealer_id: undefined, // DEALER role retired in Phase 1
       warehouse_id: role === "MANAGER" ? warehouseId : undefined,
-      showroom_id: (role === "SHOWROOM_STAFF" || role === "SHOWROOM_INCHARGE") ? showroomId : undefined,
+      showroom_id: role === "SHOWROOM_STAFF" || role === "SHOWROOM_INCHARGE" ? showroomId : undefined,
       status,
     };
 
@@ -101,11 +122,6 @@ export function UsersClient({ users, warehouses, showrooms }: Props) {
       if (editingUser) {
         res = await updateUserAction(editingUser.id, payload);
       } else {
-        if (!password) {
-          setError("Password is required for new users.");
-          setIsSubmitting(false);
-          return;
-        }
         res = await createUserAction(payload);
       }
 
@@ -117,7 +133,11 @@ export function UsersClient({ users, warehouses, showrooms }: Props) {
 
       setModalOpen(false);
       setIsSubmitting(false);
-      toast.success(editingUser ? "User updated." : "User created.");
+      toast.success(
+        editingUser
+          ? "User updated."
+          : `User created. Login code: ${(res.data as any)?.loginCode || "Assigned"}`
+      );
       startTransition(() => router.refresh());
     } catch (err: any) {
       setError(err?.message || "Operation failed. Please try again.");
@@ -147,15 +167,44 @@ export function UsersClient({ users, warehouses, showrooms }: Props) {
     }
   };
 
+  const handleRegenerateCode = async (user: UserItem) => {
+    if (regeneratingId) return;
+    if (!confirm(`Regenerate login code for ${user.name}? The old code will stop working immediately.`)) {
+      return;
+    }
+
+    setRegeneratingId(user.id);
+    try {
+      const res = await regenerateLoginCodeAction(user.id);
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      toast.success(`New code generated for ${user.name}: ${res.data.loginCode}`);
+      startTransition(() => router.refresh());
+    } catch (err: any) {
+      toast.error(err?.message || "Failed to regenerate login code.");
+    } finally {
+      setRegeneratingId(null);
+    }
+  };
+
+  const copyToClipboard = (code: string) => {
+    navigator.clipboard.writeText(code);
+    setCopiedCode(code);
+    toast.success(`Copied code "${code}" to clipboard.`);
+    setTimeout(() => setCopiedCode(null), 2000);
+  };
+
   return (
     <div className="space-y-4">
       {/* FILTER & ACTIONS BAR */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between rounded-xl border border-[#EAEAEA] bg-white p-4 shadow-sm">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between rounded-xl border border-[#EAEAEA] bg-white p-4 shadow-xs">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#6B6B6B]" />
           <input
             type="text"
-            placeholder="Search by name, email, or role..."
+            placeholder="Search by name, email, login code, or role..."
             value={q}
             onChange={(e) => setQ(e.target.value)}
             className="w-full rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] py-2 pl-9 pr-4 text-xs text-[#111111] placeholder-[#6B6B6B] focus:border-[#F2C202] focus:outline-hidden"
@@ -163,20 +212,21 @@ export function UsersClient({ users, warehouses, showrooms }: Props) {
         </div>
         <button
           onClick={openCreateModal}
-          className="flex items-center gap-1.5 rounded-lg bg-[#F2C202] px-4 py-2 text-xs font-black text-white shadow-sm hover:bg-[#D8AD02] transition-all cursor-pointer"
+          className="flex items-center gap-1.5 rounded-lg bg-[#F2C202] px-4 py-2 text-xs font-black text-white shadow-xs hover:bg-[#D8AD02] transition-all cursor-pointer min-h-[40px]"
         >
-          <Plus className="h-4 w-4" /> Create User
+          <Plus className="h-4 w-4" /> Create User & Generate Code
         </button>
       </div>
 
-      {/* USERS DATA TABLE — desktop */}
+      {/* USERS DATA TABLE — DESKTOP */}
       <div className="hidden md:block overflow-hidden rounded-xl border border-[#EAEAEA] bg-white shadow-xs">
         <table className="w-full text-left text-xs border-collapse">
           <thead className="border-b border-[#EAEAEA] bg-[#F7F7F5] text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
             <tr>
               <th className="px-4 py-4">User Details</th>
+              <th className="px-4 py-4">Login Code</th>
               <th className="px-4 py-4">Role Designation</th>
-              <th className="px-4 py-4">Linked Context</th>
+              <th className="px-4 py-4">Linked Scope</th>
               <th className="px-4 py-4">Last Activity</th>
               <th className="px-4 py-4">Status</th>
               <th className="px-4 py-4 text-center">Actions</th>
@@ -185,7 +235,7 @@ export function UsersClient({ users, warehouses, showrooms }: Props) {
           <tbody className="divide-y divide-[#EAEAEA] font-medium text-[#111111]">
             {filteredUsers.length === 0 ? (
               <tr>
-                <td colSpan={6} className="py-12 text-center text-xs text-[#6B6B6B] italic">
+                <td colSpan={7} className="py-12 text-center text-xs text-[#6B6B6B] italic">
                   No registered B2B users found.
                 </td>
               </tr>
@@ -197,19 +247,40 @@ export function UsersClient({ users, warehouses, showrooms }: Props) {
                     <p className="text-[10px] text-[#6B6B6B] font-mono mt-0.5">{u.email}</p>
                   </td>
                   <td className="px-4 py-3.5">
+                    {u.loginCode ? (
+                      <div className="inline-flex items-center gap-1.5 rounded-lg border border-[#F2C202]/40 bg-[#F2C202]/10 px-2.5 py-1 text-xs font-black font-mono text-[#8A7300]">
+                        <span>{u.loginCode}</span>
+                        <button
+                          type="button"
+                          onClick={() => copyToClipboard(u.loginCode!)}
+                          className="text-[#8A7300] hover:text-[#111111] p-0.5 rounded transition-all"
+                          title="Copy Login Code"
+                        >
+                          {copiedCode === u.loginCode ? (
+                            <Check className="h-3 w-3 text-emerald-600" />
+                          ) : (
+                            <Copy className="h-3 w-3" />
+                          )}
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-[#6B6B6B]/40 italic">Unassigned</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3.5">
                     <span className="inline-flex rounded-md bg-[#F7F7F5] border border-[#EAEAEA] px-2 py-0.5 text-[9px] font-bold text-[#6B6B6B] uppercase font-mono tracking-wide">
                       {u.role.replace(/_/g, " ")}
                     </span>
                   </td>
                   <td className="px-4 py-3.5">
                     {u.role === "MANAGER" && (
-                      <span className="text-indigo-600 font-bold">{u.warehouseName || "Depot Manager"}</span>
+                      <span className="text-indigo-600 font-bold">{u.warehouseName || "Central Warehouse"}</span>
                     )}
                     {(u.role === "SHOWROOM_STAFF" || u.role === "SHOWROOM_INCHARGE") && (
-                      <span className="text-purple-600 font-bold">{u.showroomName || "Showroom Origin"}</span>
+                      <span className="text-purple-600 font-bold">{u.showroomName || "Showroom Scope"}</span>
                     )}
                     {u.role !== "MANAGER" && u.role !== "SHOWROOM_STAFF" && u.role !== "SHOWROOM_INCHARGE" && (
-                      <span className="text-[#6B6B6B]/40">—</span>
+                      <span className="text-[#6B6B6B]/40">Central All</span>
                     )}
                   </td>
                   <td className="px-4 py-3.5 text-[#6B6B6B]">
@@ -237,7 +308,15 @@ export function UsersClient({ users, warehouses, showrooms }: Props) {
                     </span>
                   </td>
                   <td className="px-4 py-3.5">
-                    <div className="flex items-center justify-center gap-2">
+                    <div className="flex items-center justify-center gap-1.5">
+                      <button
+                        onClick={() => handleRegenerateCode(u)}
+                        disabled={regeneratingId === u.id}
+                        className="rounded-lg p-1.5 border border-[#EAEAEA] text-[#6B6B6B] hover:bg-[#F7F7F5] hover:text-[#8A7300] transition-all touch-target"
+                        title="Regenerate Unique Login Code"
+                      >
+                        <RefreshCw className={`h-3.5 w-3.5 ${regeneratingId === u.id ? "animate-spin" : ""}`} />
+                      </button>
                       <button
                         onClick={() => openEditModal(u)}
                         className="rounded-lg p-1.5 border border-[#EAEAEA] text-[#6B6B6B] hover:bg-[#F7F7F5] hover:text-[#111111] transition-all touch-target"
@@ -266,7 +345,7 @@ export function UsersClient({ users, warehouses, showrooms }: Props) {
         </table>
       </div>
 
-      {/* USERS LIST — mobile cards */}
+      {/* USERS LIST — MOBILE CARDS */}
       <div className="space-y-3 md:hidden">
         {filteredUsers.length === 0 ? (
           <div className="rounded-xl border border-[#EAEAEA] bg-white py-12 text-center text-xs italic text-[#6B6B6B]">
@@ -294,39 +373,49 @@ export function UsersClient({ users, warehouses, showrooms }: Props) {
                 </span>
               </div>
 
+              <div className="rounded-lg border border-[#F2C202]/30 bg-[#F2C202]/10 p-2.5 flex items-center justify-between">
+                <div>
+                  <span className="text-[9px] font-black uppercase tracking-wider text-[#8A7300] block">Login Code</span>
+                  <span className="font-mono text-sm font-black text-[#111111]">{u.loginCode || "Unassigned"}</span>
+                </div>
+                {u.loginCode && (
+                  <button
+                    type="button"
+                    onClick={() => copyToClipboard(u.loginCode!)}
+                    className="flex items-center gap-1 rounded-md bg-white border border-[#EAEAEA] px-2 py-1 text-[10px] font-bold text-[#111111] shadow-2xs touch-target"
+                  >
+                    <Copy className="h-3 w-3 text-[#8A7300]" /> Copy
+                  </button>
+                )}
+              </div>
+
               <dl className="grid grid-cols-2 gap-2 text-[10px]">
                 <div>
                   <dt className="text-[#6B6B6B] uppercase font-bold tracking-wide">Role</dt>
                   <dd className="mt-0.5 font-mono font-bold text-[#111111]">{u.role.replace(/_/g, " ")}</dd>
                 </div>
                 <div>
-                  <dt className="text-[#6B6B6B] uppercase font-bold tracking-wide">Context</dt>
+                  <dt className="text-[#6B6B6B] uppercase font-bold tracking-wide">Showroom Scope</dt>
                   <dd className="mt-0.5 font-bold">
                     {u.role === "MANAGER" ? (
-                      <span className="text-indigo-600">{u.warehouseName || "Depot Manager"}</span>
+                      <span className="text-indigo-600">{u.warehouseName || "Central Warehouse"}</span>
                     ) : u.role === "SHOWROOM_STAFF" || u.role === "SHOWROOM_INCHARGE" ? (
-                      <span className="text-purple-600">{u.showroomName || "Showroom Origin"}</span>
+                      <span className="text-purple-600">{u.showroomName || "Showroom Scope"}</span>
                     ) : (
-                      <span className="text-[#6B6B6B]/40">—</span>
+                      <span className="text-[#6B6B6B]/40">Central All</span>
                     )}
-                  </dd>
-                </div>
-                <div className="col-span-2">
-                  <dt className="text-[#6B6B6B] uppercase font-bold tracking-wide">Last Activity</dt>
-                  <dd className="mt-0.5 text-[#6B6B6B]">
-                    {u.lastLogin
-                      ? new Date(u.lastLogin).toLocaleDateString("en-IN", {
-                          day: "2-digit",
-                          month: "short",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })
-                      : "Never active"}
                   </dd>
                 </div>
               </dl>
 
               <div className="flex gap-2 border-t border-[#EAEAEA] pt-3">
+                <button
+                  onClick={() => handleRegenerateCode(u)}
+                  disabled={regeneratingId === u.id}
+                  className="flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg border border-[#EAEAEA] text-xs font-bold text-[#8A7300] hover:bg-[#F7F7F5] touch-target"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${regeneratingId === u.id ? "animate-spin" : ""}`} /> New Code
+                </button>
                 <button
                   onClick={() => openEditModal(u)}
                   className="flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg border border-[#EAEAEA] text-xs font-bold text-[#111111] hover:bg-[#F7F7F5] touch-target"
@@ -336,7 +425,7 @@ export function UsersClient({ users, warehouses, showrooms }: Props) {
                 <button
                   onClick={() => handleToggleStatus(u)}
                   disabled={togglingId === u.id}
-                  className={`flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg border border-[#EAEAEA] text-xs font-bold touch-target disabled:opacity-50 disabled:cursor-not-allowed ${
+                  className={`flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg border border-[#EAEAEA] text-xs font-bold touch-target disabled:opacity-50 ${
                     u.status === "ACTIVE" ? "text-rose-600 hover:bg-rose-50" : "text-emerald-600 hover:bg-emerald-50"
                   }`}
                 >
@@ -357,7 +446,7 @@ export function UsersClient({ users, warehouses, showrooms }: Props) {
           <div className="relative max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl border border-[#EAEAEA] bg-white p-6 shadow-lg space-y-5 text-xs text-[#111111]">
             <div className="flex justify-between items-center border-b border-[#EAEAEA] pb-3">
               <h3 className="text-sm font-bold text-[#111111]">
-                {editingUser ? `Edit User Config: ${editingUser.name}` : "Create New B2B Portal User"}
+                {editingUser ? `Edit User Config: ${editingUser.name}` : "Create New User & Generate Code"}
               </h3>
               <button onClick={() => setModalOpen(false)} className="text-[#6B6B6B] hover:text-[#111111]">
                 <X className="h-4 w-4" />
@@ -373,42 +462,42 @@ export function UsersClient({ users, warehouses, showrooms }: Props) {
 
             <form onSubmit={handleFormSubmit} className="space-y-4">
               <div className="space-y-1">
-                <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">Full Name</label>
+                <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">Full Name *</label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Prajwal Shetty"
+                  placeholder="e.g. Ansar Ahmed"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="w-full rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] px-3 py-2 text-xs text-[#111111] focus:outline-hidden"
+                  className="w-full rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] px-3 py-2.5 text-xs text-[#111111] focus:outline-hidden"
                 />
               </div>
 
               <div className="space-y-1">
-                <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">Email Address</label>
+                <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">Email Address (Optional)</label>
                 <input
                   type="email"
-                  required
-                  placeholder="e.g. user@prestigetiles.co"
+                  placeholder="e.g. staff@prestigetiles.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] px-3 py-2 text-xs text-[#111111] focus:outline-hidden"
+                  className="w-full rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] px-3 py-2.5 text-xs text-[#111111] focus:outline-hidden"
                 />
               </div>
 
               <div className="space-y-1">
-                <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
-                  {editingUser ? "Reset Password (Leave blank to keep)" : "Password"}
-                </label>
+                <div className="flex justify-between items-center">
+                  <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
+                    Custom Login Code (Optional — Auto-generated if blank)
+                  </label>
+                </div>
                 <div className="relative">
                   <KeyRound className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#6B6B6B]" />
                   <input
-                    type="password"
-                    required={!editingUser}
-                    placeholder="••••••••"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] py-2 pl-9 pr-4 text-xs text-[#111111] focus:outline-hidden"
+                    type="text"
+                    placeholder="Auto-generated e.g. SH01-ST-002"
+                    value={loginCode}
+                    onChange={(e) => setLoginCode(e.target.value.toUpperCase())}
+                    className="w-full rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] py-2.5 pl-9 pr-4 text-xs font-mono font-bold text-[#111111] uppercase focus:outline-hidden"
                   />
                 </div>
               </div>
@@ -419,22 +508,22 @@ export function UsersClient({ users, warehouses, showrooms }: Props) {
                   <select
                     value={role}
                     onChange={(e) => setRole(e.target.value)}
-                    className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2 text-xs text-[#111111] focus:outline-hidden"
+                    className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs font-bold text-[#111111] focus:outline-hidden"
                   >
-                    <option value="SUPER_ADMIN">Super Admin</option>
-                    <option value="MANAGER">Manager</option>
-                    <option value="SHOWROOM_INCHARGE">Showroom In-Charge</option>
-                    <option value="SHOWROOM_STAFF">Showroom Staff</option>
-                    <option value="WEAVER">Weaver (Read-Only)</option>
+                    <option value="SUPER_ADMIN">SUPER ADMIN</option>
+                    <option value="MANAGER">MANAGER</option>
+                    <option value="SHOWROOM_INCHARGE">SHOWROOM INCHARGE</option>
+                    <option value="SHOWROOM_STAFF">SHOWROOM STAFF</option>
+                    <option value="WEAVER">WEAVER (Read-Only)</option>
                   </select>
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">User Status</label>
+                  <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">Account Status</label>
                   <select
                     value={status}
                     onChange={(e) => setStatus(e.target.value)}
-                    className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2 text-xs text-[#111111] focus:outline-hidden"
+                    className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs font-bold text-[#111111] focus:outline-hidden"
                   >
                     <option value="ACTIVE">ACTIVE</option>
                     <option value="DEACTIVATED">DEACTIVATED</option>
@@ -443,14 +532,14 @@ export function UsersClient({ users, warehouses, showrooms }: Props) {
                 </div>
               </div>
 
-              {/* WAREHOUSE SPECIFIC MAPPING */}
+              {/* WAREHOUSE MAPPING FOR MANAGER */}
               {role === "MANAGER" && warehouses.length > 0 && (
                 <div className="space-y-1">
-                  <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">Assign Primary Depot</label>
+                  <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">Assign Central Depot</label>
                   <select
                     value={warehouseId}
                     onChange={(e) => setWarehouseId(e.target.value)}
-                    className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2 text-xs text-[#111111] focus:outline-hidden font-bold"
+                    className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs text-[#111111] focus:outline-hidden font-bold"
                   >
                     {warehouses.map((w) => (
                       <option key={w.id} value={w.id}>{w.name} ({w.code})</option>
@@ -459,14 +548,14 @@ export function UsersClient({ users, warehouses, showrooms }: Props) {
                 </div>
               )}
 
-              {/* SHOWROOM SPECIFIC MAPPING */}
+              {/* SHOWROOM MAPPING FOR SHOWROOM STAFF / INCHARGE */}
               {(role === "SHOWROOM_STAFF" || role === "SHOWROOM_INCHARGE") && showrooms.length > 0 && (
                 <div className="space-y-1">
-                  <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">Assign Showroom Origin</label>
+                  <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">Assign Showroom (Scope 1–5)</label>
                   <select
                     value={showroomId}
                     onChange={(e) => setShowroomId(e.target.value)}
-                    className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2 text-xs text-[#111111] focus:outline-hidden font-bold"
+                    className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs text-[#111111] focus:outline-hidden font-bold"
                   >
                     {showrooms.map((s) => (
                       <option key={s.id} value={s.id}>{s.name}</option>
@@ -478,9 +567,9 @@ export function UsersClient({ users, warehouses, showrooms }: Props) {
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="w-full rounded-lg bg-[#F2C202] py-2.5 text-xs font-black text-white hover:bg-[#D8AD02] disabled:opacity-50 transition-all cursor-pointer"
+                className="w-full rounded-xl bg-[#F2C202] py-3 text-xs font-black text-white hover:bg-[#D8AD02] disabled:opacity-50 transition-all cursor-pointer min-h-[46px]"
               >
-                {isSubmitting ? "Processing..." : editingUser ? "Save Updates" : "Create Account"}
+                {isSubmitting ? "Processing..." : editingUser ? "Save User Updates" : "Create User & Generate Code"}
               </button>
             </form>
           </div>

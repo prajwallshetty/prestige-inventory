@@ -42,30 +42,31 @@ export async function comparePassword(password: string, hash: string): Promise<b
 
 export async function createSession(payload: SessionPayload): Promise<void> {
   const token = jwt.sign(payload, SECRET, { expiresIn: "7d" });
-  const cookieStore = await cookies();
+  try {
+    const cookieStore = await cookies();
 
-  cookieStore.set(SESSION_COOKIE_NAME, token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    maxAge: SESSION_MAX_AGE,
-  });
+    cookieStore.set(SESSION_COOKIE_NAME, token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: SESSION_MAX_AGE,
+    });
 
-  // Non-authoritative hint cookies. They are readable by client code purely to
-  // render the right chrome before hydration; nothing on the server trusts
-  // them — every server read goes through the signed JWT above.
-  cookieStore.set("prestige_role", payload.role, { path: "/", maxAge: SESSION_MAX_AGE });
-  for (const [name, value] of [
-    ["prestige_dealer_id", payload.dealerId],
-    ["prestige_warehouse_id", payload.warehouseId],
-    ["prestige_showroom_id", payload.showroomId],
-  ] as const) {
-    if (value) {
-      cookieStore.set(name, value, { path: "/", maxAge: SESSION_MAX_AGE });
-    } else {
-      cookieStore.delete(name);
+    cookieStore.set("prestige_role", payload.role, { path: "/", maxAge: SESSION_MAX_AGE });
+    for (const [name, value] of [
+      ["prestige_dealer_id", payload.dealerId],
+      ["prestige_warehouse_id", payload.warehouseId],
+      ["prestige_showroom_id", payload.showroomId],
+    ] as const) {
+      if (value) {
+        cookieStore.set(name, value, { path: "/", maxAge: SESSION_MAX_AGE });
+      } else {
+        cookieStore.delete(name);
+      }
     }
+  } catch {
+    /* Outside HTTP request context (e.g. CLI test scripts) */
   }
 }
 

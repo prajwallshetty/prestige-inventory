@@ -2,22 +2,25 @@
 
 import React, { useState } from "react";
 import { signInAction } from "@/app/actions";
-import { AlertCircle, ArrowRight } from "lucide-react";
+import { AlertCircle, ArrowRight, KeyRound, Loader2 } from "lucide-react";
 
 export default function LoginPage() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [loginCode, setLoginCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    if (!loginCode.trim()) {
+      setError("Please enter your login code.");
+      return;
+    }
+
     setIsSubmitting(true);
 
     const formData = new FormData();
-    formData.append("email", email);
-    formData.append("password", password);
+    formData.append("loginCode", loginCode.trim());
 
     try {
       const result = await signInAction(formData);
@@ -26,8 +29,7 @@ export default function LoginPage() {
         setIsSubmitting(false);
         return;
       }
-      // A `next` parameter from the middleware returns the user to whatever
-      // they were trying to reach before signing in.
+
       const next = new URLSearchParams(window.location.search).get("next");
       window.location.href = next && next.startsWith("/") ? next : result.data.redirectTo;
     } catch {
@@ -36,27 +38,34 @@ export default function LoginPage() {
     }
   };
 
+  const handleQuickCode = (code: string) => {
+    setLoginCode(code);
+    setError(null);
+  };
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#F7F7F5] px-4 py-12 sm:px-6 lg:px-8 font-sans antialiased text-[#111111]">
-      <div className="w-full max-w-md space-y-8">
-        {/* BRAND IDENTITY */}
+    <div className="flex min-h-screen flex-col items-center justify-center bg-[#F7F7F5] px-4 py-8 sm:px-6 lg:px-8 font-sans antialiased text-[#111111]">
+      <div className="w-full max-w-md space-y-6">
+        {/* BRAND LOGO & HEADER */}
         <div className="text-center space-y-2">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-white border border-[#EAEAEA] p-1 shadow-xs">
             <img src="/icons/logo.png" alt="Prestige Logo" className="h-full w-full object-contain" />
           </div>
           <div>
-            <h2 className="text-sm font-black tracking-widest text-[#111111] uppercase">PRESTIGE TILES</h2>
-            <p className="text-[10px] font-bold text-[#6B6B6B] tracking-wider mt-0.5">Inventory & Dealer Portal</p>
+            <h2 className="text-xs font-black tracking-widest text-[#111111] uppercase">PRESTIGE TILES</h2>
+            <p className="text-[10px] font-bold text-[#6B6B6B] tracking-wider mt-0.5">Inventory & Portal Management</p>
           </div>
-          <p className="text-xs text-[#6B6B6B] max-w-xs mx-auto mt-2">
-            Manage warehouse inventory, real-time reservations, and dealer bookings from one secure platform.
-          </p>
         </div>
 
         {/* LOGIN CARD */}
-        <div className="bg-white rounded-2xl border border-[#EAEAEA] p-8 shadow-sm space-y-6">
+        <div className="bg-white rounded-2xl border border-[#EAEAEA] p-6 sm:p-8 shadow-xs space-y-5">
+          <div className="space-y-1 text-center sm:text-left">
+            <h1 className="text-lg font-black text-[#111111]">Welcome Back</h1>
+            <p className="text-xs text-[#6B6B6B]">Enter your assigned unique login code to access your portal.</p>
+          </div>
+
           {error && (
-            <div className="rounded-lg bg-rose-50 border border-rose-100 p-3 flex gap-2.5 items-start text-xs text-rose-800 font-medium">
+            <div className="rounded-xl bg-rose-50 border border-rose-100 p-3.5 flex items-start gap-2.5 text-xs text-rose-800 font-medium">
               <AlertCircle className="h-4 w-4 shrink-0 text-rose-600 mt-0.5" />
               <span>{error}</span>
             </div>
@@ -64,91 +73,92 @@ export default function LoginPage() {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">Email Address</label>
-              <input
-                type="email"
-                required
-                placeholder="name@prestigetiles.co"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] px-3.5 py-2.5 text-xs text-[#111111] placeholder-[#9A9A9A] focus:border-[#F2C202] focus:outline-hidden"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <div className="flex justify-between items-center">
-                <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">Password</label>
-                <a href="#" className="text-[10px] font-bold text-[#8A7300] hover:underline" onClick={(e) => { e.preventDefault(); alert("Contact system administrator to reset password."); }}>
-                  Forgot password?
-                </a>
+              <label htmlFor="login-code-input" className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
+                Unique Login Code *
+              </label>
+              <div className="relative flex items-center">
+                <input
+                  id="login-code-input"
+                  type="text"
+                  required
+                  autoFocus
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="characters"
+                  placeholder="e.g. ADM-001 or SH01-ST-001"
+                  value={loginCode}
+                  onChange={(e) => setLoginCode(e.target.value.toUpperCase())}
+                  className="w-full rounded-xl border border-[#EAEAEA] bg-[#F7F7F5] px-4 py-3.5 text-sm font-bold font-mono text-[#111111] placeholder:font-normal placeholder-[#9A9A9A] focus:border-[#F2C202] focus:bg-white focus:outline-hidden transition-all min-h-[48px] uppercase tracking-wider"
+                />
+                <KeyRound className="absolute right-3.5 h-4 w-4 text-[#9A9A9A] pointer-events-none" />
               </div>
-              <input
-                type="password"
-                required
-                placeholder="••••••••"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] px-3.5 py-2.5 text-xs text-[#111111] placeholder-[#9A9A9A] focus:border-[#F2C202] focus:outline-hidden"
-              />
             </div>
 
             <button
               type="submit"
-              disabled={isSubmitting}
-              className="w-full flex items-center justify-center gap-2 rounded-lg bg-[#F2C202] py-2.5 text-xs font-black text-white hover:bg-[#D8AD02] transition-all shadow-sm disabled:opacity-50 cursor-pointer mt-2"
+              disabled={isSubmitting || !loginCode.trim()}
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-[#F2C202] py-3.5 text-xs sm:text-sm font-black text-white hover:bg-[#D8AD02] active:scale-[0.99] transition-all shadow-sm disabled:opacity-50 cursor-pointer min-h-[48px]"
             >
-              {isSubmitting ? "Signing in..." : "Sign In"}
-              {!isSubmitting && <ArrowRight className="h-4 w-4" />}
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Verifying Code...</span>
+                </>
+              ) : (
+                <>
+                  <span>Sign In to Portal</span>
+                  <ArrowRight className="h-4 w-4" />
+                </>
+              )}
             </button>
           </form>
 
-          {/* QUICK LOGIN BUTTONS */}
-          <div className="border-t border-[#EAEAEA] pt-4 space-y-2">
-            <p className="text-[9px] font-black uppercase text-[#6B6B6B] tracking-wider text-center">Quick Login for Testing</p>
+          {/* QUICK DEMO CODES FOR DEVELOPMENT / TESTING */}
+          <div className="border-t border-[#EAEAEA] pt-4 space-y-2.5">
+            <p className="text-[9px] font-black uppercase text-[#6B6B6B] tracking-wider text-center">
+              Quick Select Demo Login Codes
+            </p>
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={() => { setEmail("admin@prestigetiles.com"); setPassword("prestige123"); }}
-                className="rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] py-1.5 px-2 text-[10px] font-bold text-[#111111] hover:bg-[#EAEAEA] transition-all text-center cursor-pointer"
+                onClick={() => handleQuickCode("ADM-001")}
+                className="rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] py-2 px-2.5 text-[10px] font-bold text-[#111111] hover:bg-[#F2C202]/15 hover:border-[#F2C202] transition-all text-left flex items-center justify-between cursor-pointer touch-target"
               >
-                Super Admin
+                <span>Super Admin</span>
+                <span className="font-mono text-[#8A7300] font-black">ADM-001</span>
               </button>
               <button
                 type="button"
-                onClick={() => { setEmail("manager@prestigetiles.com"); setPassword("prestige123"); }}
-                className="rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] py-1.5 px-2 text-[10px] font-bold text-[#111111] hover:bg-[#EAEAEA] transition-all text-center cursor-pointer"
+                onClick={() => handleQuickCode("MGR-001")}
+                className="rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] py-2 px-2.5 text-[10px] font-bold text-[#111111] hover:bg-[#F2C202]/15 hover:border-[#F2C202] transition-all text-left flex items-center justify-between cursor-pointer touch-target"
               >
-                Manager
+                <span>Manager</span>
+                <span className="font-mono text-[#8A7300] font-black">MGR-001</span>
               </button>
               <button
                 type="button"
-                onClick={() => { setEmail("incharge@prestigetiles.com"); setPassword("prestige123"); }}
-                className="rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] py-1.5 px-2 text-[10px] font-bold text-[#111111] hover:bg-[#EAEAEA] transition-all text-center cursor-pointer"
+                onClick={() => handleQuickCode("SH01-IC-001")}
+                className="rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] py-2 px-2.5 text-[10px] font-bold text-[#111111] hover:bg-[#F2C202]/15 hover:border-[#F2C202] transition-all text-left flex items-center justify-between cursor-pointer touch-target"
               >
-                Showroom In-Charge
+                <span>Showroom In-Charge</span>
+                <span className="font-mono text-[#8A7300] font-black">SH01-IC-001</span>
               </button>
               <button
                 type="button"
-                onClick={() => { setEmail("showroomstaff@prestigetiles.com"); setPassword("prestige123"); }}
-                className="rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] py-1.5 px-2 text-[10px] font-bold text-[#111111] hover:bg-[#EAEAEA] transition-all text-center cursor-pointer"
+                onClick={() => handleQuickCode("SH01-ST-001")}
+                className="rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] py-2 px-2.5 text-[10px] font-bold text-[#111111] hover:bg-[#F2C202]/15 hover:border-[#F2C202] transition-all text-left flex items-center justify-between cursor-pointer touch-target"
               >
-                Showroom Staff
-              </button>
-              <button
-                type="button"
-                onClick={() => { setEmail("viewer@prestigetiles.com"); setPassword("prestige123"); }}
-                className="rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] py-1.5 px-2 text-[10px] font-bold text-[#111111] hover:bg-[#EAEAEA] transition-all text-center cursor-pointer"
-              >
-                Viewer
+                <span>Showroom Staff</span>
+                <span className="font-mono text-[#8A7300] font-black">SH01-ST-001</span>
               </button>
             </div>
           </div>
         </div>
 
-        {/* FOOTER COOLDOWN */}
-        <div className="text-center">
+        {/* FOOTER */}
+        <div className="text-center space-y-1">
           <p className="text-[10px] text-[#6B6B6B] font-medium">
-            Prestige Tiles ERP © {new Date().getFullYear()} • Secure Session Protected
+            Prestige Tiles B2B Portal © {new Date().getFullYear()} • Encrypted Server-Side Session
           </p>
         </div>
       </div>

@@ -64,6 +64,8 @@ import {
   updateSessionPreview,
   SESSION_MAX_AGE,
 } from "@/lib/auth";
+import { generateUniqueLoginCode } from "@/lib/loginCode";
+import { checkLoginRateLimit, recordFailedLoginAttempt, clearLoginRateLimit } from "@/lib/rateLimit";
 import {
   ActionResult,
   fail,
@@ -1203,28 +1205,47 @@ export async function globalSearchAction(query: string): Promise<GlobalSearchRes
 
 export async function signInAction(formData: FormData): Promise<ActionResult<{ redirectTo: string }>> {
   return runAction(async () => {
-    const email = (formData.get("email") as string)?.toLowerCase().trim();
-    const password = formData.get("password") as string;
+    const rawCode = (formData.get("loginCode") as string) || (formData.get("email") as string);
+    const loginCode = String(rawCode || "").trim().toUpperCase();
 
-    if (!email || !password) {
-      throw new AppError("Email and password are required.", 400, "VALIDATION");
+    if (!loginCode) {
+      throw new AppError("Login code is required.", 400, "VALIDATION");
     }
 
-    const user = await db.user.findUnique({ where: { email } });
+    // Rate limiting guard against brute-force attacks (spec §12, §13)
+    const rateCheck = checkLoginRateLimit(loginCode);
+    if (!rateCheck.allowed) {
+      const remainingSec = Math.ceil((rateCheck.remainingMs || 300000) / 1000);
+      throw new AppError(
+        `Too many failed login attempts. Please wait ${remainingSec} seconds before trying again.`,
+        429,
+        "RATE_LIMITED"
+      );
+    }
 
-    // The same message for both cases, so the form cannot be used to discover
-    // which addresses are registered.
-    if (!user) throw new AppError("Email or password is incorrect.", 401, "BAD_CREDENTIALS");
+    // Lookup active user by unique loginCode or email
+    const user = await db.user.findFirst({
+      where: {
+        OR: [
+          { loginCode },
+          { email: loginCode.toLowerCase() },
+        ],
+      },
+    });
+
+    if (!user) {
+      recordFailedLoginAttempt(loginCode);
+      throw new AppError("Invalid login code.", 401, "BAD_CREDENTIALS");
+    }
 
     if (user.status === "DEACTIVATED" || user.status === "INACTIVE") {
-      throw new AppError("Your account is currently inactive.", 403, "ACCOUNT_INACTIVE");
+      throw new AppError("Your account is currently inactive. Access denied.", 403, "ACCOUNT_INACTIVE");
     }
     if (user.status === "SUSPENDED") {
-      throw new AppError("Your account is currently suspended.", 403, "ACCOUNT_SUSPENDED");
+      throw new AppError("Your account is currently suspended. Contact Super Admin.", 403, "ACCOUNT_SUSPENDED");
     }
 
-    const matches = await comparePassword(password, user.password);
-    if (!matches) throw new AppError("Email or password is incorrect.", 401, "BAD_CREDENTIALS");
+    clearLoginRateLimit(loginCode);
 
     if (!isRole(user.role)) {
       throw new AppError("Your account has an invalid role. Contact an administrator.", 403, "BAD_ROLE");
@@ -1237,8 +1258,6 @@ export async function signInAction(formData: FormData): Promise<ActionResult<{ r
       role: user.role,
       dealerId: user.dealer_id || undefined,
       warehouseId: user.warehouse_id || undefined,
-      // Without this, every showroom user signed in with no showroom scope:
-      // their blocks were created unscoped and their own queues came back empty.
       showroomId: user.showroomId || undefined,
     });
 
@@ -1251,7 +1270,7 @@ export async function signInAction(formData: FormData): Promise<ActionResult<{ r
         entityId: user.id,
         userId: user.id,
         roleAtTime: user.role,
-        meta: { performedBy: user.name, details: "User signed in successfully." },
+        meta: { performedBy: user.name, details: `User signed in with code ${user.loginCode || loginCode}.` },
       },
     });
 
@@ -1260,7 +1279,7 @@ export async function signInAction(formData: FormData): Promise<ActionResult<{ r
       : user.role === "MANAGER" ? "/warehouse/dashboard"
       : user.role === "SHOWROOM_STAFF" ? "/showroom-staff/dashboard"
       : user.role === "SHOWROOM_INCHARGE" ? "/showroom-incharge/dashboard"
-      : "/viewer/dashboard";
+      : "/dashboard";
 
     return { redirectTo };
   });
@@ -1344,31 +1363,44 @@ function validateRoleAssignment(role: string, warehouse_id?: string, showroom_id
   }
 }
 
-export async function createUserAction(payload: any): Promise<ActionResult<{ id: string }>> {
+export async function createUserAction(payload: any): Promise<ActionResult<{ id: string; loginCode: string }>> {
   return runAction(async () => {
     const admin = await requireSuperAdmin("user management");
-    const { name, email, password, role, warehouse_id, showroom_id, status } = payload;
+    const { name, email, password, role, warehouse_id, showroom_id, status, loginCode: customCode } = payload;
 
-    if (!name || !email || !password || !role) {
-      throw new AppError("Name, email, password and role are all required.", 400, "VALIDATION");
-    }
-    if (String(password).length < 8) {
-      throw new AppError("Password must be at least 8 characters.", 400, "VALIDATION");
+    if (!name || !role) {
+      throw new AppError("Name and role are required.", 400, "VALIDATION");
     }
     validateRoleAssignment(role, warehouse_id, showroom_id);
 
-    const normalisedEmail = String(email).toLowerCase().trim();
-    if (await db.user.findUnique({ where: { email: normalisedEmail } })) {
+    const userEmail = (email || `${name.toLowerCase().replace(/[^a-z0-9]/g, "")}@prestigetiles.com`).toLowerCase().trim();
+    if (await db.user.findUnique({ where: { email: userEmail } })) {
       throw new AppError("That email address is already registered.", 409, "DUPLICATE");
     }
+
+    // Auto-generate or validate unique loginCode
+    let finalCode = customCode?.trim().toUpperCase();
+    if (!finalCode) {
+      finalCode = await generateUniqueLoginCode(
+        role,
+        (role === "SHOWROOM_STAFF" || role === "SHOWROOM_INCHARGE") ? showroom_id : null
+      );
+    } else {
+      if (await db.user.findFirst({ where: { loginCode: finalCode } })) {
+        throw new AppError(`Login code "${finalCode}" is already assigned to another user.`, 409, "DUPLICATE");
+      }
+    }
+
+    const defaultPassword = password && String(password).length >= 8 ? password : "prestige_default_pwd";
 
     const newUser = await db.user.create({
       data: {
         name,
-        email: normalisedEmail,
-        password: await hashPassword(password),
+        email: userEmail,
+        loginCode: finalCode,
+        password: await hashPassword(defaultPassword),
         role,
-        dealer_id: null, // the DEALER login role was retired in Phase 1
+        dealer_id: null,
         warehouse_id: role === "MANAGER" ? warehouse_id : null,
         showroomId: role === "SHOWROOM_STAFF" || role === "SHOWROOM_INCHARGE" ? showroom_id : null,
         status: status || "ACTIVE",
@@ -1382,35 +1414,44 @@ export async function createUserAction(payload: any): Promise<ActionResult<{ id:
         entityId: newUser.id,
         userId: admin.userId,
         roleAtTime: admin.actualRole,
-        meta: { performedBy: admin.name, details: `Created user ${newUser.name} with role ${newUser.role}.` },
+        meta: { performedBy: admin.name, details: `Created user ${newUser.name} [Code: ${finalCode}] with role ${newUser.role}.` },
       },
     });
 
     revalidatePath("/admin/users");
-    return { id: newUser.id };
+    return { id: newUser.id, loginCode: finalCode };
   });
 }
 
 export async function updateUserAction(userId: string, payload: any): Promise<ActionResult<{ id: string }>> {
   return runAction(async () => {
     const admin = await requireSuperAdmin("user management");
-    const { name, email, password, role, warehouse_id, showroom_id, status } = payload;
+    const { name, email, password, role, warehouse_id, showroom_id, status, loginCode: customCode } = payload;
 
     validateRoleAssignment(role, warehouse_id, showroom_id);
-    if (password && String(password).length < 8) {
-      throw new AppError("Password must be at least 8 characters.", 400, "VALIDATION");
-    }
+
+    const existing = await db.user.findUnique({ where: { id: userId } });
+    if (!existing) throw new AppError("User not found.", 404, "NOT_FOUND");
 
     const updateData: any = {
       name,
-      email: email?.toLowerCase().trim(),
       role,
       dealer_id: null,
       warehouse_id: role === "MANAGER" ? warehouse_id : null,
       showroomId: role === "SHOWROOM_STAFF" || role === "SHOWROOM_INCHARGE" ? showroom_id : null,
       status,
     };
-    if (password) updateData.password = await hashPassword(password);
+
+    if (email) updateData.email = email.toLowerCase().trim();
+    if (password && String(password).length >= 8) updateData.password = await hashPassword(password);
+
+    if (customCode && customCode.trim().toUpperCase() !== existing.loginCode) {
+      const normalisedCode = customCode.trim().toUpperCase();
+      if (await db.user.findFirst({ where: { loginCode: normalisedCode, NOT: { id: userId } } })) {
+        throw new AppError(`Login code "${normalisedCode}" is already taken.`, 409, "DUPLICATE");
+      }
+      updateData.loginCode = normalisedCode;
+    }
 
     const updatedUser = await db.user.update({ where: { id: userId }, data: updateData });
 
@@ -1421,12 +1462,40 @@ export async function updateUserAction(userId: string, payload: any): Promise<Ac
         entityId: updatedUser.id,
         userId: admin.userId,
         roleAtTime: admin.actualRole,
-        meta: { performedBy: admin.name, details: `Updated ${updatedUser.name}.` },
+        meta: { performedBy: admin.name, details: `Updated user ${updatedUser.name}.` },
       },
     });
 
     revalidatePath("/admin/users");
     return { id: updatedUser.id };
+  });
+}
+
+export async function regenerateLoginCodeAction(userId: string): Promise<ActionResult<{ id: string; loginCode: string }>> {
+  return runAction(async () => {
+    const admin = await requireSuperAdmin("regenerate login code");
+    const targetUser = await db.user.findUnique({ where: { id: userId } });
+    if (!targetUser) throw new AppError("User not found.", 404, "NOT_FOUND");
+
+    const newCode = await generateUniqueLoginCode(targetUser.role, targetUser.showroomId);
+    const updatedUser = await db.user.update({
+      where: { id: userId },
+      data: { loginCode: newCode },
+    });
+
+    await db.auditLog.create({
+      data: {
+        action: "USER_CODE_REGENERATE",
+        entity: "User",
+        entityId: updatedUser.id,
+        userId: admin.userId,
+        roleAtTime: admin.actualRole,
+        meta: { performedBy: admin.name, details: `Regenerated login code for ${updatedUser.name} -> ${newCode}.` },
+      },
+    });
+
+    revalidatePath("/admin/users");
+    return { id: updatedUser.id, loginCode: newCode };
   });
 }
 

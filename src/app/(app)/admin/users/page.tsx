@@ -31,6 +31,7 @@ export default async function UsersPage() {
     id: u.id,
     name: u.name,
     email: u.email,
+    loginCode: u.loginCode || undefined,
     role: u.role,
     status: u.status,
     warehouse_id: u.warehouse_id || undefined,

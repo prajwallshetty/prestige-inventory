@@ -527,18 +527,23 @@ export function InventoryClientTable({
           <thead className="border-b border-[#EAEAEA] bg-[#F7F7F5] text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
             <tr>
               <th className="px-4 py-4 w-16 text-center">Image</th>
-              <th className="px-4 py-4 font-mono">Product SKU</th>
-              <th className="px-4 py-4">Product Description</th>
               <th className="px-4 py-4">Brand</th>
+              <th className="px-4 py-4">Product</th>
+              <th className="px-4 py-4">Surface</th>
               <th className="px-4 py-4">Size</th>
-              <th className="px-4 py-4 text-right">Available</th>
+              <th className="px-4 py-4 text-right font-mono">Stock</th>
               <th className="px-4 py-4 text-right font-mono">Blocked</th>
-              <th className="px-4 py-4 text-center">Status</th>
+              <th className="px-4 py-4 text-right font-mono">Available</th>
               <th className="px-4 py-4 text-center">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-[#EAEAEA] font-medium text-[#111111]">
             {items.map((item) => {
+              const totalStock = item.totalStock ?? 0;
+              const blockedStock = item.blockedStock ?? 0;
+              const availableStock = item.availableStock ?? Math.max(0, totalStock - blockedStock);
+              const surface = item.surface || item.finish || "—";
+
               return (
                 <tr key={item.id} className="hover:bg-[#F7F7F5]/50 transition-colors">
                   <td className="px-2 py-2">
@@ -548,30 +553,25 @@ export function InventoryClientTable({
                       wrapperClassName="h-10 w-10 relative overflow-hidden rounded-lg mx-auto border border-[#EAEAEA]"
                     />
                   </td>
-                  <td className="px-4 py-3.5 font-bold font-mono text-[#111111]">{item.sku || "—"}</td>
+                  <td className="px-4 py-3.5 text-[#6B6B6B] font-bold">{item.brandName || "—"}</td>
                   <td className="px-4 py-3.5">
                     <button
                       onClick={() => setSelectedProduct(item)}
-                      className="text-[#8A7300] hover:text-[#D8AD02] hover:underline font-bold text-left transition-colors cursor-pointer"
+                      className="text-[#111111] hover:text-[#F2C202] font-black text-left transition-colors cursor-pointer"
                     >
                       {item.productName}
                     </button>
-                    {item.images && item.images.length > 0 && (
-                      <span className="ml-2 inline-flex items-center gap-1 text-[9px] font-bold text-[#6B6B6B] bg-[#F7F7F5] border border-[#EAEAEA] px-1.5 py-0.5 rounded-md">
-                        <ImageIcon className="h-2.5 w-2.5" /> {item.images.length} images
-                      </span>
-                    )}
                   </td>
-                  <td className="px-4 py-3.5 text-[#6B6B6B]">{item.brandName || "—"}</td>
+                  <td className="px-4 py-3.5 text-[#6B6B6B] font-semibold">{surface}</td>
                   <td className="px-4 py-3.5 text-[#6B6B6B] font-mono">{item.size || "—"}</td>
+                  <td className="px-4 py-3.5 text-right font-bold text-[#111111] font-mono">
+                    {totalStock.toLocaleString("en-IN")}
+                  </td>
+                  <td className="px-4 py-3.5 text-right text-amber-600 font-bold font-mono">
+                    {blockedStock.toLocaleString("en-IN")}
+                  </td>
                   <td className="px-4 py-3.5 text-right font-black text-emerald-600 font-mono">
-                    {item.availableStock.toLocaleString("en-IN")} Box
-                  </td>
-                  <td className="px-4 py-3.5 text-right text-amber-600 font-mono">
-                    {item.blockedStock.toLocaleString("en-IN")} Box
-                  </td>
-                  <td className="px-4 py-3.5 text-center">
-                    <StatusBadge status={item.status} />
+                    {availableStock.toLocaleString("en-IN")}
                   </td>
                   <td className="px-4 py-3.5">
                     <div className="flex items-center justify-center gap-1.5">
@@ -585,7 +585,7 @@ export function InventoryClientTable({
                         <button
                           onClick={() => openEditModal(item)}
                           className="rounded-lg border border-[#EAEAEA] bg-white p-1 text-[#6B6B6B] hover:bg-[#F7F7F5] hover:text-[#111111] transition-all"
-                          title="Edit Stock Item & Images"
+                          title="Edit Product & Stock"
                         >
                           <Pencil className="h-3.5 w-3.5" />
                         </button>
@@ -602,7 +602,7 @@ export function InventoryClientTable({
                         <button
                           onClick={() => openDeleteModal(item)}
                           className="rounded-lg border border-rose-200 bg-white p-1 text-rose-600 hover:bg-rose-50 transition-all"
-                          title="Delete Stock Item"
+                          title="Delete Product"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
@@ -618,59 +618,75 @@ export function InventoryClientTable({
 
       {/* MOBILE CARDS */}
       <div className="md:hidden space-y-3">
-        {items.map((item) => (
-          <div
-            key={item.id}
-            onClick={() => setSelectedProduct(item)}
-            className="rounded-xl border border-[#EAEAEA] bg-white p-4 shadow-xs space-y-3 relative active:bg-[#F7F7F5] transition-all cursor-pointer"
-          >
-            <div className="flex items-center gap-3">
-              <ShimmerImage
-                src={getProductThumbnailUrl(item)}
-                alt={item.productName}
-                wrapperClassName="h-14 w-14 relative overflow-hidden rounded-lg border border-[#EAEAEA] shrink-0"
-              />
-              <div className="flex-1 min-w-0">
-                <h4 className="text-xs font-black text-[#111111] truncate">{item.productName}</h4>
-                <p className="text-[10px] text-[#6B6B6B] mt-0.5">{item.brandName || "—"}</p>
-                <p className="text-[10px] text-[#6B6B6B] font-mono">{item.size || "—"}</p>
-              </div>
-            </div>
+        {items.map((item) => {
+          const totalStock = item.totalStock ?? 0;
+          const blockedStock = item.blockedStock ?? 0;
+          const availableStock = item.availableStock ?? Math.max(0, totalStock - blockedStock);
+          const surface = item.surface || item.finish || "—";
 
-            <div className="grid grid-cols-2 gap-2 py-2 border-y border-[#EAEAEA] text-center bg-[#F7F7F5] rounded-lg">
-              <div>
-                <p className="text-[9px] uppercase font-bold text-[#6B6B6B]">Available</p>
-                <p className="text-xs font-black text-emerald-600 mt-0.5">{item.availableStock} Box</p>
+          return (
+            <div
+              key={item.id}
+              onClick={() => setSelectedProduct(item)}
+              className="rounded-xl border border-[#EAEAEA] bg-white p-4 shadow-xs space-y-3 relative active:bg-[#F7F7F5] transition-all cursor-pointer"
+            >
+              <div className="flex items-center gap-3">
+                <ShimmerImage
+                  src={getProductThumbnailUrl(item)}
+                  alt={item.productName}
+                  wrapperClassName="h-16 w-16 relative overflow-hidden rounded-lg border border-[#EAEAEA] shrink-0"
+                />
+                <div className="flex-1 min-w-0">
+                  <span className="text-[9px] font-black uppercase text-[#8A7300] tracking-wider block">
+                    {item.brandName || "PRESTIGE"}
+                  </span>
+                  <h4 className="text-xs font-black text-[#111111] truncate mt-0.5">{item.productName}</h4>
+                  <p className="text-[10px] text-[#6B6B6B] mt-0.5">
+                    Surface: <span className="font-semibold text-[#111111]">{surface}</span> • Size:{" "}
+                    <span className="font-mono font-semibold text-[#111111]">{item.size || "—"}</span>
+                  </p>
+                </div>
               </div>
-              <div>
-                <p className="text-[9px] uppercase font-bold text-[#6B6B6B]">Blocked</p>
-                <p className="text-xs font-bold text-amber-600 mt-0.5">{item.blockedStock} Box</p>
-              </div>
-            </div>
 
-            <div className="flex items-center justify-between pt-1">
-              <StatusBadge status={item.status} />
-              <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                {canManage && (
-                  <button
-                    onClick={() => openEditModal(item)}
-                    className="rounded-lg border border-[#EAEAEA] bg-white p-1.5 text-[#6B6B6B]"
-                  >
-                    <Pencil className="h-4 w-4" />
-                  </button>
-                )}
-                {isSuperAdmin && (
-                  <button
-                    onClick={() => openDeleteModal(item)}
-                    className="rounded-lg border border-rose-200 bg-rose-50 p-1.5 text-rose-600"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                )}
+              <div className="grid grid-cols-3 gap-2 py-2 border-y border-[#EAEAEA] text-center bg-[#F7F7F5] rounded-lg">
+                <div>
+                  <p className="text-[9px] uppercase font-bold text-[#6B6B6B]">Stock</p>
+                  <p className="text-xs font-bold text-[#111111] mt-0.5">{totalStock}</p>
+                </div>
+                <div>
+                  <p className="text-[9px] uppercase font-bold text-[#6B6B6B]">Blocked</p>
+                  <p className="text-xs font-bold text-amber-600 mt-0.5">{blockedStock}</p>
+                </div>
+                <div>
+                  <p className="text-[9px] uppercase font-bold text-[#6B6B6B]">Available</p>
+                  <p className="text-xs font-black text-emerald-600 mt-0.5">{availableStock}</p>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between pt-1">
+                <StatusBadge status={item.status} />
+                <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                  {canManage && (
+                    <button
+                      onClick={() => openEditModal(item)}
+                      className="rounded-lg border border-[#EAEAEA] bg-white p-1.5 text-[#6B6B6B]"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                  )}
+                  {isSuperAdmin && (
+                    <button
+                      onClick={() => openDeleteModal(item)}
+                      className="rounded-lg border border-rose-200 bg-rose-50 p-1.5 text-rose-600"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* PAGINATION BAR */}

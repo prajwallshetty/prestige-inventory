@@ -6,6 +6,21 @@ export default async function SettingsPage() {
   const session = await getSessionContext();
   if (!session.authenticated) redirect("/login");
 
+  const [showroom, warehouse] = await Promise.all([
+    session.showroomId
+      ? (await import("@/lib/db")).db.showroom.findUnique({
+          where: { id: session.showroomId },
+          select: { name: true, city: true },
+        })
+      : Promise.resolve(null),
+    session.warehouseId
+      ? (await import("@/lib/db")).db.warehouse.findUnique({
+          where: { id: session.warehouseId },
+          select: { name: true, code: true },
+        })
+      : Promise.resolve(null),
+  ]);
+
   return (
     <>
       <div className="space-y-6 max-w-2xl">
@@ -35,6 +50,14 @@ export default async function SettingsPage() {
                 {session.role?.replace(/_/g, " ")}
               </p>
             </div>
+            {session.showroomId && (
+              <div>
+                <p className="font-bold text-[#6B6B6B]">Assigned Showroom</p>
+                <p className="text-sm text-[#111111] mt-1 font-bold">
+                  {showroom ? `${showroom.name}${showroom.city ? ` (${showroom.city})` : ""}` : session.showroomId}
+                </p>
+              </div>
+            )}
             {session.dealerId && (
               <div>
                 <p className="font-bold text-[#6B6B6B]">Assigned Dealer ID</p>
@@ -43,8 +66,10 @@ export default async function SettingsPage() {
             )}
             {session.warehouseId && (
               <div>
-                <p className="font-bold text-[#6B6B6B]">Assigned Warehouse ID</p>
-                <p className="text-sm text-[#111111] mt-1 font-mono">{session.warehouseId}</p>
+                <p className="font-bold text-[#6B6B6B]">Assigned Warehouse</p>
+                <p className="text-sm text-[#111111] mt-1 font-bold">
+                  {warehouse ? `${warehouse.name} (${warehouse.code})` : session.warehouseId}
+                </p>
               </div>
             )}
           </div>
