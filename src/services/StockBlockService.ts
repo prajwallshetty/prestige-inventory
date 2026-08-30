@@ -388,6 +388,7 @@ export async function createBlockRequest({
   blocked_by,
   blockType = "BLOCKED",
   userRole,
+  blockOrderId,
 }: {
   productId: string;
   quantity: number;
@@ -400,6 +401,7 @@ export async function createBlockRequest({
   blocked_by?: "SAMSHUDIN" | "SALMAN";
   blockType?: "BLOCKED" | "CONFIRMED";
   userRole?: string;
+  blockOrderId?: string;
 }) {
   if (!productId) throw new AppError("Please select a product.", 400, "VALIDATION");
   if (!Number.isFinite(quantity) || quantity <= 0) {
@@ -480,6 +482,7 @@ export async function createBlockRequest({
       data: {
         block_number: await nextBlockNumber(tx),
         block_type: blockType,
+        blockOrderId: blockOrderId || null,
         productId,
         inventoryId: inventory.id,
         warehouseId: inventory.warehouseId,
