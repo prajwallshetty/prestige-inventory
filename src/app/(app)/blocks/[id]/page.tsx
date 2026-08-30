@@ -4,6 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import { db } from "@/lib/db";
 import { getEffectiveSession } from "@/lib/auth";
 import { type Role } from "@/lib/permissions";
+import { deriveProcurementStatus } from "@/lib/procurementStatus";
 import { BlockDetailClient } from "@/components/blocks/BlockDetailClient";
 
 export const revalidate = 0;
@@ -34,6 +35,13 @@ export default async function BlockDetailPage({
           totalStock: true,
           blockedStock: true,
           product: { select: { id: true, name: true, sku: true, productCode: true, importKey: true, size: true, brand: { select: { name: true } } } },
+        },
+      },
+      procurementShipmentItem: {
+        select: {
+          id: true,
+          status: true,
+          shipment: { select: { id: true, shipmentNumber: true, status: true, supplier: true, expectedDate: true } },
         },
       },
     },
@@ -91,6 +99,17 @@ export default async function BlockDetailPage({
           quantity: block.quantity,
           shippedQuantity: block.shippedQuantity,
           deliveredQuantity: block.deliveredQuantity,
+          // Overstock/procurement spec §32 — how much of the request is
+          // covered by physical stock vs. still awaiting a purchase order.
+          shortageQuantity: block.shortageQuantity,
+          availableQuantity: Math.max(0, block.quantity - block.shortageQuantity),
+          procurementStatus: deriveProcurementStatus({
+            shortageQuantity: block.shortageQuantity,
+            procurementShipmentItem: block.procurementShipmentItem
+              ? { status: block.procurementShipmentItem.status, shipment: { status: block.procurementShipmentItem.shipment.status } }
+              : null,
+          }),
+          procurementShipment: block.procurementShipmentItem?.shipment ?? null,
           remarks: block.remarks,
           approvalRoute: block.approvalRoute,
           requestedBy: block.requestedBy,

@@ -32,7 +32,9 @@ import {
   Megaphone,
   MessageSquare,
   Package,
-  Navigation
+  Navigation,
+  ClipboardList,
+  ShoppingCart
 } from "lucide-react";
 import { setSimulatedSessionAction, signOutAction } from "@/app/actions";
 import { toast } from "sonner";
@@ -49,9 +51,11 @@ interface Props {
   showrooms: any[];
   /** Blocks currently waiting on *this* user's decision. Drives the nav badge. */
   pendingApprovalCount?: number;
+  /** Open shortages not yet on a purchase order. Manager/Super Admin only. */
+  needToOrderCount?: number;
 }
 
-export function SidebarLayout({ children, session, warehouses, showrooms, pendingApprovalCount = 0 }: Props) {
+export function SidebarLayout({ children, session, warehouses, showrooms, pendingApprovalCount = 0, needToOrderCount = 0 }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -242,6 +246,8 @@ export function SidebarLayout({ children, session, warehouses, showrooms, pendin
       const lowStock = { name: "Low Stock Alert", href: `${pathPrefix}/inventory?status=LOW_STOCK`, icon: AlertTriangle };
       const outOfStock = { name: "Out of Stock", href: `${pathPrefix}/inventory?status=OUT_OF_STOCK`, icon: PackageCheck };
       const dealersMgmt = { name: "Dealers List", href: `${pathPrefix}/dealers`, icon: Users };
+      const needToOrder = { name: "Need to Order", href: `${pathPrefix}/procurement/need-to-order`, icon: ClipboardList, badge: needToOrderCount };
+      const purchaseOrders = { name: "Purchase Orders", href: `${pathPrefix}/procurement/orders`, icon: ShoppingCart };
 
       return [
         {
@@ -255,6 +261,10 @@ export function SidebarLayout({ children, session, warehouses, showrooms, pendin
         {
           category: "INVENTORY CONTROL",
           items: [allStock, lowStock, outOfStock],
+        },
+        {
+          category: "PROCUREMENT",
+          items: [needToOrder, purchaseOrders],
         },
         {
           category: "RESERVATIONS & LOGISTICS",
@@ -356,6 +366,8 @@ export function SidebarLayout({ children, session, warehouses, showrooms, pendin
     const audit = { name: "Audit Trail", href: `${pathPrefix}/system/audit`, icon: ShieldCheck };
     const usersMgmt = { name: "Users Management", href: `${pathPrefix}/users`, icon: Users };
     const productsMgmt = { name: "Products", href: `${pathPrefix}/products`, icon: Package };
+    const needToOrder = { name: "Need to Order", href: `${pathPrefix}/procurement/need-to-order`, icon: ClipboardList, badge: needToOrderCount };
+    const purchaseOrders = { name: "Purchase Orders", href: `${pathPrefix}/procurement/orders`, icon: ShoppingCart };
 
     return [
       {
@@ -373,6 +385,10 @@ export function SidebarLayout({ children, session, warehouses, showrooms, pendin
       {
         category: "INVENTORY CONTROL",
         items: [allStock, lowStock, outOfStock],
+      },
+      {
+        category: "PROCUREMENT",
+        items: [needToOrder, purchaseOrders],
       },
       {
         category: "STOCK RESERVATION",

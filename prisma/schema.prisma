@@ -1412,6 +1412,21 @@ model StockBlock {
   shippedQuantity   Float @default(0)
   deliveredQuantity Float @default(0)
 
+  /// Portion of `quantity` that exceeded available stock at the moment this
+  /// block was created (max(requestedQuantity - availableAtCreation, 0)).
+  /// Zero means the block was fully covered by physical stock. This is the
+  /// server-computed "Need to Order" quantity — never trust a client-supplied
+  /// value (overstock/procurement spec §24-25).
+  shortageQuantity Float @default(0)
+
+  /// Links this block's shortage to the supplier purchase order (Shipment)
+  /// covering it, via the per-product line on that order. Several blocks for
+  /// the same product may point at the same ShipmentItem — one procurement
+  /// requirement can cover multiple blocks (spec §27) — while each block's
+  /// own history stays intact. Null until a Manager orders stock for it.
+  procurementShipmentItemId String?
+  procurementShipmentItem   ShipmentItem? @relation(fields: [procurementShipmentItemId], references: [id], onDelete: SetNull)
+
   requestedBy   String
   /// User.id of the creator (plain column, consistent with the audit columns
   /// elsewhere in this schema). `requestedBy` remains the display name.
@@ -1466,6 +1481,8 @@ model StockBlock {
   @@index([showroomId, status])
   @@index([status, expiresAt])
   @@index([vehicleNumber])
+  @@index([shortageQuantity])
+  @@index([procurementShipmentItemId])
 }
 
 model InventoryMovement {
@@ -1492,10 +1509,17 @@ model InventoryMovement {
   @@index([createdAt])
 }
 
+/// Represents SUPPLIER → DEPOT procurement (raising a purchase order and
+/// bringing purchased stock in). Deliberately distinct from the
+/// depot → showroom/customer shipment tracked on StockBlock
+/// (vehicleNumber/shippedAt/etc.) — the two "in transit" concepts must never
+/// be mixed (overstock/procurement spec §31).
 model Shipment {
   id             String         @id @default(cuid())
   shipmentNumber String         @unique
   supplier       String?
+  /// Manager-entered supplier invoice/PO reference (spec §19).
+  purchaseReference String?
   warehouseId    String?
   warehouse      Warehouse?     @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
   status         String         @default("EXPECTED") // EXPECTED | DISPATCHED | IN_TRANSIT | ARRIVED | RECEIVING | PARTIALLY_RECEIVED | RECEIVED | CANCELLED
@@ -1503,6 +1527,7 @@ model Shipment {
   dispatchDate   DateTime?
   arrivalDate    DateTime?
   remarks        String?
+  createdById    String?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -1510,6 +1535,7 @@ model Shipment {
 
   @@index([warehouseId])
   @@index([status])
+  @@index([purchaseReference])
 }
 
 model ShipmentItem {
@@ -1522,6 +1548,9 @@ model ShipmentItem {
   damagedQuantity  Float    @default(0)
   shortQuantity    Float    @default(0)
   status           String   @default("PENDING")
+
+  /// Blocks whose shortage this purchase-order line is covering (spec §27).
+  blocks StockBlock[]
 
   @@index([shipmentId])
   @@index([productId])

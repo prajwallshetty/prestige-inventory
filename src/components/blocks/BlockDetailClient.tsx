@@ -43,6 +43,20 @@ interface Props {
   audit: AuditEntry[];
 }
 
+const PROCUREMENT_STATUS_LABELS: Record<string, string> = {
+  NOT_REQUIRED: "Not required",
+  NEED_TO_ORDER: "Needs to be ordered",
+  ORDERED: "Ordered from supplier",
+  IN_TRANSIT: "In transit from supplier",
+  PARTIALLY_RECEIVED: "Partially received",
+  RECEIVED: "Received — ready to fulfill",
+  CANCELLED: "Purchase order cancelled",
+};
+
+function procurementStatusLabel(status: string): string {
+  return PROCUREMENT_STATUS_LABELS[status] || status.replace(/_/g, " ");
+}
+
 const fmt = (d: string | null | undefined) =>
   d ? new Date(d).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : null;
 
@@ -174,6 +188,7 @@ export function BlockDetailClient({ session, block, audit }: Props) {
             <p className="font-mono text-sm font-black text-[#111111]">{block.blockNumber || block.id.slice(-8)}</p>
             <p className="mt-0.5 text-xs text-[#6B6B6B]">
               {block.quantity} boxes
+              {block.shortageQuantity > 0 && ` · ${block.shortageQuantity} need procurement`}
               {block.expiresAt && ` · expires ${fmt(block.expiresAt)}`}
             </p>
           </div>
@@ -182,6 +197,53 @@ export function BlockDetailClient({ session, block, audit }: Props) {
           </span>
         </div>
       </div>
+
+      {/* PROCUREMENT / FULFILLMENT — only shown when part of this block
+          exceeded physical stock at creation (overstock spec §32). */}
+      {block.shortageQuantity > 0 && (
+        <section className="rounded-2xl border border-amber-300 bg-amber-50 p-4 sm:p-5 shadow-xs">
+          <h2 className="mb-3 text-[10px] font-black uppercase tracking-wider text-amber-800">Procurement</h2>
+          <div className="grid grid-cols-3 gap-3 text-center">
+            <div>
+              <p className="text-[9px] font-bold uppercase text-amber-700">Requested</p>
+              <p className="text-base font-black text-[#111111]">{block.quantity}</p>
+            </div>
+            <div>
+              <p className="text-[9px] font-bold uppercase text-amber-700">Available</p>
+              <p className="text-base font-black text-emerald-700">{block.availableQuantity}</p>
+            </div>
+            <div>
+              <p className="text-[9px] font-bold uppercase text-amber-700">To Be Procured</p>
+              <p className="text-base font-black text-amber-700">{block.shortageQuantity}</p>
+            </div>
+          </div>
+
+          <div className="mt-3">
+            <div className="flex justify-between text-[9px] font-bold uppercase text-amber-700">
+              <span>Fulfillment</span>
+              <span>
+                {block.availableQuantity} / {block.quantity}
+              </span>
+            </div>
+            <div className="mt-1 h-2 w-full overflow-hidden rounded-full border border-amber-200 bg-white">
+              <div
+                className="h-full bg-emerald-500"
+                style={{ width: `${Math.min(100, (block.availableQuantity / block.quantity) * 100)}%` }}
+              />
+            </div>
+          </div>
+
+          <p className="mt-3 text-[11px] font-bold text-amber-900">
+            Status: {procurementStatusLabel(block.procurementStatus)}
+          </p>
+          {block.procurementShipment && (
+            <p className="mt-1 text-[10px] text-amber-800">
+              Purchase order {block.procurementShipment.shipmentNumber} · {block.procurementShipment.status.replace(/_/g, " ").toLowerCase()}
+              {block.procurementShipment.supplier ? ` · ${block.procurementShipment.supplier}` : ""}
+            </p>
+          )}
+        </section>
+      )}
 
       {/* DETAILS — stacked on mobile, two columns from sm up */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

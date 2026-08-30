@@ -6,6 +6,7 @@ import {
   isShowroomScoped,
   type Role,
 } from "@/lib/permissions";
+import { deriveProcurementStatus } from "@/lib/procurementStatus";
 
 /**
  * Reads for the block list and approval queues.
@@ -142,6 +143,10 @@ const BLOCK_LIST_SELECT = {
   quantity: true,
   shippedQuantity: true,
   deliveredQuantity: true,
+  shortageQuantity: true,
+  procurementShipmentItem: {
+    select: { id: true, status: true, shipment: { select: { id: true, shipmentNumber: true, status: true } } },
+  },
   requestedBy: true,
   createdById: true,
   createdRole: true,
@@ -310,6 +315,17 @@ function serialiseBlock(b: any) {
     quantity: b.quantity,
     shippedQuantity: b.shippedQuantity,
     deliveredQuantity: b.deliveredQuantity,
+    // Overstock/procurement spec §8/§32 — how much of the request is covered
+    // by physical stock vs. still awaiting a purchase order.
+    shortageQuantity: b.shortageQuantity ?? 0,
+    availableQuantity: Math.max(0, b.quantity - (b.shortageQuantity ?? 0)),
+    procurementStatus: deriveProcurementStatus({
+      shortageQuantity: b.shortageQuantity ?? 0,
+      procurementShipmentItem: b.procurementShipmentItem
+        ? { status: b.procurementShipmentItem.status, shipment: { status: b.procurementShipmentItem.shipment.status } }
+        : null,
+    }),
+    procurementShipment: b.procurementShipmentItem?.shipment ?? null,
     requestedBy: b.requestedBy,
     createdById: b.createdById,
     createdRole: b.createdRole,

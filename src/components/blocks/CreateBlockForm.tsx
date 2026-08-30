@@ -46,6 +46,10 @@ export function CreateBlockForm({ dealers, showroomName, createdByName, createdB
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [online, setOnline] = useState(true);
+  // A request above what's physically available is allowed (overstock spec
+  // §5) but needs an explicit confirmation click, so a mistyped quantity
+  // doesn't silently commit the showroom to procuring extra stock.
+  const [overstockConfirmed, setOverstockConfirmed] = useState(false);
   const inFlight = useRef(false);
 
   useEffect(() => {
@@ -111,11 +115,21 @@ export function CreateBlockForm({ dealers, showroomName, createdByName, createdB
     setSelected(null);
     setAvailable(null);
     setQuantity("");
+    setOverstockConfirmed(false);
+  };
+
+  const handleQuantityChange = (value: string) => {
+    setQuantity(value);
+    setOverstockConfirmed(false);
   };
 
   const qtyNum = Number(quantity);
-  const qtyInvalid =
-    quantity !== "" && (!Number.isFinite(qtyNum) || qtyNum <= 0 || (available !== null && qtyNum > available));
+  // A quantity above what's available is not invalid — it's an overstock
+  // request that needs procurement (spec §1/§5) — so only a non-positive or
+  // non-numeric entry blocks the form.
+  const qtyInvalid = quantity !== "" && (!Number.isFinite(qtyNum) || qtyNum <= 0);
+  const shortage = available !== null && Number.isFinite(qtyNum) && qtyNum > 0 ? Math.max(0, qtyNum - available) : 0;
+  const needsOverstockConfirm = shortage > 0 && !overstockConfirmed;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -128,8 +142,8 @@ export function CreateBlockForm({ dealers, showroomName, createdByName, createdB
     }
     if (!selected) return setError("Please select a product.");
     if (!Number.isFinite(qtyNum) || qtyNum <= 0) return setError("Enter a quantity greater than zero.");
-    if (available !== null && qtyNum > available) {
-      return setError(`Only ${available} boxes are currently available to block.`);
+    if (needsOverstockConfirm) {
+      return setError(`${shortage} of these ${qtyNum} boxes will need to be procured — confirm below to continue.`);
     }
 
     inFlight.current = true;
@@ -290,21 +304,41 @@ export function CreateBlockForm({ dealers, showroomName, createdByName, createdB
             inputMode="numeric"
             min={1}
             step={1}
-            max={available ?? undefined}
             required
             disabled={!selected}
             value={quantity}
-            onChange={(e) => setQuantity(e.target.value)}
+            onChange={(e) => handleQuantityChange(e.target.value)}
             aria-invalid={qtyInvalid}
             className={`w-full rounded-xl border bg-white p-3 text-sm outline-hidden min-h-[44px] disabled:bg-[#F7F7F5] disabled:cursor-not-allowed ${
               qtyInvalid ? "border-rose-300 focus:border-rose-400" : "border-[#EAEAEA] focus:border-[#F2C202]"
             }`}
             placeholder={selected ? "e.g. 30" : "Select a product first"}
           />
-          {qtyInvalid && available !== null && qtyNum > available && (
-            <p className="text-[10px] font-bold text-rose-700">
-              Only {available} boxes are currently available to block.
-            </p>
+
+          {/* A request above physical stock is allowed — it becomes a
+              procurement requirement rather than a rejection (spec §5). */}
+          {!qtyInvalid && shortage > 0 && (
+            <div className="mt-2 space-y-2 rounded-xl border border-amber-300 bg-amber-50 p-3">
+              <p className="text-[11px] font-bold text-amber-900">
+                {available} {available === 1 ? "box is" : "boxes are"} available now. {shortage} additional{" "}
+                {shortage === 1 ? "box needs" : "boxes need"} to be ordered.
+              </p>
+              <p className="text-[10px] text-amber-800">
+                This block will still be created for the full {qtyNum} boxes. The shortfall goes to the Manager's
+                procurement queue automatically — this doesn't fail or delay your request.
+              </p>
+              {!overstockConfirmed ? (
+                <button
+                  type="button"
+                  onClick={() => setOverstockConfirmed(true)}
+                  className="rounded-lg border border-amber-400 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-wide text-amber-900 hover:bg-amber-100 min-h-[36px]"
+                >
+                  Continue with {qtyNum} boxes
+                </button>
+              ) : (
+                <p className="text-[10px] font-bold text-emerald-700">Confirmed — ready to create.</p>
+              )}
+            </div>
           )}
         </div>
 
@@ -387,7 +421,7 @@ export function CreateBlockForm({ dealers, showroomName, createdByName, createdB
       <div className="sticky bottom-0 -mx-4 border-t border-[#EAEAEA] bg-white/95 px-4 py-3 backdrop-blur-md sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-none">
         <button
           type="submit"
-          disabled={submitting || !selected || !online || qtyInvalid}
+          disabled={submitting || !selected || !online || qtyInvalid || needsOverstockConfirm}
           aria-busy={submitting}
           className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#F2C202] py-3.5 text-sm font-black text-white transition-all active:scale-[0.99] hover:bg-[#D8AD02] disabled:cursor-not-allowed disabled:opacity-50 min-h-[48px]"
         >

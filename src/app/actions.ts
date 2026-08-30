@@ -21,6 +21,11 @@ import {
   deleteLogisticsRecord,
 } from "@/services/StockBlockService";
 import {
+  createPurchaseOrder,
+  advanceProcurementStatus,
+  receiveProcurement,
+} from "@/services/ProcurementService";
+import {
   createBooking,
   reviewBooking,
   confirmBooking,
@@ -64,6 +69,7 @@ import {
   ok,
   revalidateBlockViews,
   revalidateBookingViews,
+  revalidateProcurementViews,
   runAction,
 } from "@/lib/action-result";
 
@@ -583,6 +589,81 @@ export async function deleteLogisticsRecordAction(
 
     revalidateBlockViews(blockId);
     return { status: block.status };
+  });
+}
+
+// ————————————————————————————————————————————————
+// Procurement ("Need to Order") — overstock spec
+//
+// Reads (Need to Order list, dashboard summary, purchase-order list) are
+// server-rendered straight from the service layer in each page.tsx, the same
+// pattern /blocks and /shipments already use — filters travel as URL search
+// params rather than a client-invoked action. Only mutations live here.
+// ————————————————————————————————————————————————
+
+export async function createPurchaseOrderAction(input: {
+  blockIds: string[];
+  supplier?: string;
+  purchaseReference?: string;
+  expectedDate?: string;
+  warehouseId?: string;
+  remarks?: string;
+}): Promise<ActionResult<{ id: string; shipmentNumber: string }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const shipment = await createPurchaseOrder({
+      blockIds: input.blockIds,
+      supplier: input.supplier,
+      purchaseReference: input.purchaseReference,
+      expectedDate: input.expectedDate ? new Date(input.expectedDate) : undefined,
+      warehouseId: input.warehouseId,
+      remarks: input.remarks,
+      performedBy: user.name,
+      performedById: user.userId,
+      role: user.role,
+    });
+
+    revalidateProcurementViews(shipment.id);
+    return { id: shipment.id, shipmentNumber: shipment.shipmentNumber };
+  });
+}
+
+export async function advanceProcurementStatusAction(
+  shipmentId: string,
+  status: "DISPATCHED" | "IN_TRANSIT" | "ARRIVED" | "CANCELLED"
+): Promise<ActionResult<{ status: string }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const updated = await advanceProcurementStatus({
+      shipmentId,
+      status,
+      performedBy: user.name,
+      performedById: user.userId,
+      role: user.role,
+    });
+
+    revalidateProcurementViews(shipmentId);
+    return { status: updated.status };
+  });
+}
+
+export async function receiveProcurementAction(input: {
+  shipmentId: string;
+  receivedItems: Array<{ shipmentItemId: string; receivedQuantity: number; damagedQuantity: number }>;
+}): Promise<ActionResult<{ status: string }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const updated = await receiveProcurement({
+      shipmentId: input.shipmentId,
+      receivedItems: input.receivedItems,
+      performedBy: user.name,
+      performedById: user.userId,
+      role: user.role,
+    });
+
+    revalidateProcurementViews(input.shipmentId);
+    revalidateBlockViews();
+    return { status: updated.status };
   });
 }
 

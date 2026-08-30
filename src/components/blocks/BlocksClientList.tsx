@@ -49,6 +49,8 @@ interface BlockRow {
   quantity: number;
   shippedQuantity: number;
   deliveredQuantity: number;
+  /** Overstock spec §8 — portion of `quantity` still awaiting procurement. */
+  shortageQuantity?: number;
   requestedBy: string;
   createdById: string | null;
   createdRole: string | null;
@@ -508,6 +510,11 @@ export function BlocksClientList({ result, filters, dealers, showrooms, session 
                           {block.shippedQuantity > 0 && block.shippedQuantity < block.quantity && (
                             <p className="text-[9px] font-bold text-[#6B6B6B]">{block.shippedQuantity} shipped</p>
                           )}
+                          {!!block.shortageQuantity && block.shortageQuantity > 0 && (
+                            <p className="text-[9px] font-black uppercase text-amber-700">
+                              {block.shortageQuantity} to order
+                            </p>
+                          )}
                         </td>
 
                         <td className="px-4 py-3.5 align-top">
@@ -655,7 +662,14 @@ export function BlocksClientList({ result, filters, dealers, showrooms, session 
                   <dl className="grid grid-cols-2 gap-2 rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] p-2.5 text-center">
                     <div>
                       <dt className="text-[8.5px] font-bold uppercase text-[#6B6B6B]">Quantity</dt>
-                      <dd className="mt-0.5 font-mono text-sm font-black text-[#8A7300]">{block.quantity}</dd>
+                      <dd className="mt-0.5 font-mono text-sm font-black text-[#8A7300]">
+                        {block.quantity}
+                        {!!block.shortageQuantity && block.shortageQuantity > 0 && (
+                          <span className="ml-1 text-[9px] font-black uppercase text-amber-700">
+                            ({block.shortageQuantity} to order)
+                          </span>
+                        )}
+                      </dd>
                     </div>
                     <div>
                       <dt className="text-[8.5px] font-bold uppercase text-[#6B6B6B]">Expiry</dt>

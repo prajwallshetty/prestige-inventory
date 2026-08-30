@@ -269,6 +269,17 @@ export function canAdjustStock(role: Role): boolean {
   return role === "SUPER_ADMIN";
 }
 
+// ————— Procurement (overstock / "Need to Order") —————
+
+/**
+ * Raising, advancing and receiving supplier purchase orders is a Manager /
+ * Super Admin operation (spec §6/§29) — showroom roles may see the shortage
+ * on their own blocks but never the central procurement controls (spec §30).
+ */
+export function canManageProcurement(role: Role): boolean {
+  return role === "SUPER_ADMIN" || role === "MANAGER";
+}
+
 // ————— Bookings —————
 
 export function canCreateBooking(role: Role): boolean {
