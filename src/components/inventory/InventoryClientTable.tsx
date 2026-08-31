@@ -4,7 +4,6 @@ import React, { useState, useEffect, useTransition } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { toast } from "@/lib/toast";
 import {
-  adjustStockAction,
   createBlockAction,
   createStockItemAction,
   updateStockItemAction,
@@ -15,7 +14,6 @@ import {
   X,
   Lock,
   AlertCircle,
-  MoreVertical,
   Plus,
   Layers,
   ChevronLeft,
@@ -26,10 +24,7 @@ import {
   Pencil,
   Trash2,
   Package,
-  Image as ImageIcon,
-  CheckCircle,
 } from "lucide-react";
-import Link from "next/link";
 import { getProductThumbnailUrl, getProductImageUrl } from "@/lib/s3";
 import { ShimmerImage } from "@/components/Skeleton";
 import { NImagesManager, mediaPreviewUrl } from "@/components/common/NImagesManager";
@@ -80,13 +75,12 @@ export function InventoryClientTable({
   const currentSize = searchParams.get("size") || "";
   const currentCollection = searchParams.get("collection") || "";
   const currentSort = searchParams.get("sort") || "newest";
-  const currentPage = parseInt(searchParams.get("page") || "1");
-  const currentLimit = parseInt(searchParams.get("limit") || "20");
+  const currentPage = parseInt(searchParams.get("page") || "1", 10) || 1;
+  const currentLimit = parseInt(searchParams.get("limit") || "20", 10) || 20;
 
   const [search, setSearch] = useState(currentSearch);
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
   const [blockingProduct, setBlockingProduct] = useState<any>(null);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState<string | null>(null);
 
   // Hold / Block Modal State
   const [holdForm, setHoldForm] = useState({
@@ -98,7 +92,7 @@ export function InventoryClientTable({
   });
   const [submittingHold, setSubmittingHold] = useState(false);
 
-  // Modals for All Stock CRUD
+  // Modals for CRUD
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -201,6 +195,7 @@ export function InventoryClientTable({
     });
   };
 
+  // Open Hold Modal
   const openHoldModal = (item: any) => {
     setBlockingProduct(item);
     setHoldForm({
@@ -212,6 +207,7 @@ export function InventoryClientTable({
     });
   };
 
+  // Handle Hold Submit
   const handleHoldSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!blockingProduct || submittingHold) return;
@@ -248,6 +244,7 @@ export function InventoryClientTable({
     }
   };
 
+  // Open Create Modal
   const openCreateModal = () => {
     setStockForm({
       name: "",
@@ -278,43 +275,46 @@ export function InventoryClientTable({
     setCreateModalOpen(true);
   };
 
+  // Open Edit Modal
   const openEditModal = (item: any) => {
     setEditingItem(item);
     setStockForm({
       name: item.productName || "",
       sku: item.sku || "",
-      productCode: "",
-      brandId: brands.find((b) => b.label === item.brandName)?.value || "",
-      categoryId: categories.find((c) => c.label === item.categoryName)?.value || "",
+      productCode: item.productCode || "",
+      brandId: item.brandId || brands.find((b) => b.label === item.brandName)?.value || "",
+      categoryId: item.categoryId || categories.find((c) => c.label === item.categoryName)?.value || "",
       productTypeId: item.productTypeId || "",
       size: item.size || "",
       finish: item.finish || "",
-      surface: "",
-      color: "",
-      price: "",
-      mrp: "",
-      description: "",
+      surface: item.surface || "",
+      color: item.color || "",
+      price: item.price ? String(item.price) : "",
+      mrp: item.mrp ? String(item.mrp) : "",
+      description: item.description || "",
       images: Array.isArray(item.images) ? item.images : [],
       image_key: item.image_key || "",
       thumbnail_key: item.thumbnail_key || "",
       lifestyleImage: item.lifestyleImage || "",
-      totalStock: item.totalStock || 0,
+      totalStock: item.totalStock ?? 0,
       looseStock: 0,
-      minimumStock: item.minimumStock || 0,
+      minimumStock: item.minimumStock ?? 0,
       maximumStock: 0,
-      reorderLevel: item.reorderLevel || 0,
-      warehouseId: warehouses.find((w) => w.name === item.warehouseName)?.id || "",
-      remarks: "",
+      reorderLevel: item.reorderLevel ?? 0,
+      warehouseId: item.warehouseId || warehouses.find((w) => w.name === item.warehouseName)?.id || "",
+      remarks: item.remarks || "",
     });
     setEditModalOpen(true);
   };
 
+  // Open Delete Modal
   const openDeleteModal = (item: any) => {
     setDeletingItem(item);
     setDeleteReason("");
     setDeleteModalOpen(true);
   };
 
+  // Handle Create Submit
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!stockForm.name.trim()) {
@@ -363,20 +363,32 @@ export function InventoryClientTable({
     }
   };
 
+  // Handle Edit Submit
   const handleEditSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingItem || saving) return;
+
+    if (!stockForm.name.trim()) {
+      toast.error("Product name is required.");
+      return;
+    }
 
     setSaving(true);
     try {
       const res = await updateStockItemAction(editingItem.id, {
         name: stockForm.name,
         sku: stockForm.sku || undefined,
+        productCode: stockForm.productCode || undefined,
         brandId: stockForm.brandId || undefined,
         categoryId: stockForm.categoryId || undefined,
         productTypeId: stockForm.productTypeId || undefined,
         size: stockForm.size || undefined,
         finish: stockForm.finish || undefined,
+        surface: stockForm.surface || undefined,
+        color: stockForm.color || undefined,
+        price: stockForm.price ? parseFloat(stockForm.price) : undefined,
+        mrp: stockForm.mrp ? parseFloat(stockForm.mrp) : undefined,
+        description: stockForm.description || undefined,
         images: stockForm.images,
         image_key: stockForm.image_key || stockForm.images[0] || undefined,
         thumbnail_key: stockForm.thumbnail_key || stockForm.images[0] || undefined,
@@ -390,11 +402,11 @@ export function InventoryClientTable({
       });
 
       if (!res.ok) {
-        toast.error(res.error);
+        toast.error(res.error || "Failed to update stock item.");
         return;
       }
 
-      toast.success("Stock item updated successfully!");
+      toast.success(`Stock item "${stockForm.name}" updated successfully!`);
       setEditModalOpen(false);
       startTransition(() => router.refresh());
     } catch (err: any) {
@@ -404,6 +416,7 @@ export function InventoryClientTable({
     }
   };
 
+  // Handle Delete Submit
   const handleDeleteSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!deletingItem || saving) return;
@@ -428,18 +441,21 @@ export function InventoryClientTable({
 
   return (
     <div className="space-y-6">
+      {/* FILTER & TOP ACTION BAR */}
       <div className="flex flex-col gap-3 rounded-xl border border-[#EAEAEA] bg-white p-4 shadow-xs md:flex-row md:items-center md:justify-between">
+        {/* Search */}
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#6B6B6B]" />
           <input
             type="text"
-            placeholder="Search catalog by SKU, name, brand or size..."
+            placeholder="Search catalog across all items by SKU, name, brand or size..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] py-2 pl-9 pr-4 text-xs text-[#111111] placeholder-[#6B6B6B] focus:border-[#F2C202] focus:outline-hidden"
           />
         </div>
 
+        {/* Action Button & Dropdowns */}
         <div className="flex flex-wrap items-center gap-2">
           {canManage && (
             <button
@@ -506,6 +522,7 @@ export function InventoryClientTable({
         </div>
       </div>
 
+      {/* DESKTOP TABLE VIEW */}
       <div className="hidden md:block overflow-hidden rounded-xl border border-[#EAEAEA] bg-white shadow-xs">
         <table className="w-full text-left border-collapse">
           <thead>
@@ -584,6 +601,7 @@ export function InventoryClientTable({
                           <button
                             onClick={() => openEditModal(item)}
                             className="rounded-lg border border-[#EAEAEA] bg-white p-1 text-[#6B6B6B] hover:bg-[#F7F7F5] hover:text-[#111111] transition-all"
+                            title="Edit Stock Item"
                           >
                             <Pencil className="h-3.5 w-3.5" />
                           </button>
@@ -600,6 +618,7 @@ export function InventoryClientTable({
                           <button
                             onClick={() => openDeleteModal(item)}
                             className="rounded-lg border border-rose-200 bg-white p-1 text-rose-600 hover:bg-rose-50 transition-all"
+                            title="Delete Stock Item"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
@@ -614,6 +633,7 @@ export function InventoryClientTable({
         </table>
       </div>
 
+      {/* MOBILE CARDS */}
       <div className="md:hidden space-y-3">
         {items.map((item) => {
           const totalStock = item.totalStock ?? 0;
@@ -679,6 +699,14 @@ export function InventoryClientTable({
                       <Pencil className="h-4 w-4" />
                     </button>
                   )}
+                  {isSuperAdmin && (
+                    <button
+                      onClick={() => openDeleteModal(item)}
+                      className="rounded-lg border border-rose-200 bg-rose-50 p-1.5 text-rose-600"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -686,10 +714,14 @@ export function InventoryClientTable({
         })}
       </div>
 
+      {/* PAGINATION BAR */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-4 rounded-xl border border-[#EAEAEA] bg-white p-4 shadow-xs text-xs">
         <div className="text-[#6B6B6B]">
-          Showing <strong>{startIndex}</strong>–<strong>{endIndex}</strong> of <strong>{total.toLocaleString("en-IN")}</strong> catalog items
+          Showing <strong className="text-[#111111]">{startIndex}</strong>–
+          <strong className="text-[#111111]">{endIndex}</strong> of{" "}
+          <strong className="text-[#111111]">{total.toLocaleString("en-IN")}</strong> catalog items
         </div>
+
         {totalPages > 1 && (
           <div className="flex items-center gap-1">
             <button
@@ -706,7 +738,9 @@ export function InventoryClientTable({
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
-            <span className="text-xs font-bold text-[#111111] px-2">{page} / {totalPages}</span>
+            <span className="text-xs font-bold text-[#111111] px-2">
+              {page} / {totalPages}
+            </span>
             <button
               onClick={() => updateFilters({ page: page + 1 })}
               disabled={page >= totalPages || isPending}
@@ -725,6 +759,7 @@ export function InventoryClientTable({
         )}
       </div>
 
+      {/* INSPECT PRODUCT MODAL */}
       {selectedProduct && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="fixed inset-0 bg-black/40 backdrop-blur-xs" onClick={() => setSelectedProduct(null)} />
@@ -777,19 +812,19 @@ export function InventoryClientTable({
               <div className="grid grid-cols-2 gap-3.5 rounded-xl bg-[#F7F7F5] p-4 border border-[#EAEAEA]">
                 <div>
                   <span className="text-[9px] font-bold text-[#6B6B6B] uppercase tracking-wider block">Brand</span>
-                  <span className="text-xs font-bold text-[#111111] mt-1 block">{selectedProduct.brandName}</span>
+                  <span className="text-xs font-bold text-[#111111] mt-1 block">{selectedProduct.brandName || "—"}</span>
                 </div>
                 <div>
                   <span className="text-[9px] font-bold text-[#6B6B6B] uppercase tracking-wider block">Dimensions</span>
-                  <span className="text-xs font-bold text-[#111111] mt-1 block font-mono">{selectedProduct.size}</span>
+                  <span className="text-xs font-bold text-[#111111] mt-1 block font-mono">{selectedProduct.size || "—"}</span>
                 </div>
                 <div>
                   <span className="text-[9px] font-bold text-[#6B6B6B] uppercase tracking-wider block">Category</span>
-                  <span className="text-xs font-bold text-[#111111] mt-1 block">{selectedProduct.categoryName}</span>
+                  <span className="text-xs font-bold text-[#111111] mt-1 block">{selectedProduct.categoryName || "—"}</span>
                 </div>
                 <div>
                   <span className="text-[9px] font-bold text-[#6B6B6B] uppercase tracking-wider block">Depot</span>
-                  <span className="text-xs font-bold text-[#111111] mt-1 block">{selectedProduct.warehouseName}</span>
+                  <span className="text-xs font-bold text-[#111111] mt-1 block">{selectedProduct.warehouseName || "Main Central Depot"}</span>
                 </div>
               </div>
 
@@ -799,11 +834,11 @@ export function InventoryClientTable({
                   <span>Depot Stock Balances</span>
                 </h4>
                 <div className="rounded-xl border border-[#EAEAEA] bg-white p-4 space-y-2 text-xs">
-                  <InventoryRow label="Physical Available Stock" value={`${selectedProduct.availableStock?.toLocaleString("en-IN") ?? 0} Box`} highlight="emerald" />
-                  <InventoryRow label="Allocated (Ready for Shipment)" value={`${selectedProduct.allocatedStock?.toLocaleString("en-IN") ?? 0} Box`} highlight="blue" />
-                  <InventoryRow label="Temporary Block Holds" value={`${selectedProduct.blockedStock?.toLocaleString("en-IN") ?? 0} Box`} highlight="amber" />
-                  <InventoryRow label="In-Transit Deliveries" value={`${selectedProduct.transitStock?.toLocaleString("en-IN") ?? 0} Box`} highlight="indigo" />
-                  <InventoryRow label="Reorder Threshold Alert" value={`${selectedProduct.reorderLevel?.toLocaleString("en-IN") ?? 0} Box`} />
+                  <InventoryRow label="Physical Available Stock" value={`${(selectedProduct.availableStock ?? 0).toLocaleString("en-IN")} Box`} highlight="emerald" />
+                  <InventoryRow label="Allocated (Ready for Shipment)" value={`${(selectedProduct.allocatedStock ?? 0).toLocaleString("en-IN")} Box`} highlight="blue" />
+                  <InventoryRow label="Temporary Block Holds" value={`${(selectedProduct.blockedStock ?? 0).toLocaleString("en-IN")} Box`} highlight="amber" />
+                  <InventoryRow label="In-Transit Deliveries" value={`${(selectedProduct.transitStock ?? 0).toLocaleString("en-IN")} Box`} highlight="indigo" />
+                  <InventoryRow label="Reorder Threshold Alert" value={`${(selectedProduct.reorderLevel ?? 0).toLocaleString("en-IN")} Box`} />
                 </div>
               </div>
             </div>
@@ -836,6 +871,7 @@ export function InventoryClientTable({
         </div>
       )}
 
+      {/* HOLD / RESERVE STOCK MODAL */}
       {blockingProduct && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="fixed inset-0 bg-black/40 backdrop-blur-xs" onClick={() => setBlockingProduct(null)} />
@@ -988,6 +1024,7 @@ export function InventoryClientTable({
         </div>
       )}
 
+      {/* CREATE STOCK MODAL */}
       {createModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="fixed inset-0 bg-black/40 backdrop-blur-xs" onClick={() => setCreateModalOpen(false)} />
@@ -1027,6 +1064,7 @@ export function InventoryClientTable({
                     onChange={(e) => setStockForm({ ...stockForm, brandId: e.target.value })}
                     className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs font-bold focus:border-[#F2C202] focus:outline-hidden"
                   >
+                    <option value="">Select Brand</option>
                     {brands.map((b) => (
                       <option key={b.value} value={b.value}>
                         {b.label}
@@ -1044,6 +1082,7 @@ export function InventoryClientTable({
                     onChange={(e) => setStockForm({ ...stockForm, categoryId: e.target.value })}
                     className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs focus:border-[#F2C202] focus:outline-hidden"
                   >
+                    <option value="">Select Category</option>
                     {categories.map((c) => (
                       <option key={c.value} value={c.value}>
                         {c.label}
@@ -1097,6 +1136,7 @@ export function InventoryClientTable({
                       className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2 text-xs font-mono font-bold"
                     />
                   </div>
+
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold text-[#111111]">Reorder Alert Level</label>
                     <input
@@ -1107,6 +1147,7 @@ export function InventoryClientTable({
                       className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2 text-xs font-mono"
                     />
                   </div>
+
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold text-[#111111]">Depot Warehouse</label>
                     <select
@@ -1117,7 +1158,7 @@ export function InventoryClientTable({
                       <option value="">Main Central Depot</option>
                       {warehouses.map((w) => (
                         <option key={w.id} value={w.id}>
-                          {w.name}
+                          {w.name} ({w.code})
                         </option>
                       ))}
                     </select>
@@ -1125,6 +1166,7 @@ export function InventoryClientTable({
                 </div>
               </div>
 
+              {/* N Images Gallery */}
               <NImagesManager
                 images={stockForm.images}
                 onChange={(newImgs) =>
@@ -1160,43 +1202,327 @@ export function InventoryClientTable({
         </div>
       )}
 
+      {/* EDIT STOCK ITEM MODAL */}
       {editModalOpen && editingItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="fixed inset-0 bg-black/40 backdrop-blur-xs" onClick={() => setEditModalOpen(false)} />
           <div className="relative z-10 w-full max-w-2xl rounded-2xl border border-[#EAEAEA] bg-white p-6 shadow-xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-[#EAEAEA] pb-3 mb-4">
-              <h2 className="flex items-center gap-2 text-sm font-black uppercase text-[#111111]">
-                <Pencil className="h-4 w-4 text-[#F2C202]" />
-                Edit Stock Item ({editingItem.productName})
-              </h2>
+              <div>
+                <h2 className="flex items-center gap-2 text-sm font-black uppercase text-[#111111]">
+                  <Pencil className="h-4 w-4 text-[#F2C202]" />
+                  Edit Stock Item
+                </h2>
+                <p className="text-[11px] text-[#6B6B6B]">
+                  {editingItem.productName} • SKU: {editingItem.sku || "No SKU"}
+                </p>
+              </div>
               <button onClick={() => setEditModalOpen(false)} className="rounded-lg p-1 text-[#6B6B6B] hover:bg-[#F7F7F5]">
                 <X className="h-4 w-4" />
               </button>
             </div>
+
             <form onSubmit={handleEditSubmit} className="space-y-4">
+              {/* Product Identity */}
               <div className="space-y-1">
-                <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">Product Name *</label>
-                <input type="text" required value={stockForm.name} onChange={(e) => setStockForm({ ...stockForm, name: e.target.value })} className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs font-bold focus:border-[#F2C202] focus:outline-hidden" />
+                <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
+                  Product Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={stockForm.name}
+                  onChange={(e) => setStockForm({ ...stockForm, name: e.target.value })}
+                  className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs font-bold focus:border-[#F2C202] focus:outline-hidden"
+                />
               </div>
+
+              {/* Brand & Category */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
+                    Brand
+                  </label>
+                  <select
+                    value={stockForm.brandId}
+                    onChange={(e) => setStockForm({ ...stockForm, brandId: e.target.value })}
+                    className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs font-bold focus:border-[#F2C202] focus:outline-hidden"
+                  >
+                    <option value="">No Brand Selected</option>
+                    {brands.map((b) => (
+                      <option key={b.value} value={b.value}>
+                        {b.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
+                    Category
+                  </label>
+                  <select
+                    value={stockForm.categoryId}
+                    onChange={(e) => setStockForm({ ...stockForm, categoryId: e.target.value })}
+                    className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs focus:border-[#F2C202] focus:outline-hidden"
+                  >
+                    <option value="">No Category Selected</option>
+                    {categories.map((c) => (
+                      <option key={c.value} value={c.value}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Specifications */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
+                    SKU Code
+                  </label>
+                  <input
+                    type="text"
+                    value={stockForm.sku}
+                    onChange={(e) => setStockForm({ ...stockForm, sku: e.target.value })}
+                    placeholder="e.g. LONIX-MG-8012"
+                    className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs font-mono focus:border-[#F2C202] focus:outline-hidden"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
+                    Dimensions / Size
+                  </label>
+                  <input
+                    type="text"
+                    value={stockForm.size}
+                    onChange={(e) => setStockForm({ ...stockForm, size: e.target.value })}
+                    placeholder="e.g. 800X1200"
+                    className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs font-mono focus:border-[#F2C202] focus:outline-hidden"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
+                    Surface / Finish
+                  </label>
+                  <input
+                    type="text"
+                    value={stockForm.finish}
+                    onChange={(e) => setStockForm({ ...stockForm, finish: e.target.value, surface: e.target.value })}
+                    placeholder="e.g. Glossy / Polished"
+                    className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs focus:border-[#F2C202] focus:outline-hidden"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
+                    Color / Material
+                  </label>
+                  <input
+                    type="text"
+                    value={stockForm.color}
+                    onChange={(e) => setStockForm({ ...stockForm, color: e.target.value })}
+                    placeholder="e.g. Beige Marble"
+                    className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs focus:border-[#F2C202] focus:outline-hidden"
+                  />
+                </div>
+              </div>
+
+              {/* Stock Balances & Reorder Setup */}
+              <div className="rounded-xl border border-[#EAEAEA] bg-[#F7F7F5] p-3.5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
+                    Stock Balance & Reorder Alerts
+                  </p>
+                  {editingItem.blockedStock > 0 && (
+                    <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
+                      {editingItem.blockedStock} Box Currently Blocked
+                    </span>
+                  )}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-[#111111]">
+                      Total Physical Stock (Boxes) *
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      required
+                      value={stockForm.totalStock}
+                      onChange={(e) => setStockForm({ ...stockForm, totalStock: Number(e.target.value) })}
+                      className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2 text-xs font-mono font-bold focus:border-[#F2C202] focus:outline-hidden"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-[#111111]">Reorder Alert Level</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={stockForm.reorderLevel}
+                      onChange={(e) => setStockForm({ ...stockForm, reorderLevel: Number(e.target.value) })}
+                      className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2 text-xs font-mono focus:border-[#F2C202] focus:outline-hidden"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-[#111111]">Depot Warehouse</label>
+                    <select
+                      value={stockForm.warehouseId}
+                      onChange={(e) => setStockForm({ ...stockForm, warehouseId: e.target.value })}
+                      className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2 text-xs focus:border-[#F2C202] focus:outline-hidden"
+                    >
+                      <option value="">Main Central Depot</option>
+                      {warehouses.map((w) => (
+                        <option key={w.id} value={w.id}>
+                          {w.name} ({w.code})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Pricing */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
+                    Selling Price (₹ / Box)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={stockForm.price}
+                    onChange={(e) => setStockForm({ ...stockForm, price: e.target.value })}
+                    placeholder="e.g. 1250"
+                    className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs font-mono focus:border-[#F2C202] focus:outline-hidden"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
+                    MRP (₹ / Box)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={stockForm.mrp}
+                    onChange={(e) => setStockForm({ ...stockForm, mrp: e.target.value })}
+                    placeholder="e.g. 1600"
+                    className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs font-mono focus:border-[#F2C202] focus:outline-hidden"
+                  />
+                </div>
+              </div>
+
+              {/* Notes / Remarks */}
+              <div className="space-y-1">
+                <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
+                  Description / Remarks
+                </label>
+                <textarea
+                  rows={2}
+                  value={stockForm.description}
+                  onChange={(e) => setStockForm({ ...stockForm, description: e.target.value, remarks: e.target.value })}
+                  placeholder="Product details, batch notes, or physical location..."
+                  className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs focus:border-[#F2C202] focus:outline-hidden"
+                />
+              </div>
+
+              {/* N-Images Manager */}
+              <NImagesManager
+                images={stockForm.images}
+                onChange={(newImgs) =>
+                  setStockForm({
+                    ...stockForm,
+                    images: newImgs,
+                    image_key: stockForm.image_key || newImgs[0] || "",
+                    thumbnail_key: stockForm.thumbnail_key || newImgs[0] || "",
+                  })
+                }
+                primaryImage={stockForm.image_key}
+                onSetPrimary={(url) => setStockForm({ ...stockForm, image_key: url, thumbnail_key: url })}
+              />
+
               <div className="flex gap-2 pt-2">
-                <button type="submit" disabled={saving} className="flex-1 rounded-lg bg-[#F2C202] py-2.5 text-xs font-black text-white hover:bg-[#D8AD02] transition-all disabled:opacity-50">Save Changes</button>
-                <button type="button" onClick={() => setEditModalOpen(false)} className="rounded-lg border border-[#EAEAEA] bg-white px-4 py-2.5 text-xs font-bold text-[#6B6B6B] hover:bg-[#F7F7F5]">Cancel</button>
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="flex-1 rounded-lg bg-[#F2C202] py-2.5 text-xs font-black text-white hover:bg-[#D8AD02] transition-all disabled:opacity-50 shadow-xs"
+                >
+                  {saving ? "Saving Changes..." : "Save Stock Changes"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditModalOpen(false)}
+                  className="rounded-lg border border-[#EAEAEA] bg-white px-4 py-2.5 text-xs font-bold text-[#6B6B6B] hover:bg-[#F7F7F5]"
+                >
+                  Cancel
+                </button>
               </div>
             </form>
           </div>
         </div>
       )}
 
+      {/* DELETE CONFIRMATION MODAL */}
       {deleteModalOpen && deletingItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="fixed inset-0 bg-black/40 backdrop-blur-xs" onClick={() => setDeleteModalOpen(false)} />
           <div className="relative z-10 w-full max-w-md rounded-2xl border border-rose-200 bg-white p-6 shadow-lg">
-            <h3 className="text-sm font-black uppercase tracking-wider text-rose-700 mb-4">Delete Stock Item</h3>
-            <p className="text-xs text-[#111111] mb-4">Are you sure you want to delete {deletingItem.productName}? This cannot be undone.</p>
-            <div className="flex gap-2">
-              <button onClick={handleDeleteSubmit} className="flex-1 rounded-lg bg-rose-600 py-2.5 text-xs font-black text-white">Delete</button>
-              <button onClick={() => setDeleteModalOpen(false)} className="rounded-lg border border-[#EAEAEA] bg-white px-4 py-2.5 text-xs font-bold text-[#6B6B6B]">Cancel</button>
+            <div className="flex items-center gap-3 text-rose-700 mb-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-50">
+                <AlertCircle className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-black uppercase tracking-wider">Delete Stock Item</h3>
+                <p className="text-[11px] text-[#6B6B6B]">Super Admin Action</p>
+              </div>
             </div>
+
+            <p className="text-xs text-[#111111] mb-4">
+              Are you sure you want to delete <strong>{deletingItem.productName}</strong> ({deletingItem.sku || "No SKU"})? This item will be archived and removed from stock listings.
+            </p>
+
+            <form onSubmit={handleDeleteSubmit} className="space-y-4">
+              <div className="space-y-1">
+                <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
+                  Deletion Reason (Required)
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Discontinued item / duplicate entry"
+                  value={deleteReason}
+                  onChange={(e) => setDeleteReason(e.target.value)}
+                  className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs focus:border-rose-500 focus:outline-hidden"
+                />
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  disabled={saving || !deleteReason.trim()}
+                  className="flex-1 rounded-lg bg-rose-600 py-2.5 text-xs font-black text-white hover:bg-rose-700 transition-all disabled:opacity-50"
+                >
+                  {saving ? "Deleting..." : "Confirm Delete"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeleteModalOpen(false)}
+                  className="rounded-lg border border-[#EAEAEA] bg-white px-4 py-2.5 text-xs font-bold text-[#6B6B6B] hover:bg-[#F7F7F5]"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

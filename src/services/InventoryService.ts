@@ -293,9 +293,18 @@ export async function getInventoryList({
         sku: true,
         productCode: true,
         importKey: true,
+        brandId: true,
+        categoryId: true,
+        productTypeId: true,
         size: true,
         collection: true,
         finish: true,
+        surface: true,
+        color: true,
+        material: true,
+        price: true,
+        mrp: true,
+        description: true,
         image_key: true,
         thumbnail_key: true,
         lifestyleImage: true,
@@ -320,6 +329,7 @@ export async function getInventoryList({
             minimumStock: true,
             reorderLevel: true,
             stockStatus: true,
+            warehouseId: true,
             warehouse: { select: { id: true, name: true, code: true } },
             stockBlocks: {
               where: { status: { in: [...ACTIVE_BLOCK_STATUSES] } },
@@ -374,8 +384,14 @@ export async function getInventoryList({
     return {
       id: p.id,
       sku: p.sku || p.productCode || p.importKey || null,
+      productCode: p.productCode || null,
+      importKey: p.importKey || null,
       productName: p.name,
-      productTypeId: (p as any).productType?.id || null,
+      brandId: p.brandId || p.brand?.id || null,
+      brandName: p.brand?.name || inv?.brand || null,
+      categoryId: p.categoryId || p.category?.id || null,
+      categoryName: p.category?.name || null,
+      productTypeId: p.productTypeId || (p as any).productType?.id || null,
       productTypeName: (p as any).productType?.name || "Tiles",
       productTypeSlug: (p as any).productType?.slug || "tiles",
       productTypeIcon: (p as any).productType?.icon || "Boxes",
@@ -384,8 +400,12 @@ export async function getInventoryList({
       size: p.size || inv?.size || null,
       collection: p.collection,
       finish: p.finish,
-      brandName: p.brand?.name || inv?.brand || null,
-      categoryName: p.category?.name || null,
+      surface: p.surface,
+      color: p.color,
+      material: p.material,
+      price: p.price ? Number(p.price) : null,
+      mrp: p.mrp ? Number(p.mrp) : null,
+      description: p.description,
       image_key: p.image_key,
       thumbnail_key: p.thumbnail_key,
       lifestyleImage: p.lifestyleImage,
@@ -401,6 +421,7 @@ export async function getInventoryList({
       minimumStock: inv?.minimumStock ?? 0,
       reorderLevel,
       status,
+      warehouseId: inv?.warehouseId || inv?.warehouse?.id || null,
       warehouseName: inv?.warehouse?.name || "Main Central Depot",
       inventoryId: inv?.id || null,
       activeBlocks: (inv?.stockBlocks || []).map((sb) => ({
@@ -770,6 +791,47 @@ export async function updateStockProductItem(input: UpdateStockProductInput) {
             newQuantity: newTotal,
             referenceType: "ADJUSTMENT",
             reason: input.remarks || `Stock level updated from ${prevTotal} to ${newTotal}`,
+            performedBy: input.performedBy,
+          },
+        });
+      }
+    } else {
+      const newTotal = input.totalStock !== undefined ? Math.max(0, input.totalStock) : 0;
+      const loose = input.looseStock !== undefined ? Math.max(0, input.looseStock) : 0;
+      const min = input.minimumStock !== undefined ? Math.max(0, input.minimumStock) : 0;
+      const max = input.maximumStock !== undefined ? Math.max(0, input.maximumStock) : 0;
+      const reorder = input.reorderLevel !== undefined ? Math.max(0, input.reorderLevel) : 0;
+      const status = newTotal <= 0 ? "OUT_OF_STOCK" : (reorder > 0 && newTotal <= reorder) ? "LOW_STOCK" : "AVAILABLE";
+
+      updatedInventory = await tx.inventory.create({
+        data: {
+          productId: input.productId,
+          brand: input.brandId || null,
+          size: input.size || null,
+          totalStock: newTotal,
+          availableStock: newTotal,
+          looseStock: loose,
+          minimumStock: min,
+          maximumStock: max,
+          reorderLevel: reorder,
+          stockStatus: status,
+          warehouseId: input.warehouseId || null,
+          remarks: input.remarks ? input.remarks.trim() : null,
+        },
+      });
+
+      if (newTotal > 0) {
+        await tx.inventoryMovement.create({
+          data: {
+            inventoryId: updatedInventory.id,
+            productId: input.productId,
+            warehouseId: input.warehouseId || null,
+            movementType: "INITIAL_ENTRY",
+            quantity: newTotal,
+            previousQuantity: 0,
+            newQuantity: newTotal,
+            referenceType: "ADJUSTMENT",
+            reason: input.remarks || "Initial stock level set during edit",
             performedBy: input.performedBy,
           },
         });
