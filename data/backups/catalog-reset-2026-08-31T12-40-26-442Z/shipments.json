@@ -1,0 +1,32 @@
+[
+  {
+    "id": "cmtfo5cor000vvruw2858za4u",
+    "shipmentNumber": "PO-TEST-802345",
+    "supplier": "RAK Ceramics",
+    "purchaseReference": "INV-RAK-802345",
+    "warehouseId": "cmsoj353o0000vrzcx5x3ui5v",
+    "status": "RECEIVED",
+    "expectedDate": null,
+    "dispatchDate": null,
+    "arrivalDate": "2026-08-30T10:31:07.488Z",
+    "remarks": null,
+    "createdById": "cmsszar050001vrz4a0jyi0e7",
+    "createdAt": "2026-08-30T10:30:51.003Z",
+    "updatedAt": "2026-08-30T10:31:07.489Z"
+  },
+  {
+    "id": "cmtfo750m000vvr1wcqhonyir",
+    "shipmentNumber": "PO-TEST-886460",
+    "supplier": "RAK Ceramics",
+    "purchaseReference": "INV-RAK-886460",
+    "warehouseId": "cmsoj353o0000vrzcx5x3ui5v",
+    "status": "RECEIVED",
+    "expectedDate": null,
+    "dispatchDate": null,
+    "arrivalDate": "2026-08-30T10:32:31.906Z",
+    "remarks": null,
+    "createdById": "cmsszar050001vrz4a0jyi0e7",
+    "createdAt": "2026-08-30T10:32:14.374Z",
+    "updatedAt": "2026-08-30T10:32:31.907Z"
+  }
+]

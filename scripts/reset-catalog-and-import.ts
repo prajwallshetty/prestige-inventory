@@ -145,32 +145,23 @@ function parseExcel(filePath: string): { valid: ParsedRow[]; invalid: InvalidRow
 }
 
 async function countAll() {
-  const [
-    products, inventories, brands,
-    stockBlocks, blockOrders,
-    bookings, bookingItems,
-    shipments, shipmentItems,
-    notifications,
-    conversations, messages,
-    users, showrooms, warehouses, dealers,
-  ] = await Promise.all([
-    db.product.count(),
-    db.inventory.count(),
-    db.brand.count(),
-    db.stockBlock.count(),
-    db.blockOrder.count(),
-    db.stockBooking.count(),
-    db.stockBookingItem.count(),
-    db.shipment.count(),
-    db.shipmentItem.count(),
-    db.notification.count(),
-    db.conversation.count(),
-    db.message.count(),
-    db.user.count(),
-    db.showroom.count(),
-    db.warehouse.count(),
-    db.dealer.count(),
-  ]);
+  const products = await db.product.count();
+  const inventories = await db.inventory.count();
+  const brands = await db.brand.count();
+  const stockBlocks = await db.stockBlock.count();
+  const blockOrders = await db.blockOrder.count();
+  const bookings = await db.stockBooking.count();
+  const bookingItems = await db.stockBookingItem.count();
+  const shipments = await db.shipment.count();
+  const shipmentItems = await db.shipmentItem.count();
+  const notifications = await db.notification.count();
+  const conversations = await db.conversation.count();
+  const messages = await db.message.count();
+  const users = await db.user.count();
+  const showrooms = await db.showroom.count();
+  const warehouses = await db.warehouse.count();
+  const dealers = await db.dealer.count();
+
   return {
     products, inventories, brands,
     stockBlocks, blockOrders,
@@ -203,21 +194,16 @@ function printCounts(label: string, c: Awaited<ReturnType<typeof countAll>>) {
 async function writeBackupSnapshot(dir: string) {
   fs.mkdirSync(dir, { recursive: true });
 
-  const [
-    products, stockBlocks, blockOrders, bookings, bookingItems,
-    shipments, shipmentItems, notifications, conversations, messages,
-  ] = await Promise.all([
-    db.product.findMany({ include: { inventory: true, brand: true } }),
-    db.stockBlock.findMany(),
-    db.blockOrder.findMany(),
-    db.stockBooking.findMany(),
-    db.stockBookingItem.findMany(),
-    db.shipment.findMany(),
-    db.shipmentItem.findMany(),
-    db.notification.findMany(),
-    db.conversation.findMany(),
-    db.message.findMany(),
-  ]);
+  const products = await db.product.findMany({ include: { inventory: true, brand: true } });
+  const stockBlocks = await db.stockBlock.findMany();
+  const blockOrders = await db.blockOrder.findMany();
+  const bookings = await db.stockBooking.findMany();
+  const bookingItems = await db.stockBookingItem.findMany();
+  const shipments = await db.shipment.findMany();
+  const shipmentItems = await db.shipmentItem.findMany();
+  const notifications = await db.notification.findMany();
+  const conversations = await db.conversation.findMany();
+  const messages = await db.message.findMany();
 
   const files: Record<string, unknown> = {
     "products-with-inventory-and-brand.json": products,
@@ -273,16 +259,16 @@ async function main() {
   const before = await countAll();
   printCounts("BEFORE", before);
 
-  // ——— 3. Warehouse (depot) detection — never guess ———
+  // ——— 3. Warehouse (depot) detection — auto-select main depot if available ———
   const warehouses = await db.warehouse.findMany({ select: { id: true, name: true, code: true } });
   let depotId: string | null = null;
-  if (warehouses.length === 1) {
-    depotId = warehouses[0].id;
-    console.log(`\n[DEPOT] Single warehouse found — new inventory rows will link to "${warehouses[0].name}" (${warehouses[0].code}).`);
+  const mainWarehouse =
+    warehouses.find((w) => /main|central|depot/i.test(w.code) || /main|central|depot/i.test(w.name)) ?? warehouses[0];
+  if (mainWarehouse) {
+    depotId = mainWarehouse.id;
+    console.log(`\n[DEPOT] New inventory rows will link to warehouse "${mainWarehouse.name}" (${mainWarehouse.code}) [${mainWarehouse.id}].`);
   } else {
-    console.log(`\n[DEPOT] ${warehouses.length} warehouse row(s) found — cannot safely auto-select one.`);
-    console.log("  New Inventory rows will be created with warehouseId = null; assign manually if needed.");
-    warehouses.forEach((w) => console.log(`    - ${w.name} (${w.code}) [${w.id}]`));
+    console.log("\n[DEPOT] No warehouse rows found — new inventory rows will have warehouseId = null.");
   }
 
   if (!LIVE) {
@@ -345,79 +331,90 @@ async function main() {
   console.log(`\n[IMPORT] Importing ${valid.length} valid row(s)...`);
   const created: Array<{ productId: string; inventoryId: string; brand: string; product: string; surface: string; size: string }> = [];
 
-  await db.$transaction(
-    async (tx) => {
-      const brandCache = new Map<string, string>();
-      for (const name of brandNames) {
-        const slug = slugify(name);
-        const brand = await tx.brand.upsert({
-          where: { slug },
-          update: {},
-          create: { slug, name },
-        });
-        brandCache.set(name, brand.id);
-      }
+  const brandCache = new Map<string, string>();
+  for (const name of brandNames) {
+    const slug = slugify(name);
+    const brand = await db.brand.upsert({
+      where: { slug },
+      update: {},
+      create: { slug, name },
+    });
+    brandCache.set(name, brand.id);
+  }
 
-      for (const row of valid) {
-        const brandId = brandCache.get(row.brand)!;
-        const key = importKeyFor(row.brand, row.product, row.surface, row.size);
-        const slug = `${slugify(row.product)}-${slugify(row.surface)}-${slugify(row.size)}`;
+  // Import in transaction chunks of 15 to avoid interactive transaction timeouts over remote latency
+  const CHUNK_SIZE = 15;
+  for (let i = 0; i < valid.length; i += CHUNK_SIZE) {
+    const chunk = valid.slice(i, i + CHUNK_SIZE);
+    await db.$transaction(
+      async (tx) => {
+        for (const row of chunk) {
+          const brandId = brandCache.get(row.brand)!;
+          const key = importKeyFor(row.brand, row.product, row.surface, row.size);
+          const slug = `${slugify(row.brand)}-${slugify(row.product)}-${slugify(row.surface)}-${slugify(row.size)}`;
 
-        const product = await tx.product.upsert({
-          where: { importKey: key },
-          update: {
-            name: row.product,
-            surface: row.surface,
-            size: row.size,
-            brandId,
-            status: "ACTIVE",
-          },
-          create: {
-            slug,
-            importKey: key,
-            name: row.product,
-            surface: row.surface,
-            size: row.size,
-            brandId,
-            status: "ACTIVE",
-            published: true,
-            sourceSheet: "Sheet1",
-            sourceRow: row.excelRow,
-          },
-        });
+          const product = await tx.product.upsert({
+            where: { importKey: key },
+            update: {
+              name: row.product,
+              surface: row.surface,
+              size: row.size,
+              brandId,
+              status: "ACTIVE",
+            },
+            create: {
+              slug,
+              importKey: key,
+              name: row.product,
+              surface: row.surface,
+              size: row.size,
+              brandId,
+              status: "ACTIVE",
+              published: true,
+              sourceSheet: "Sheet1",
+              sourceRow: row.excelRow,
+            },
+          });
 
-        const inventory = await tx.inventory.upsert({
-          where: { productId: product.id },
-          update: {},
-          create: {
-            productId: product.id,
-            warehouseId: depotId,
-            totalStock: 0,
-            looseStock: 0,
-            availableStock: 0,
-            blockedStock: 0,
-            allocatedStock: 0,
-            reservedStock: 0,
-            damagedStock: 0,
-            transitStock: 0,
-            deliveredStock: 0,
-            minimumStock: 0,
-            maximumStock: 0,
-            reorderLevel: 0,
-            stockStatus: "OUT_OF_STOCK",
-            brand: row.brand,
-            productName: row.product,
-            productNumber: null,
-            size: row.size,
-          },
-        });
+          const inventory = await tx.inventory.upsert({
+            where: { productId: product.id },
+            update: {
+              brand: row.brand,
+              productName: row.product,
+              size: row.size,
+              ...(depotId ? { warehouseId: depotId } : {}),
+            },
+            create: {
+              productId: product.id,
+              warehouseId: depotId,
+              totalStock: 0,
+              looseStock: 0,
+              availableStock: 0,
+              blockedStock: 0,
+              allocatedStock: 0,
+              reservedStock: 0,
+              damagedStock: 0,
+              transitStock: 0,
+              deliveredStock: 0,
+              minimumStock: 0,
+              maximumStock: 0,
+              reorderLevel: 0,
+              stockStatus: "OUT_OF_STOCK",
+              brand: row.brand,
+              productName: row.product,
+              productNumber: null,
+              size: row.size,
+            },
+          });
 
-        created.push({ productId: product.id, inventoryId: inventory.id, ...row });
-      }
-    },
-    { timeout: 60_000, maxWait: 30_000 }
-  );
-  console.log(`[IMPORT] Created/updated ${created.length} product + inventory pairs.`);
+          created.push({ productId: product.id, inventoryId: inventory.id, ...row });
+        }
+      },
+      { timeout: 60_000, maxWait: 30_000 }
+    );
+    console.log(`  Imported ${Math.min(i + CHUNK_SIZE, valid.length)} / ${valid.length} product & inventory rows...`);
+  }
+  console.log(`[IMPORT] Successfully created/updated ${created.length} product + inventory pairs.`);
 
   // ——— 8. After counts + report ———
   const after = await countAll();

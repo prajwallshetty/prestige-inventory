@@ -1,0 +1,40 @@
+[
+  {
+    "id": "cmtgu5vmq0001lb047hesh7ii",
+    "conversationId": "cmtgu5g8v0000kw04guz5htod",
+    "senderId": "cmsszar050001vrz4a0jyi0e7",
+    "type": "TEXT",
+    "content": "WSP-SLV-SPA4S449VX.jpeg",
+    "attachmentUrl": "https://your-prestige-in.s3.ap-south-1.amazonaws.com/chat-attachments/1788156410930-WSP-SLV-SPA4S449VX.jpeg",
+    "attachmentKey": "chat-attachments/1788156410930-WSP-SLV-SPA4S449VX.jpeg",
+    "attachmentName": "WSP-SLV-SPA4S449VX.jpeg",
+    "clientMessageId": "opt_1788156419070_79rhj3a",
+    "replyToId": null,
+    "metadata": null,
+    "editedAt": null,
+    "editedById": null,
+    "deletedAt": "2026-08-31T06:07:40.341Z",
+    "deletedById": "cmsszar050001vrz4a0jyi0e7",
+    "createdAt": "2026-08-31T06:06:59.426Z",
+    "updatedAt": "2026-08-31T06:07:40.342Z"
+  },
+  {
+    "id": "cmtgu7cyd0001l604sh3qe0m5",
+    "conversationId": "cmtgu5g8v0000kw04guz5htod",
+    "senderId": "cmsszar050001vrz4a0jyi0e7",
+    "type": "TEXT",
+    "content": "WSP-SLV-SPA4S449VX.jpeg",
+    "attachmentUrl": "https://your-prestige-in.s3.ap-south-1.amazonaws.com/chat-attachments/1788156484494-WSP-SLV-SPA4S449VX.jpeg",
+    "attachmentKey": "chat-attachments/1788156484494-WSP-SLV-SPA4S449VX.jpeg",
+    "attachmentName": "WSP-SLV-SPA4S449VX.jpeg",
+    "clientMessageId": "opt_1788156488056_zb7f778",
+    "replyToId": null,
+    "metadata": null,
+    "editedAt": null,
+    "editedById": null,
+    "deletedAt": "2026-08-31T06:08:13.450Z",
+    "deletedById": "cmsszar050001vrz4a0jyi0e7",
+    "createdAt": "2026-08-31T06:08:08.533Z",
+    "updatedAt": "2026-08-31T06:08:13.451Z"
+  }
+]

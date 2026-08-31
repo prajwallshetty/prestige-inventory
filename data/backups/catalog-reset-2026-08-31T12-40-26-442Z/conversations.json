@@ -1,0 +1,18 @@
+[
+  {
+    "id": "cmtgu5g8v0000kw04guz5htod",
+    "type": "DIRECT",
+    "name": null,
+    "description": null,
+    "icon": null,
+    "blockId": null,
+    "shipmentId": null,
+    "productId": null,
+    "dealerId": null,
+    "createdBy": "cmsszar050001vrz4a0jyi0e7",
+    "active": true,
+    "createdAt": "2026-08-31T06:06:39.488Z",
+    "updatedAt": "2026-08-31T06:08:08.532Z",
+    "lastMessageAt": "2026-08-31T06:08:08.532Z"
+  }
+]

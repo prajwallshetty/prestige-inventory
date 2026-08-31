@@ -1,0 +1,55 @@
+{
+  "timestamp": "2026-08-31T12-44-47-458Z",
+  "sourceFile": "new-product-catalog.xlsx",
+  "excel": {
+    "totalDataRows": 75,
+    "validRows": 75,
+    "invalidRows": 0,
+    "duplicateRows": 0
+  },
+  "invalid": [],
+  "duplicates": [],
+  "brandsCreated": [
+    "LONIX",
+    "MONOLITH",
+    "VELZONE"
+  ],
+  "productsCreated": 75,
+  "depotUsed": "cmsoj353o0000vrzcx5x3ui5v",
+  "before": {
+    "products": 0,
+    "inventories": 0,
+    "brands": 27,
+    "stockBlocks": 0,
+    "blockOrders": 0,
+    "bookings": 0,
+    "bookingItems": 0,
+    "shipments": 0,
+    "shipmentItems": 0,
+    "notifications": 0,
+    "conversations": 0,
+    "messages": 0,
+    "users": 7,
+    "showrooms": 5,
+    "warehouses": 2,
+    "dealers": 3
+  },
+  "after": {
+    "products": 75,
+    "inventories": 75,
+    "brands": 27,
+    "stockBlocks": 0,
+    "blockOrders": 0,
+    "bookings": 0,
+    "bookingItems": 0,
+    "shipments": 0,
+    "shipmentItems": 0,
+    "notifications": 0,
+    "conversations": 0,
+    "messages": 0,
+    "users": 7,
+    "showrooms": 5,
+    "warehouses": 2,
+    "dealers": 3
+  }
+}

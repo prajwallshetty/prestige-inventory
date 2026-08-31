@@ -1,0 +1,22 @@
+[
+  {
+    "id": "cmtfo5cor000xvruwncslm3vd",
+    "shipmentId": "cmtfo5cor000vvruw2858za4u",
+    "productId": "cmtfo4g590003vruwblg9ma2e",
+    "expectedQuantity": 100,
+    "receivedQuantity": 100,
+    "damagedQuantity": 0,
+    "shortQuantity": 0,
+    "status": "RECEIVED"
+  },
+  {
+    "id": "cmtfo750m000xvr1w2yw8kq0h",
+    "shipmentId": "cmtfo750m000vvr1wcqhonyir",
+    "productId": "cmtfo694o0003vr1ws1p1jgab",
+    "expectedQuantity": 100,
+    "receivedQuantity": 100,
+    "damagedQuantity": 0,
+    "shortQuantity": 0,
+    "status": "RECEIVED"
+  }
+]

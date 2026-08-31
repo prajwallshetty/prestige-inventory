@@ -1,0 +1,194 @@
+[
+  {
+    "id": "cmtfo4upl000ivruwsdnv3ydg",
+    "userId": "cmsszas1r0003vrz48uh1rslj",
+    "type": "BLOCK_SENT_FOR_APPROVAL",
+    "title": "New Block Awaiting Final Approval",
+    "message": "Block BLK-2026-000260 for 200 boxes is waiting for final approval.",
+    "priority": "NORMAL",
+    "data": {
+      "blockId": "cmtfo4r33000dvruwy5ydx3yh",
+      "blockNumber": "BLK-2026-000260"
+    },
+    "isRead": false,
+    "readAt": null,
+    "createdAt": "2026-08-30T10:30:27.704Z",
+    "expiresAt": null
+  },
+  {
+    "id": "cmtfo4wye000kvruwq74twkrj",
+    "userId": "cmsszas1r0003vrz48uh1rslj",
+    "type": "PROCUREMENT_REQUIRED",
+    "title": "Procurement Required",
+    "message": "Block BLK-2026-000260: 100 of 200 boxes of \"RAK Antico Stone 600x1200\" need to be procured.",
+    "priority": "HIGH",
+    "data": {
+      "blockId": "cmtfo4r33000dvruwy5ydx3yh",
+      "blockNumber": "BLK-2026-000260"
+    },
+    "isRead": false,
+    "readAt": null,
+    "createdAt": "2026-08-30T10:30:30.613Z",
+    "expiresAt": null
+  },
+  {
+    "id": "cmtfo55jp000svruw9c2073wc",
+    "userId": "cmsszas1r0003vrz48uh1rslj",
+    "type": "BLOCK_SENT_FOR_APPROVAL",
+    "title": "New Block Awaiting Final Approval",
+    "message": "Block BLK-2026-000261 for 50 boxes is waiting for final approval.",
+    "priority": "NORMAL",
+    "data": {
+      "blockId": "cmtfo51o5000nvruwi7k98ey3",
+      "blockNumber": "BLK-2026-000261"
+    },
+    "isRead": false,
+    "readAt": null,
+    "createdAt": "2026-08-30T10:30:41.748Z",
+    "expiresAt": null
+  },
+  {
+    "id": "cmtfo6n0q000ivr1w3ri9kvan",
+    "userId": "cmsszas1r0003vrz48uh1rslj",
+    "type": "BLOCK_SENT_FOR_APPROVAL",
+    "title": "New Block Awaiting Final Approval",
+    "message": "Block BLK-2026-000262 for 200 boxes is waiting for final approval.",
+    "priority": "NORMAL",
+    "data": {
+      "blockId": "cmtfo6jf0000dvr1w6t2k4n7a",
+      "blockNumber": "BLK-2026-000262"
+    },
+    "isRead": false,
+    "readAt": null,
+    "createdAt": "2026-08-30T10:31:51.049Z",
+    "expiresAt": null
+  },
+  {
+    "id": "cmtfo6p7c000kvr1w4swg5gsf",
+    "userId": "cmsszas1r0003vrz48uh1rslj",
+    "type": "PROCUREMENT_REQUIRED",
+    "title": "Procurement Required",
+    "message": "Block BLK-2026-000262: 100 of 200 boxes of \"RAK Antico Stone 600x1200\" need to be procured.",
+    "priority": "HIGH",
+    "data": {
+      "blockId": "cmtfo6jf0000dvr1w6t2k4n7a",
+      "blockNumber": "BLK-2026-000262"
+    },
+    "isRead": false,
+    "readAt": null,
+    "createdAt": "2026-08-30T10:31:53.879Z",
+    "expiresAt": null
+  },
+  {
+    "id": "cmtfo6xe0000svr1w9zganwdw",
+    "userId": "cmsszas1r0003vrz48uh1rslj",
+    "type": "BLOCK_SENT_FOR_APPROVAL",
+    "title": "New Block Awaiting Final Approval",
+    "message": "Block BLK-2026-000263 for 50 boxes is waiting for final approval.",
+    "priority": "NORMAL",
+    "data": {
+      "blockId": "cmtfo6tqx000nvr1wgsdu555c",
+      "blockNumber": "BLK-2026-000263"
+    },
+    "isRead": false,
+    "readAt": null,
+    "createdAt": "2026-08-30T10:32:04.488Z",
+    "expiresAt": null
+  },
+  {
+    "id": "cmtfo8njv000ivr9cazkatvvg",
+    "userId": "cmsszas1r0003vrz48uh1rslj",
+    "type": "BLOCK_SENT_FOR_APPROVAL",
+    "title": "New Block Awaiting Final Approval",
+    "message": "Block BLK-2026-000264 for 200 boxes is waiting for final approval.",
+    "priority": "NORMAL",
+    "data": {
+      "blockId": "cmtfo8k3l000dvr9cmu3f5yri",
+      "blockNumber": "BLK-2026-000264"
+    },
+    "isRead": false,
+    "readAt": null,
+    "createdAt": "2026-08-30T10:33:25.050Z",
+    "expiresAt": null
+  },
+  {
+    "id": "cmtfo8ppz000kvr9cjazuyfca",
+    "userId": "cmsszas1r0003vrz48uh1rslj",
+    "type": "PROCUREMENT_REQUIRED",
+    "title": "Procurement Required",
+    "message": "Block BLK-2026-000264: 100 of 200 boxes of \"RAK Antico Stone 600x1200\" need to be procured.",
+    "priority": "HIGH",
+    "data": {
+      "blockId": "cmtfo8k3l000dvr9cmu3f5yri",
+      "blockNumber": "BLK-2026-000264"
+    },
+    "isRead": false,
+    "readAt": null,
+    "createdAt": "2026-08-30T10:33:27.862Z",
+    "expiresAt": null
+  },
+  {
+    "id": "cmtfo8xw4000svr9csnxnn42z",
+    "userId": "cmsszas1r0003vrz48uh1rslj",
+    "type": "BLOCK_SENT_FOR_APPROVAL",
+    "title": "New Block Awaiting Final Approval",
+    "message": "Block BLK-2026-000265 for 50 boxes is waiting for final approval.",
+    "priority": "NORMAL",
+    "data": {
+      "blockId": "cmtfo8u7p000nvr9cu5l1qom2",
+      "blockNumber": "BLK-2026-000265"
+    },
+    "isRead": false,
+    "readAt": null,
+    "createdAt": "2026-08-30T10:33:38.451Z",
+    "expiresAt": null
+  },
+  {
+    "id": "cmtgu3xmw0002l504q9ejufe3",
+    "userId": "cmsszar050001vrz4a0jyi0e7",
+    "type": "BLOCK_APPROVED",
+    "title": "Stock Block Approved",
+    "message": "Block BLK-2026-000263 has been approved and is ready to ship.",
+    "priority": "NORMAL",
+    "data": {
+      "blockId": "cmtfo6tqx000nvr1wgsdu555c",
+      "blockNumber": "BLK-2026-000263"
+    },
+    "isRead": false,
+    "readAt": null,
+    "createdAt": "2026-08-31T06:05:28.712Z",
+    "expiresAt": null
+  },
+  {
+    "id": "cmtgu4id20007l5042pdc5mln",
+    "userId": "cmsszar050001vrz4a0jyi0e7",
+    "type": "BLOCK_SHIPPED",
+    "title": "Stock Shipped",
+    "message": "Block BLK-2026-000263 has been shipped on vehicle 2824.",
+    "priority": "HIGH",
+    "data": {
+      "blockId": "cmtfo6tqx000nvr1wgsdu555c",
+      "blockNumber": "BLK-2026-000263"
+    },
+    "isRead": false,
+    "readAt": null,
+    "createdAt": "2026-08-31T06:05:55.574Z",
+    "expiresAt": null
+  },
+  {
+    "id": "cmtgu4m9v000cl504bpemvnis",
+    "userId": "cmsszar050001vrz4a0jyi0e7",
+    "type": "BLOCK_DELIVERED",
+    "title": "Stock Delivered",
+    "message": "Block BLK-2026-000263 has been delivered.",
+    "priority": "NORMAL",
+    "data": {
+      "blockId": "cmtfo6tqx000nvr1wgsdu555c",
+      "blockNumber": "BLK-2026-000263"
+    },
+    "isRead": false,
+    "readAt": null,
+    "createdAt": "2026-08-31T06:06:00.643Z",
+    "expiresAt": null
+  }
+]

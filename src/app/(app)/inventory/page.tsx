@@ -34,7 +34,7 @@ export default async function InventoryPage({
     limit: Math.min(100, Math.max(10, parseInt(first(params.limit) || "20", 10) || 20)),
   };
 
-  const [inventoryData, facets, warehouses] = await Promise.all([
+  const [inventoryData, facets, warehouses, dealers] = await Promise.all([
     getInventoryList({
       ...filters,
       userRole: session.role,
@@ -45,6 +45,7 @@ export default async function InventoryPage({
     // Only feeds the Create/Edit stock item form's warehouse picker — fetched
     // server-side so the client doesn't duplicate this round trip on mount.
     db.warehouse.findMany({ select: { id: true, name: true, code: true }, orderBy: { name: "asc" } }),
+    db.dealer.findMany({ where: { status: "ACTIVE" }, select: { id: true, name: true, company: true }, orderBy: { name: "asc" } }),
   ]);
 
   return (
@@ -64,6 +65,7 @@ export default async function InventoryPage({
         sizes={facets.sizes}
         collections={facets.collections}
         warehouses={warehouses}
+        dealers={dealers}
         session={session}
       />
     </div>
