@@ -15,6 +15,7 @@ import {
   AlertCircle
 } from "lucide-react";
 import { SessionContext } from "@/lib/session";
+import { FeaturedCollections } from "@/components/common/FeaturedCollections";
 
 /**
  * `toLocaleTimeString`/`toLocaleDateString` with no explicit locale/timeZone
@@ -206,6 +207,9 @@ export function DashboardClient({
         />
         <MetricCard title="Low / Out stock" value={`${summary.lowStock} / ${summary.outOfStock}`} icon={AlertTriangle} color="rose" />
       </div>
+
+      {/* FEATURED COLLECTIONS SHOWCASE */}
+      <FeaturedCollections />
 
       {/* LAYOUT GRID */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">

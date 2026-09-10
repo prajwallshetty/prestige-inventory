@@ -304,8 +304,8 @@ export function ProductForm({ mode, product, options }: Props) {
     try {
       const payload = {
         ...form,
-        price: form.price ? parseFloat(form.price) : null,
-        mrp: form.mrp ? parseFloat(form.mrp) : null,
+        price: form.price && !isNaN(parseFloat(form.price)) ? parseFloat(form.price) : null,
+        mrp: form.mrp && !isNaN(parseFloat(form.mrp)) ? parseFloat(form.mrp) : null,
       };
 
       const res = await fetch(mode === "create" ? "/api/v1/products" : `/api/v1/products/${product!.id}`, {

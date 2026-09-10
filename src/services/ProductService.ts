@@ -83,18 +83,25 @@ async function uniqueSlug(name: string, size: string | null | undefined, exclude
 }
 
 async function assertSkuAvailable(sku: string | null | undefined, excludeId?: string) {
-  if (!sku) return;
+  const trimmed = sku?.trim();
+  if (!trimmed) return;
   const existing = await db.product.findFirst({
-    where: { sku, deletedAt: null, ...(excludeId ? { id: { not: excludeId } } : {}) },
+    where: { sku: trimmed, deletedAt: null, ...(excludeId ? { id: { not: excludeId } } : {}) },
     select: { id: true, name: true },
   });
   if (existing) {
-    throw conflict(`SKU "${sku}" is already used by "${existing.name}".`);
+    throw conflict(`SKU "${trimmed}" is already used by "${existing.name}".`);
   }
 }
 
 async function invalidateProductCaches() {
   await Promise.all([invalidateCache("products:*"), invalidateCache("search:*"), invalidateCache("dashboard:*")]);
+}
+
+function parseDecimal(val: any): number | null {
+  if (val === null || val === undefined || val === "") return null;
+  const num = typeof val === "number" ? val : parseFloat(String(val));
+  return isNaN(num) ? null : num;
 }
 
 function searchClause(search?: string): any {
@@ -228,8 +235,8 @@ function toWriteData(input: ProductInput) {
     images: input.images && input.images.length > 0 ? input.images : undefined,
     video: input.video?.trim() || null,
     brochureUrl: input.brochureUrl?.trim() || null,
-    price: input.price ?? null,
-    mrp: input.mrp ?? null,
+    price: parseDecimal(input.price),
+    mrp: parseDecimal(input.mrp),
     weight: input.weight?.trim() || null,
     coverage: input.coverage?.trim() || null,
     packing: input.packing?.trim() || null,
@@ -263,12 +270,16 @@ export async function createProduct(input: ProductInput, actor: Actor) {
     // the existing stock-adjustment workflow, never invented here.
     await tx.inventory.create({ data: { productId: created.id } });
 
+    const userExists = actor.userId
+      ? await tx.user.findUnique({ where: { id: actor.userId }, select: { id: true } })
+      : null;
+
     await tx.auditLog.create({
       data: {
         action: "PRODUCT_CREATED",
         entity: "Product",
         entityId: created.id,
-        userId: actor.userId,
+        userId: userExists ? actor.userId : null,
         roleAtTime: actor.role,
         newValue: { name: created.name, sku: created.sku, slug: created.slug },
         meta: { performedBy: actor.name || actor.userId },

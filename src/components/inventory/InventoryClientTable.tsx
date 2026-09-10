@@ -28,6 +28,7 @@ import {
 import { getProductThumbnailUrl, getProductImageUrl } from "@/lib/s3";
 import { ShimmerImage } from "@/components/Skeleton";
 import { NImagesManager, mediaPreviewUrl } from "@/components/common/NImagesManager";
+import { FeaturedCollections } from "@/components/common/FeaturedCollections";
 
 interface Props {
   initialData: {
@@ -441,6 +442,9 @@ export function InventoryClientTable({
 
   return (
     <div className="space-y-6">
+      {/* FEATURED COLLECTIONS */}
+      <FeaturedCollections />
+
       {/* FILTER & TOP ACTION BAR */}
       <div className="flex flex-col gap-3 rounded-xl border border-[#EAEAEA] bg-white p-4 shadow-xs md:flex-row md:items-center md:justify-between">
         {/* Search */}

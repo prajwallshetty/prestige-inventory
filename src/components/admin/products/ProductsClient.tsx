@@ -242,7 +242,7 @@ export function ProductsClient({ initialData, options }: Props) {
               ) : data.items.length === 0 ? (
                 <tr>
                   <td colSpan={9} className="p-8 text-center text-[#6B6B6B] text-xs">
-                    Product catalog is empty. Upload a new catalog to view products.
+                    Product catalog is empty. Click &quot;+ Add Product&quot; to create a new product.
                   </td>
                 </tr>
               ) : (
