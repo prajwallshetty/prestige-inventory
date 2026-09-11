@@ -452,7 +452,7 @@ export function InventoryClientTable({
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#6B6B6B]" />
           <input
             type="text"
-            placeholder="Search catalog across all items by SKU, name, brand or size..."
+            placeholder="Search catalog across all items by name, brand or size..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] py-2 pl-9 pr-4 text-xs text-[#111111] placeholder-[#6B6B6B] focus:border-[#F2C202] focus:outline-hidden"
@@ -532,7 +532,6 @@ export function InventoryClientTable({
           <thead>
             <tr className="border-b border-[#EAEAEA] bg-[#F7F7F5] text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
               <th className="py-3 px-4">Product Details</th>
-              <th className="py-3 px-4">SKU / Code</th>
               <th className="py-3 px-4 text-center">Stock</th>
               <th className="py-3 px-4 text-center">Blocked</th>
               <th className="py-3 px-4 text-center">Available</th>
@@ -543,7 +542,7 @@ export function InventoryClientTable({
           <tbody className="divide-y divide-[#EAEAEA] text-xs">
             {items.length === 0 ? (
               <tr>
-                <td colSpan={7} className="py-12 text-center text-[#6B6B6B]">
+                <td colSpan={6} className="py-12 text-center text-[#6B6B6B]">
                   <Package className="mx-auto h-8 w-8 text-[#EAEAEA] mb-2" />
                   <p className="font-bold text-[#111111]">No stock items found</p>
                   <p className="text-xs text-[#6B6B6B] mt-1">Try adjusting search query or filters.</p>
@@ -577,9 +576,6 @@ export function InventoryClientTable({
                           </p>
                         </div>
                       </div>
-                    </td>
-                    <td className="py-3 px-4 font-mono font-semibold text-[#111111]">
-                      {item.sku || "—"}
                     </td>
                     <td className="py-3 px-4 text-center font-mono font-bold text-[#111111]">
                       {totalStock.toLocaleString("en-IN")}
@@ -1096,32 +1092,17 @@ export function InventoryClientTable({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
-                    SKU Code
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="e.g. LONIX-MG-8012"
-                    value={stockForm.sku}
-                    onChange={(e) => setStockForm({ ...stockForm, sku: e.target.value })}
-                    className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs font-mono focus:border-[#F2C202] focus:outline-hidden"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
-                    Dimensions / Size
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="e.g. 800X1200"
-                    value={stockForm.size}
-                    onChange={(e) => setStockForm({ ...stockForm, size: e.target.value })}
-                    className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs font-mono focus:border-[#F2C202] focus:outline-hidden"
-                  />
-                </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
+                  Dimensions / Size
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. 800X1200"
+                  value={stockForm.size}
+                  onChange={(e) => setStockForm({ ...stockForm, size: e.target.value })}
+                  className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs font-mono focus:border-[#F2C202] focus:outline-hidden"
+                />
               </div>
 
               <div className="rounded-xl border border-[#EAEAEA] bg-[#F7F7F5] p-3 space-y-3">
@@ -1217,9 +1198,7 @@ export function InventoryClientTable({
                   <Pencil className="h-4 w-4 text-[#F2C202]" />
                   Edit Stock Item
                 </h2>
-                <p className="text-[11px] text-[#6B6B6B]">
-                  {editingItem.productName} • SKU: {editingItem.sku || "No SKU"}
-                </p>
+                <p className="text-[11px] text-[#6B6B6B]">{editingItem.productName}</p>
               </div>
               <button onClick={() => setEditModalOpen(false)} className="rounded-lg p-1 text-[#6B6B6B] hover:bg-[#F7F7F5]">
                 <X className="h-4 w-4" />
@@ -1281,32 +1260,17 @@ export function InventoryClientTable({
               </div>
 
               {/* Specifications */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
-                    SKU Code
-                  </label>
-                  <input
-                    type="text"
-                    value={stockForm.sku}
-                    onChange={(e) => setStockForm({ ...stockForm, sku: e.target.value })}
-                    placeholder="e.g. LONIX-MG-8012"
-                    className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs font-mono focus:border-[#F2C202] focus:outline-hidden"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
-                    Dimensions / Size
-                  </label>
-                  <input
-                    type="text"
-                    value={stockForm.size}
-                    onChange={(e) => setStockForm({ ...stockForm, size: e.target.value })}
-                    placeholder="e.g. 800X1200"
-                    className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs font-mono focus:border-[#F2C202] focus:outline-hidden"
-                  />
-                </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-black uppercase text-[#6B6B6B] tracking-wider">
+                  Dimensions / Size
+                </label>
+                <input
+                  type="text"
+                  value={stockForm.size}
+                  onChange={(e) => setStockForm({ ...stockForm, size: e.target.value })}
+                  placeholder="e.g. 800X1200"
+                  className="w-full rounded-lg border border-[#EAEAEA] bg-white p-2.5 text-xs font-mono focus:border-[#F2C202] focus:outline-hidden"
+                />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1492,7 +1456,7 @@ export function InventoryClientTable({
             </div>
 
             <p className="text-xs text-[#111111] mb-4">
-              Are you sure you want to delete <strong>{deletingItem.productName}</strong> ({deletingItem.sku || "No SKU"})? This item will be archived and removed from stock listings.
+              Are you sure you want to delete <strong>{deletingItem.productName}</strong>? This item will be archived and removed from stock listings.
             </p>
 
             <form onSubmit={handleDeleteSubmit} className="space-y-4">

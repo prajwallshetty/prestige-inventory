@@ -14,7 +14,6 @@ export interface NeedToOrderRow {
   availableQuantity: number;
   shortageQuantity: number;
   physicalStock: number;
-  priority: "URGENT" | "NORMAL";
   createdAt: string | null;
   showroom: { id: string; name: string; city: string | null } | null;
   product: { id: string; name: string; productNumber: string; size: string | null; brand: { id: string; name: string } | null } | null;
@@ -22,7 +21,7 @@ export interface NeedToOrderRow {
 
 interface Props {
   result: { items: NeedToOrderRow[]; total: number; page: number; limit: number; totalPages: number };
-  filters: { search: string; showroomId: string; priority: string; sort: string; page: number; limit: number };
+  filters: { search: string; showroomId: string; sort: string; page: number; limit: number };
   showrooms: Array<{ id: string; name: string }>;
 }
 
@@ -51,7 +50,6 @@ export function NeedToOrderClientList({ result, filters, showrooms }: Props) {
     const merged = { ...filters, ...next };
     if (merged.search) params.set("search", merged.search);
     if (merged.showroomId) params.set("showroomId", merged.showroomId);
-    if (merged.priority) params.set("priority", merged.priority);
     if (merged.sort && merged.sort !== "newest") params.set("sort", String(merged.sort));
     if (next.page) params.set("page", next.page);
     const qs = params.toString();
@@ -156,16 +154,6 @@ export function NeedToOrderClientList({ result, filters, showrooms }: Props) {
         </select>
 
         <select
-          value={filters.priority}
-          onChange={(e) => pushFilters({ priority: e.target.value, page: "1" })}
-          className="rounded-xl border border-[#EAEAEA] bg-white px-3 py-2.5 text-xs font-bold min-h-[40px]"
-        >
-          <option value="">All priorities</option>
-          <option value="URGENT">Urgent</option>
-          <option value="NORMAL">Normal</option>
-        </select>
-
-        <select
           value={filters.sort}
           onChange={(e) => pushFilters({ sort: e.target.value, page: "1" })}
           className="rounded-xl border border-[#EAEAEA] bg-white px-3 py-2.5 text-xs font-bold min-h-[40px]"
@@ -205,14 +193,13 @@ export function NeedToOrderClientList({ result, filters, showrooms }: Props) {
               <th className="px-3 py-3 text-right">Need to Order</th>
               <th className="px-3 py-3">Block</th>
               <th className="px-3 py-3">Showroom</th>
-              <th className="px-3 py-3">Priority</th>
               <th className="px-3 py-3">Requested On</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-[#EAEAEA]">
             {result.items.length === 0 && (
               <tr>
-                <td colSpan={9} className="px-4 py-10 text-center text-xs italic text-[#6B6B6B]">
+                <td colSpan={8} className="px-4 py-10 text-center text-xs italic text-[#6B6B6B]">
                   Nothing needs procurement right now.
                 </td>
               </tr>
@@ -242,15 +229,6 @@ export function NeedToOrderClientList({ result, filters, showrooms }: Props) {
                   </a>
                 </td>
                 <td className="px-3 py-3 text-[#6B6B6B]">{row.showroom?.name || "—"}</td>
-                <td className="px-3 py-3">
-                  <span
-                    className={`rounded-full border px-2 py-0.5 text-[9px] font-black uppercase ${
-                      row.priority === "URGENT" ? "border-rose-200 bg-rose-50 text-rose-700" : "border-[#EAEAEA] bg-[#F7F7F5] text-[#6B6B6B]"
-                    }`}
-                  >
-                    {row.priority}
-                  </span>
-                </td>
                 <td className="px-3 py-3 text-[#6B6B6B]">{formatDate(row.createdAt)}</td>
               </tr>
             ))}
@@ -280,13 +258,6 @@ export function NeedToOrderClientList({ result, filters, showrooms }: Props) {
                   {row.product?.productNumber} {row.product?.size ? `· ${row.product.size}` : ""}
                 </p>
               </div>
-              <span
-                className={`shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-black uppercase ${
-                  row.priority === "URGENT" ? "border-rose-200 bg-rose-50 text-rose-700" : "border-[#EAEAEA] bg-[#F7F7F5] text-[#6B6B6B]"
-                }`}
-              >
-                {row.priority}
-              </span>
             </div>
 
             <div className="grid grid-cols-3 gap-2 rounded-lg border border-[#EAEAEA] bg-[#F7F7F5] p-2.5 text-center">

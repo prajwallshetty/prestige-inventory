@@ -2,7 +2,7 @@ import { db } from "@/lib/db";
 import { createShipment, receiveShipmentStock, advanceShipmentStatus as advanceShipmentStatusRaw } from "@/services/ShipmentService";
 import { sendNotificationsToUsers } from "@/services/NotificationService";
 import { blockScopeClause, type BlockViewer } from "@/services/BlockQueryService";
-import { deriveProcurementStatus, computeProcurementPriority, type ProcurementStatus } from "@/lib/procurementStatus";
+import { deriveProcurementStatus, type ProcurementStatus } from "@/lib/procurementStatus";
 import {
   AppError,
   assertPermission,
@@ -12,7 +12,7 @@ import {
   type Role,
 } from "@/lib/permissions";
 
-export { deriveProcurementStatus, computeProcurementPriority, type ProcurementStatus };
+export { deriveProcurementStatus, type ProcurementStatus };
 
 /** Sidebar badge count — how many open shortages are waiting to be ordered. */
 export async function getNeedToOrderCount(viewer: BlockViewer): Promise<number> {
@@ -63,7 +63,6 @@ export interface NeedToOrderFilters {
   productId?: string;
   brandId?: string;
   showroomId?: string;
-  priority?: "URGENT" | "NORMAL";
   from?: string;
   to?: string;
   page?: number;
@@ -171,11 +170,7 @@ export async function getNeedToOrderList(filters: NeedToOrderFilters, viewer: Bl
     db.stockBlock.count({ where }),
   ]);
 
-  // Priority is computed, not stored — filter after the fact rather than
-  // trying to express "age > 72h OR status = READY_TO_SHIP" as a single
-  // indexed WHERE clause for what is a small, human-scale queue.
-  let items = rows.map(serialiseNeedToOrderRow);
-  if (filters.priority) items = items.filter((r) => r.priority === filters.priority);
+  const items = rows.map(serialiseNeedToOrderRow);
 
   return {
     items,
@@ -196,7 +191,6 @@ function serialiseNeedToOrderRow(b: any) {
     availableQuantity: Math.max(0, b.quantity - b.shortageQuantity),
     shortageQuantity: b.shortageQuantity as number,
     physicalStock: b.inventory?.totalStock ?? 0,
-    priority: computeProcurementPriority({ status: b.status, createdAt: b.createdAt }),
     createdAt: b.createdAt?.toISOString() ?? null,
     showroom: b.showroom ?? null,
     product: product

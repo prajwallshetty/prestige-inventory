@@ -48,6 +48,7 @@ import {
   canManageShowrooms,
   canReviewBooking,
   canViewAuditLogs,
+  isReadOnly,
   isRole,
   isShowroomScoped,
   ROLES,
@@ -439,6 +440,63 @@ export async function approveBlockAction(
 
     revalidateBlockViews(blockId);
     return { status: block.status };
+  });
+}
+
+/**
+ * Approves every listed block in one action ("Accept All Blocks").
+ *
+ * Each block is approved through the same `approveBlock` call the single-row
+ * button uses, one at a time — authority, showroom scope and the state-machine
+ * transition are still enforced per block, so a block another approver has
+ * already moved on, or one outside the caller's scope, fails on its own
+ * without blocking the rest. Callers get back exactly which ids succeeded and
+ * why any failed, rather than a single pass/fail for the whole batch.
+ */
+export interface BulkApproveOutcome {
+  blockId: string;
+  ok: boolean;
+  status?: string;
+  error?: string;
+}
+
+export async function bulkApproveBlocksAction(
+  blockIds: string[]
+): Promise<ActionResult<{ accepted: number; results: BulkApproveOutcome[] }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    assertPermission(!isReadOnly(user.role), "Your role cannot approve stock blocks.");
+
+    const uniqueIds = [...new Set(blockIds)].slice(0, 100);
+    if (uniqueIds.length === 0) {
+      throw new AppError("Select at least one blocked item to accept.", 400, "VALIDATION");
+    }
+
+    const results: BulkApproveOutcome[] = [];
+    let accepted = 0;
+
+    for (const blockId of uniqueIds) {
+      try {
+        const block = await approveBlock({
+          blockId,
+          approvedBy: user.name,
+          approvedById: user.userId,
+          role: user.role,
+          actorShowroomId: user.showroomId,
+        });
+        accepted++;
+        results.push({ blockId, ok: true, status: block.status });
+      } catch (err: any) {
+        results.push({
+          blockId,
+          ok: false,
+          error: err instanceof AppError ? err.message : "Failed to accept this block.",
+        });
+      }
+    }
+
+    revalidateBlockViews();
+    return { accepted, results };
   });
 }
 

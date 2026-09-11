@@ -7,6 +7,7 @@ import { toast } from "@/lib/toast";
 import { isOffline, OFFLINE_MESSAGE } from "@/lib/offline";
 import {
   AlertTriangle,
+  Check,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -20,12 +21,14 @@ import {
 
 import {
   approveBlockAction,
+  bulkApproveBlocksAction,
   cancelBlockAction,
   deliverBlockAction,
   markReadyToShipAction,
   rejectBlockAction,
   releaseBlockAction,
   shipBlockAction,
+  type BulkApproveOutcome,
 } from "@/app/actions";
 import {
   canApproveBlock,
@@ -134,6 +137,14 @@ export function BlocksClientList({ result, filters, dealers, showrooms, session 
   );
   const [activeAction, setActiveAction] = useState<{ block: BlockRow; type: ActionType } | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+
+  // ——— Bulk accept ("Accept All Blocks") ———
+  const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkResult, setBulkResult] = useState<{
+    accepted: number;
+    failed: Array<{ label: string; error: string }>;
+  } | null>(null);
 
   const role = session.role;
 
@@ -276,6 +287,62 @@ export function BlocksClientList({ result, filters, dealers, showrooms, session 
   const rangeStart = result.total === 0 ? 0 : (result.page - 1) * result.limit + 1;
   const rangeEnd = Math.min(result.page * result.limit, result.total);
 
+  // Blocks on the current page/filter the signed-in user is actually allowed
+  // to approve — the same eligibility the row-level Approve button uses, so
+  // "Accept All" can never offer to approve something the backend would
+  // refuse for this user.
+  const approvableBlocks = useMemo(
+    () => result.items.filter((block) => actionsFor(block).approve),
+    [result.items, role, session.userId, session.showroomId]
+  );
+
+  const runBulkApprove = async () => {
+    if (bulkBusy || approvableBlocks.length === 0) return;
+    setBulkConfirmOpen(false);
+    setBulkBusy(true);
+
+    if (isOffline()) {
+      toast.error(OFFLINE_MESSAGE);
+      setBulkBusy(false);
+      return;
+    }
+
+    try {
+      const blockIds = approvableBlocks.map((b) => b.id);
+      const res = await bulkApproveBlocksAction(blockIds);
+
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+
+      const { accepted, results } = res.data;
+      const byId = new Map(approvableBlocks.map((b) => [b.id, b]));
+      const failed = results
+        .filter((r: BulkApproveOutcome) => !r.ok)
+        .map((r: BulkApproveOutcome) => ({
+          label: byId.get(r.blockId)?.blockNumber || r.blockId.slice(-8).toUpperCase(),
+          error: r.error || "Failed to accept this block.",
+        }));
+
+      if (accepted > 0) {
+        toast.success(`${accepted} block${accepted === 1 ? "" : "s"} accepted.`);
+      }
+      if (failed.length > 0) {
+        toast.error(
+          `${failed.length} block${failed.length === 1 ? "" : "s"} could not be accepted. See details below.`
+        );
+      }
+
+      setBulkResult({ accepted, failed });
+      startTransition(() => router.refresh());
+    } catch {
+      toast.error("Connection failed. Please try again.");
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       {/* ——— HEADER ——— */}
@@ -289,17 +356,32 @@ export function BlocksClientList({ result, filters, dealers, showrooms, session 
           </p>
         </div>
 
-        {(role === "SUPER_ADMIN" ||
-          role === "MANAGER" ||
-          role === "SHOWROOM_INCHARGE" ||
-          role === "SHOWROOM_STAFF") && (
-          <Link
-            href="/blocks/new"
-            className="inline-flex min-h-[44px] items-center justify-center rounded-xl bg-[#F2C202] px-4 text-xs font-black text-white shadow-xs transition-all hover:bg-[#D8AD02] active:scale-[0.99]"
-          >
-            + New Block
-          </Link>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {approvableBlocks.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setBulkConfirmOpen(true)}
+              disabled={bulkBusy}
+              aria-busy={bulkBusy}
+              className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 text-xs font-black text-emerald-700 shadow-xs transition-all hover:bg-emerald-100 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Check className="h-3.5 w-3.5" />
+              {bulkBusy ? "Accepting…" : `Accept All (${approvableBlocks.length})`}
+            </button>
+          )}
+
+          {(role === "SUPER_ADMIN" ||
+            role === "MANAGER" ||
+            role === "SHOWROOM_INCHARGE" ||
+            role === "SHOWROOM_STAFF") && (
+            <Link
+              href="/blocks/new"
+              className="inline-flex min-h-[44px] items-center justify-center rounded-xl bg-[#F2C202] px-4 text-xs font-black text-white shadow-xs transition-all hover:bg-[#D8AD02] active:scale-[0.99]"
+            >
+              + New Block
+            </Link>
+          )}
+        </div>
       </div>
 
       {/* ——— TABS ——— */}
@@ -826,6 +908,19 @@ export function BlocksClientList({ result, filters, dealers, showrooms, session 
           onConfirm={(opts) => runAction(activeAction.block, activeAction.type, opts)}
         />
       )}
+
+      {bulkConfirmOpen && (
+        <BulkConfirmDialog
+          count={approvableBlocks.length}
+          busy={bulkBusy}
+          onClose={() => setBulkConfirmOpen(false)}
+          onConfirm={runBulkApprove}
+        />
+      )}
+
+      {bulkResult && (
+        <BulkResultDialog result={bulkResult} onClose={() => setBulkResult(null)} />
+      )}
     </div>
   );
 }
@@ -1191,6 +1286,139 @@ function ActionDialog({
             }`}
           >
             {busy ? pendingLabel : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Confirms the bulk accept before it runs — every accept is a real approval, same as the row button. */
+function BulkConfirmDialog({
+  count,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  count: number;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Accept all blocked stock"
+      className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4"
+    >
+      <div className="fixed inset-0 bg-black/40 backdrop-blur-xs" onClick={busy ? undefined : onClose} />
+
+      <div className="relative w-full rounded-t-2xl border border-[#EAEAEA] bg-white p-5 shadow-xl sm:max-w-sm sm:rounded-2xl">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+            <Check className="h-5 w-5" />
+          </div>
+          <div>
+            <h2 className="text-sm font-bold text-[#111111]">Accept all blocked stock?</h2>
+            <p className="mt-1 text-xs text-[#6B6B6B]">
+              This approves {count} block{count === 1 ? "" : "s"} currently awaiting your approval. Each one moves
+              forward exactly as if you had approved it individually.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-5 flex gap-2 pb-[max(0px,env(safe-area-inset-bottom))]">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="min-h-[48px] flex-1 rounded-xl border border-[#EAEAEA] bg-white text-xs font-bold text-[#6B6B6B] hover:bg-[#F7F7F5] disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy}
+            aria-busy={busy}
+            className="min-h-[48px] flex-1 rounded-xl bg-emerald-600 text-xs font-black text-white transition-all hover:bg-emerald-500 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {busy ? "Accepting…" : `Accept All (${count})`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Reports what the bulk accept actually did — success count plus any per-block failures. */
+function BulkResultDialog({
+  result,
+  onClose,
+}: {
+  result: { accepted: number; failed: Array<{ label: string; error: string }> };
+  onClose: () => void;
+}) {
+  const { accepted, failed } = result;
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Accept all blocks result"
+      className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4"
+    >
+      <div className="fixed inset-0 bg-black/40 backdrop-blur-xs" onClick={onClose} />
+
+      <div className="relative flex max-h-[85vh] w-full flex-col overflow-hidden rounded-t-2xl border border-[#EAEAEA] bg-white shadow-xl sm:max-w-sm sm:rounded-2xl">
+        <div className="flex items-center justify-between border-b border-[#EAEAEA] px-5 py-4">
+          <h2 className="text-sm font-bold text-[#111111]">
+            {failed.length === 0 ? "All blocks accepted" : "Accept All — partial result"}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-[#6B6B6B] hover:bg-[#F7F7F5] hover:text-[#111111]"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
+          {accepted > 0 && (
+            <p className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-[11px] font-bold text-emerald-800">
+              <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              {accepted} block{accepted === 1 ? "" : "s"} accepted successfully.
+            </p>
+          )}
+
+          {failed.length > 0 && (
+            <div className="space-y-2">
+              <p className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[11px] font-bold text-amber-900">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                {failed.length} block{failed.length === 1 ? "" : "s"} could not be accepted:
+              </p>
+              <ul className="space-y-1.5 rounded-xl border border-[#EAEAEA] bg-[#F7F7F5] p-3 text-[11px]">
+                {failed.map((f, i) => (
+                  <li key={i} className="flex items-start justify-between gap-3">
+                    <span className="shrink-0 font-mono font-bold text-[#111111]">{f.label}</span>
+                    <span className="text-right text-[#6B6B6B]">{f.error}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-[#EAEAEA] px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+          <button
+            type="button"
+            onClick={onClose}
+            className="min-h-[48px] w-full rounded-xl bg-[#111111] text-xs font-black text-white hover:bg-[#2a2a2a]"
+          >
+            Done
           </button>
         </div>
       </div>

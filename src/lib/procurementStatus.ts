@@ -35,16 +35,3 @@ export function deriveProcurementStatus(block: ProcurementBlockLike): Procuremen
   if (["DISPATCHED", "IN_TRANSIT", "ARRIVED", "RECEIVING"].includes(item.shipment.status)) return "IN_TRANSIT";
   return "ORDERED"; // Shipment still EXPECTED — ordered but not yet dispatched by the supplier.
 }
-
-/**
- * Priority for the Need-to-Order queue (spec §34). Deliberately simple and
- * explainable rather than a scored model: a block that has already cleared
- * approval and is only waiting on stock is urgent by definition (everything
- * else about it is done), and anything sitting unresolved for several days
- * is worth surfacing even if it hasn't been approved yet.
- */
-export function computeProcurementPriority(block: { status: string; createdAt: Date }): "URGENT" | "NORMAL" {
-  if (block.status === "READY_TO_SHIP") return "URGENT";
-  const ageHours = (Date.now() - block.createdAt.getTime()) / (60 * 60 * 1000);
-  return ageHours > 72 ? "URGENT" : "NORMAL";
-}

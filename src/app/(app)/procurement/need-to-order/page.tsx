@@ -19,19 +19,16 @@ export default async function NeedToOrderPage({
   if (!canManageProcurement(session.role)) redirect("/dashboard");
 
   const params = (await searchParams) || {};
-  const rawPriority = first(params.priority) || "";
-  const priority = rawPriority === "URGENT" || rawPriority === "NORMAL" ? rawPriority : undefined;
   const filters = {
     search: first(params.search) || "",
     showroomId: first(params.showroomId) || "",
-    priority: rawPriority,
     sort: first(params.sort) || "newest",
     page: Math.max(1, parseInt(first(params.page) || "1", 10) || 1),
     limit: 20,
   };
 
   const [result, showrooms] = await Promise.all([
-    getNeedToOrderList({ ...filters, priority }, {
+    getNeedToOrderList(filters, {
       role: session.role,
       userId: session.userId,
       showroomId: session.showroomId,
